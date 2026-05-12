@@ -1,0 +1,145 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "doppeldata"
+version = "0.0.0"
+description = "Synthetic data that looks real — a statistical double of your dataset."
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.11"
+authors = [{ name = "Adam Thuvesen" }]
+keywords = [
+    "synthetic-data",
+    "data-generation",
+    "tabular-data",
+    "privacy",
+    "testing",
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Scientific/Engineering",
+    "Topic :: Software Development :: Testing",
+    "Typing :: Typed",
+]
+dependencies = [
+    "polars>=1.20",
+    "duckdb>=1.1",
+    "scikit-learn>=1.5",
+    "numpy>=1.26",
+    "pydantic>=2.7",
+    "typer>=0.12",
+    "rich>=13.7",
+    "tomli-w>=1.0",
+]
+
+[project.optional-dependencies]
+quality = ["scipy>=1.13", "matplotlib>=3.9"]
+copula = ["copulas>=0.11"]
+pii = ["presidio-analyzer>=2.2", "faker>=26"]
+all = [
+    "scipy>=1.13",
+    "matplotlib>=3.9",
+    "copulas>=0.11",
+    "presidio-analyzer>=2.2",
+    "faker>=26",
+]
+
+[project.scripts]
+doppel = "doppel.__main__:app"
+
+[project.urls]
+Repository = "https://github.com/adamthuvesen/doppel"
+Issues = "https://github.com/adamthuvesen/doppel/issues"
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3",
+    "pytest-cov>=5.0",
+    "ruff>=0.6",
+    "pyright>=1.1.380",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/doppel"]
+
+[tool.hatch.build.targets.sdist]
+include = ["src/doppel", "README.md", "LICENSE", "pyproject.toml"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = [
+    "E",      # pycodestyle errors
+    "W",      # pycodestyle warnings
+    "F",      # pyflakes
+    "I",      # isort
+    "B",      # flake8-bugbear
+    "UP",     # pyupgrade
+    "SIM",    # flake8-simplify
+    "RUF",    # ruff-specific
+    "N",      # pep8-naming
+    "ANN",    # flake8-annotations (lite)
+    "C4",     # flake8-comprehensions
+]
+ignore = [
+    "E501",   # handled by formatter
+    "ANN401", # allow Any in narrow cases
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Tests skip annotation/assert-style checks; PII tests need to import after `importorskip`.
+"tests/**/*.py" = ["ANN", "S101", "E402"]
+
+[tool.ruff.lint.flake8-bugbear]
+# Typer's whole API uses function calls as argument defaults — canonical pattern.
+extend-immutable-calls = ["typer.Argument", "typer.Option"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+
+[tool.pyright]
+include = ["src", "tests"]
+pythonVersion = "3.11"
+typeCheckingMode = "strict"
+reportMissingTypeStubs = false
+reportUnknownMemberType = false
+reportUnknownVariableType = false
+reportUnknownArgumentType = false
+
+[tool.pytest.ini_options]
+minversion = "8.0"
+testpaths = ["tests"]
+addopts = [
+    "-ra",
+    "--strict-markers",
+    "--strict-config",
+]
+markers = [
+    "slow: marks tests as slow (deselect with '-m \"not slow\"')",
+    "integration: marks integration tests",
+]
+
+[tool.coverage.run]
+source = ["src/doppel"]
+branch = true
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "raise NotImplementedError",
+    "if TYPE_CHECKING:",
+]

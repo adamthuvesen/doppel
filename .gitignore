@@ -1,0 +1,41 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+*.egg
+.eggs/
+build/
+dist/
+wheels/
+
+# Environments
+.venv/
+venv/
+.env
+.envrc
+
+# Tooling caches
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.pyright/
+.coverage
+htmlcov/
+.tox/
+
+# Lockfiles (uv produces these; commit when we lock the v1 release)
+# uv.lock
+
+# IDE
+.idea/
+.vscode/
+*.swp
+.DS_Store
+
+# Generated artifacts
+*.doppel
+report.html
+report.json

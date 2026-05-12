@@ -1,21 +1,14 @@
 # doppel
 
-> Synthetic data that looks real.
+Synthetic data generator for tabular datasets.
 
 Point doppel at a tabular dataset (CSV, Parquet, JSON, Arrow, SQL) and it
-generates a new dataset with the same statistical fingerprint — distributions,
-correlations, null patterns, cardinality, and relational structure — without
-any of the original rows.
+generates a new dataset that matches the statistical fingerprint of the original:
+distributions, correlations, null patterns, cardinality, and relational structure.
+No original rows included.
 
 Useful for testing data pipelines, sharing data you can't share, and
 augmenting small datasets.
-
-Not random noise. A statistical double.
-
-## Status
-
-🚧 Pre-release scaffold. Phase 0 (project skeleton, CLI plumbing) is in;
-Phase 1 (single-table CART synthesis) is next.
 
 ## Install
 

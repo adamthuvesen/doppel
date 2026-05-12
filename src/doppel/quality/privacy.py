@@ -1,0 +1,127 @@
+"""Privacy heuristic — Distance to Closest Record (DCR).
+
+For each synthetic row, find the minimum L2 distance to any real row in a normalised
+feature space (numeric and datetime min-max scaled to [0,1], categorical one-hot encoded,
+text dropped). Report percentiles of those minimum distances.
+
+Low percentiles → some synthetic rows are very close to real rows → potential memorisation.
+This is a heuristic, *not* a formal privacy guarantee — differential privacy lands post-v1.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+import numpy as np
+import polars as pl
+from sklearn.neighbors import NearestNeighbors
+
+from doppel.schema.datetime import decompose
+from doppel.schema.nullable import encode_feature
+from doppel.schema.types import Column, ColumnType
+
+
+@dataclass(frozen=True)
+class PrivacyReport:
+    n_real: int
+    n_synth: int
+    n_features: int
+    min_distance: float
+    percentile_5: float
+    percentile_25: float
+    percentile_50: float
+    mean_distance: float
+
+
+def compute(real: pl.DataFrame, synth: pl.DataFrame, columns: list[Column]) -> PrivacyReport:
+    eligible = [
+        c
+        for c in columns
+        if c.type not in (ColumnType.KEY, ColumnType.TEXT)
+        and c.name in real.columns
+        and c.name in synth.columns
+    ]
+    real_x, synth_x = _build_feature_matrices(real, synth, eligible)
+    if real_x.shape[0] == 0 or synth_x.shape[0] == 0 or real_x.shape[1] == 0:
+        return PrivacyReport(
+            n_real=real.height,
+            n_synth=synth.height,
+            n_features=real_x.shape[1],
+            min_distance=float("nan"),
+            percentile_5=float("nan"),
+            percentile_25=float("nan"),
+            percentile_50=float("nan"),
+            mean_distance=float("nan"),
+        )
+    nn = NearestNeighbors(n_neighbors=1, algorithm="auto", metric="euclidean")
+    nn.fit(real_x)
+    distances, _ = nn.kneighbors(synth_x, return_distance=True)
+    dcr = distances[:, 0]
+    return PrivacyReport(
+        n_real=real.height,
+        n_synth=synth.height,
+        n_features=real_x.shape[1],
+        min_distance=float(np.min(dcr)),
+        percentile_5=float(np.percentile(dcr, 5)),
+        percentile_25=float(np.percentile(dcr, 25)),
+        percentile_50=float(np.percentile(dcr, 50)),
+        mean_distance=float(np.mean(dcr)),
+    )
+
+
+def _build_feature_matrices(
+    real: pl.DataFrame, synth: pl.DataFrame, columns: list[Column]
+) -> tuple[np.ndarray, np.ndarray]:
+    real_blocks: list[np.ndarray] = []
+    synth_blocks: list[np.ndarray] = []
+    for col in columns:
+        if col.type in (ColumnType.NUMERIC, ColumnType.DATETIME):
+            r, s = _scale_numeric(col, real[col.name], synth[col.name])
+        else:
+            r, s = _one_hot(real[col.name], synth[col.name])
+        real_blocks.append(r)
+        synth_blocks.append(s)
+    if not real_blocks:
+        return np.empty((real.height, 0)), np.empty((synth.height, 0))
+    return np.hstack(real_blocks), np.hstack(synth_blocks)
+
+
+def _scale_numeric(col: Column, real: pl.Series, synth: pl.Series) -> tuple[np.ndarray, np.ndarray]:
+    real_arr = _as_float(col, encode_feature(real, col.type))
+    synth_arr = _as_float(col, encode_feature(synth, col.type))
+    lo = float(real_arr.min()) if real_arr.size else 0.0
+    hi = float(real_arr.max()) if real_arr.size else 0.0
+    span = hi - lo
+    if span == 0:
+        return real_arr.reshape(-1, 1) * 0.0, synth_arr.reshape(-1, 1) * 0.0
+    return (
+        ((real_arr - lo) / span).reshape(-1, 1),
+        np.clip((synth_arr - lo) / span, 0.0, 1.0).reshape(-1, 1),
+    )
+
+
+def _as_float(col: Column, series: pl.Series) -> np.ndarray:
+    if col.type is ColumnType.DATETIME:
+        return decompose(series).cast(pl.Float64).to_numpy().astype(np.float64)
+    return series.cast(pl.Float64).to_numpy().astype(np.float64)
+
+
+def _one_hot(real: pl.Series, synth: pl.Series) -> tuple[np.ndarray, np.ndarray]:
+    real_filled = encode_feature(real, ColumnType.CATEGORICAL)
+    synth_filled = encode_feature(synth, ColumnType.CATEGORICAL)
+    cats = sorted(set(real_filled.to_list()) | set(synth_filled.to_list()), key=str)
+    code = {c: i for i, c in enumerate(cats)}
+    return (
+        _one_hot_block(real_filled, code, len(cats)),
+        _one_hot_block(synth_filled, code, len(cats)),
+    )
+
+
+def _one_hot_block(series: pl.Series, code: dict[object, int], width: int) -> np.ndarray:
+    rows = series.len()
+    block = np.zeros((rows, width), dtype=np.float64)
+    for i, v in enumerate(series.to_list()):
+        idx = code.get(v)
+        if idx is not None:
+            block[i, idx] = 1.0
+    return block

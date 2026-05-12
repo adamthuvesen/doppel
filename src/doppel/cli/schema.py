@@ -72,14 +72,10 @@ def check(
     schema = schema_toml.load(schema_file)
 
     errors: list[str] = []
-    inferred_names = {c.name for c in inferred.columns}
-    for name in schema.columns:
-        if name not in inferred_names:
-            errors.append(f"column {name!r} declared in schema but not in data")
-    if schema.table.primary_key and schema.table.primary_key not in inferred_names:
-        errors.append(
-            f"primary_key {schema.table.primary_key!r} declared in schema but not in data"
-        )
+    try:
+        schema_toml.validate_against_table(inferred, schema)
+    except ValueError as exc:
+        errors.append(str(exc))
 
     if errors:
         for e in errors:

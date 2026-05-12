@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 
 import polars as pl
@@ -28,9 +29,10 @@ class QualityReport:
 
     @property
     def avg_marginal(self) -> float:
-        if not self.marginals:
+        finite = [m.value for m in self.marginals if math.isfinite(m.value)]
+        if not finite:
             return 0.0
-        return sum(m.value for m in self.marginals) / len(self.marginals)
+        return sum(finite) / len(finite)
 
 
 def compute(

@@ -35,11 +35,14 @@ def restore(
     detections: list[PIIDetection],
     original_order: list[str],
     rng: Rng,
+    *,
+    row_count: int | None = None,
 ) -> pl.DataFrame:
     """Add fake PII columns back to a synthesized DataFrame and restore original column order."""
     out = synthesized
+    n = out.height if row_count is None else row_count
     for d in detections:
-        out = out.with_columns(pl.Series(d.name, generate(d.entity_type, out.height, rng)))
+        out = out.with_columns(pl.Series(d.name, generate(d.entity_type, n, rng)))
     available = set(out.columns)
     ordered = [name for name in original_order if name in available]
     return out.select(ordered)

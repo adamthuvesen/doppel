@@ -90,6 +90,38 @@ def test_doppel_gen_replaces_emails_in_output(tmp_path: Path) -> None:
     assert all("@" in e for e in synth_emails)
 
 
+def test_doppel_gen_all_pii_columns_keeps_requested_row_count(tmp_path: Path) -> None:
+    csv = tmp_path / "emails.csv"
+    pl.DataFrame({"email": [f"user{i}@example.com" for i in range(50)]}).write_csv(csv)
+    out = tmp_path / "synth.csv"
+
+    result = runner.invoke(
+        app,
+        ["gen", str(csv), "--rows", "12", "--output", str(out), "--seed", "42"],
+    )
+
+    assert result.exit_code == 0, result.stdout
+    df = pl.read_csv(out)
+    assert df.height == 12
+    assert df.columns == ["email"]
+    assert all("@" in e for e in df["email"].to_list())
+
+
+def test_doppel_fit_refuses_detected_pii(tmp_path: Path) -> None:
+    csv = tmp_path / "users.csv"
+    _emails_df(50).write_csv(csv)
+    artifact = tmp_path / "model.doppel"
+
+    result = runner.invoke(
+        app,
+        ["fit", str(csv), "--output", str(artifact), "--seed", "42"],
+    )
+
+    assert result.exit_code != 0
+    assert "detected PII" in result.output
+    assert not artifact.exists()
+
+
 def test_detection_skips_non_pii_text() -> None:
     df = pl.DataFrame(
         {

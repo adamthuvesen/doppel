@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import typer
 from rich.console import Console
@@ -17,6 +18,10 @@ from doppel.sinks import file as sink_file
 from doppel.sources import file as source_file
 from doppel.synth.cart import CartSynthesizer
 from doppel.synth.seed import Rng
+
+if TYPE_CHECKING:
+    from doppel.dataset import Table
+    from doppel.pii.detect import PIIDetection
 
 console = Console()
 
@@ -59,6 +64,15 @@ def fit(
         console.print(f"[dim]applying schema[/] {schema}")
         schema_toml = schema_toml_mod.load(schema)
         table = schema_toml_mod.apply_overrides(table, schema_toml)
+
+    pii_detected = _detect_pii_if_available(table)
+    if pii_detected:
+        labels = ", ".join(f"{d.name}={d.entity_type}" for d in pii_detected)
+        raise typer.BadParameter(
+            "detected PII in source data "
+            f"({labels}). `doppel fit` would store a reusable artifact, so it refuses "
+            "detected PII for now. Use `doppel gen` for one-shot PII replacement."
+        )
 
     dataset = Dataset.single(table)
 
@@ -116,3 +130,17 @@ def sample(
     console.print(f"[dim]writing[/] {output}")
     sink_file.write(out_df, output)
     console.print(f"[green]ok[/] wrote {out_df.height} rows x {out_df.width} cols -> {output}")
+
+
+def _detect_pii_if_available(table: Table) -> list[PIIDetection]:
+    """Return detected PII columns when the optional PII extra is installed."""
+    try:
+        from doppel.pii.detect import detect as detect_pii
+    except ImportError:
+        return []
+    if table.data is None:
+        return []
+    try:
+        return detect_pii(table.data, table.columns)
+    except ImportError:
+        return []

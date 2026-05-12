@@ -134,7 +134,9 @@ def _run_single(
 
         labels = ", ".join(f"{d.name}={d.entity_type}" for d in pii_detected)
         console.print(f"[dim]regenerating PII[/]: {labels}")
-        out_df = restore_pii(out_df, pii_detected, original_columns, Rng.from_seed(seed))
+        out_df = restore_pii(
+            out_df, pii_detected, original_columns, Rng.from_seed(seed), row_count=rows
+        )
 
     console.print(f"[dim]writing[/] {output}")
     sink_file.write(out_df, output)
@@ -152,7 +154,10 @@ def _strip_pii_if_available(
         return [], table, [c.name for c in table.columns]
     if table.data is None:
         return [], table, [c.name for c in table.columns]
-    detections = detect_pii(table.data, table.columns)
+    try:
+        detections = detect_pii(table.data, table.columns)
+    except ImportError:
+        return [], table, [c.name for c in table.columns]
     if not detections:
         return [], table, [c.name for c in table.columns]
     labels = ", ".join(f"{d.name}={d.entity_type}({d.confidence:.0%})" for d in detections)

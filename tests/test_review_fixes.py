@@ -207,7 +207,25 @@ def test_apply_overrides_rejects_unknown_columns() -> None:
         table=TableMeta(name="t"),
         columns={"does_not_exist": ColumnSpec(type=ColumnType.NUMERIC)},
     )
-    with pytest.raises(ValueError, match="not present in the data"):
+    with pytest.raises(ValueError, match="not in data"):
+        schema_toml_mod.apply_overrides(inferred, schema)
+
+
+def test_apply_overrides_rejects_unknown_primary_key() -> None:
+    df = pl.DataFrame({"a": [1, 2, 3]})
+    inferred = infer_table("t", df)
+    schema = SchemaToml(table=TableMeta(name="t", primary_key="missing_id"))
+
+    with pytest.raises(ValueError, match=r"primary_key .* not present"):
+        schema_toml_mod.apply_overrides(inferred, schema)
+
+
+def test_apply_overrides_rejects_non_unique_declared_primary_key() -> None:
+    df = pl.DataFrame({"order_no": [1, 1, 2], "amount": [10.0, 20.0, 30.0]})
+    inferred = infer_table("orders", df)
+    schema = SchemaToml(table=TableMeta(name="orders", primary_key="order_no"))
+
+    with pytest.raises(ValueError, match=r"primary_key .* must be unique"):
         schema_toml_mod.apply_overrides(inferred, schema)
 
 

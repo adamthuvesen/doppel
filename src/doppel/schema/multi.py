@@ -106,6 +106,18 @@ def to_dataset(schema: MultiSchemaToml, base_dir: Path) -> Dataset:
                 f"schema for table {name!r} declares columns not in the data: {unknown}. "
                 f"Available: {sorted(inferred_names)}"
             )
+        if spec.primary_key is not None:
+            if spec.primary_key not in inferred_names:
+                raise ValueError(
+                    f"primary_key {spec.primary_key!r} for table {name!r} is not present "
+                    f"in the data. Available: {sorted(inferred_names)}"
+                )
+            pk_series = df[spec.primary_key]
+            if pk_series.null_count() > 0 or pk_series.n_unique() != df.height:
+                raise ValueError(
+                    f"primary_key {spec.primary_key!r} for table {name!r} must be unique "
+                    "and non-null"
+                )
         declared_pk = spec.primary_key or inferred.primary_key
         merged_columns: list[Column] = []
         for col in inferred.columns:

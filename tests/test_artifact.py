@@ -68,6 +68,16 @@ def test_load_rejects_corrupted_archive(tmp_path: Path) -> None:
         load(bad)
 
 
+def test_load_rejects_oversized_manifest(mixed_df: pl.DataFrame, tmp_path: Path) -> None:
+    synth, n = _fit_synth(mixed_df)
+    artifact = tmp_path / "model.doppel"
+    save(synth, artifact, training_row_count=n)
+    _replace_member(artifact, "manifest.json", b"{" + (b" " * (1024 * 1024)) + b"}")
+
+    with pytest.raises(ArtifactError, match="too large"):
+        load(artifact)
+
+
 def test_load_rejects_unknown_synthesizer_class(mixed_df: pl.DataFrame, tmp_path: Path) -> None:
     synth, n = _fit_synth(mixed_df)
     artifact = tmp_path / "model.doppel"
@@ -111,6 +121,21 @@ def _rewrite_manifest(path: Path, mutate: Callable[[dict[str, Any]], dict[str, A
     # gzip compatibility check — ensure the file is still a valid gzip blob.
     with gzip.open(path, "rb") as gz:
         gz.read(1)
+
+
+def _replace_member(path: Path, target: str, payload: bytes) -> None:
+    payloads: dict[str, bytes] = {}
+    with tarfile.open(path, "r:gz") as tar:
+        for member in tar.getmembers():
+            handle = tar.extractfile(member)
+            assert handle is not None
+            payloads[member.name] = handle.read()
+    payloads[target] = payload
+    with tarfile.open(path, "w:gz") as tar:
+        for name, blob in payloads.items():
+            info = tarfile.TarInfo(name=name)
+            info.size = len(blob)
+            tar.addfile(info, io.BytesIO(blob))
 
 
 def test_manifest_roundtrips_via_pydantic() -> None:

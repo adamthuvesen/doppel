@@ -45,3 +45,21 @@ def test_schema_check_fails_when_column_missing(mixed_csv: Path, tmp_path: Path)
     result = runner.invoke(app, ["schema", "check", str(mixed_csv), "--schema", str(schema_path)])
     assert result.exit_code != 0
     assert "not in data" in result.stdout
+
+
+def test_schema_check_fails_when_constraint_column_missing(mixed_csv: Path, tmp_path: Path) -> None:
+    schema_path = tmp_path / "schema.toml"
+    schema_path.write_text(
+        """
+[table]
+name = "mixed"
+
+[[constraints]]
+kind = "range"
+column = "does_not_exist"
+min = 0
+"""
+    )
+    result = runner.invoke(app, ["schema", "check", str(mixed_csv), "--schema", str(schema_path)])
+    assert result.exit_code != 0
+    assert "constraint references unknown column" in result.stdout

@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
+import json
+import math
+
 import polars as pl
 
 from doppel.quality import correlations, marginals, privacy
 from doppel.quality.aggregate import compute as compute_quality
+from doppel.report.json import to_json
 from doppel.schema.infer import infer_table
 from doppel.schema.types import Column, ColumnType
 
@@ -103,6 +107,19 @@ def test_quality_aggregate_produces_full_report(mixed_df: pl.DataFrame) -> None:
     assert rep.correlations.frobenius_distance < 1e-9
     # DCR median for identical synth is 0 (each synth row matches itself in real).
     assert rep.privacy.percentile_50 == 0.0
+
+
+def test_quality_average_ignores_non_finite_marginals() -> None:
+    real = pl.DataFrame({"all_null": [None, None], "value": [1.0, 2.0]})
+    synth = pl.DataFrame({"all_null": [None, None], "value": [1.0, 2.0]})
+
+    rep = compute_quality(real, synth, _columns(real))
+
+    assert any(math.isnan(m.value) for m in rep.marginals)
+    assert rep.avg_marginal == 0.0
+    payload = json.loads(to_json(rep))
+    all_null = next(m for m in payload["marginals"] if m["column"] == "all_null")
+    assert all_null["value"] is None
 
 
 def test_key_and_text_columns_are_skipped_in_marginals() -> None:

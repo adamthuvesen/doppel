@@ -32,7 +32,7 @@ def load(path: Path) -> tuple[CartSynthesizer, Manifest, SchemaToml | None]:
             manifest = _read_manifest(tar)
             _validate(manifest)
             synth_blob = _read_member(tar, "synth.pickle", max_bytes=_MAX_PICKLE_BYTES)
-            schema_blob = _read_optional(tar, "schema.toml")
+            schema_blob = _read_optional(tar, "schema.toml", max_bytes=_MAX_SCHEMA_BYTES)
     except tarfile.TarError as exc:
         raise ArtifactError(f"{path} is not a valid doppel artifact: {exc}") from exc
 
@@ -90,22 +90,9 @@ def _read_member(tar: tarfile.TarFile, name: str, *, max_bytes: int | None = Non
     return payload
 
 
-def _read_optional(tar: tarfile.TarFile, name: str) -> bytes | None:
+def _read_optional(tar: tarfile.TarFile, name: str, *, max_bytes: int) -> bytes | None:
     try:
-        member = tar.getmember(name)
+        tar.getmember(name)
     except KeyError:
         return None
-    handle = tar.extractfile(member)
-    if handle is None:
-        return None
-    max_bytes = _MAX_SCHEMA_BYTES if name == "schema.toml" else None
-    if max_bytes is not None and member.size > max_bytes:
-        raise ArtifactError(
-            f"artifact member {name!r} is too large: {member.size} bytes (limit {max_bytes} bytes)"
-        )
-    if max_bytes is None:
-        return handle.read()
-    payload = handle.read(max_bytes + 1)
-    if len(payload) > max_bytes:
-        raise ArtifactError(f"artifact member {name!r} is too large: more than {max_bytes} bytes")
-    return payload
+    return _read_member(tar, name, max_bytes=max_bytes)

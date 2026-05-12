@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING
 import typer
 from rich.console import Console
 
-from doppel.constraints.engine import synthesize_with_constraints
+from doppel.constraints.engine import ConstraintReport, synthesize_with_constraints
 from doppel.dataset import Dataset, Table
 from doppel.schema import multi as multi_schema
 from doppel.schema import toml as schema_toml_mod
@@ -147,19 +147,24 @@ def _strip_pii_if_available(
     table: Table,
 ) -> tuple[list[PIIDetection], Table, list[str]]:
     """Detect + strip PII columns if Presidio is installed. Otherwise return the table unchanged."""
+    unchanged: tuple[list[PIIDetection], Table, list[str]] = (
+        [],
+        table,
+        [c.name for c in table.columns],
+    )
     try:
         from doppel.pii.detect import detect as detect_pii
         from doppel.pii.text import strip as strip_pii
     except ImportError:
-        return [], table, [c.name for c in table.columns]
+        return unchanged
     if table.data is None:
-        return [], table, [c.name for c in table.columns]
+        return unchanged
     try:
         detections = detect_pii(table.data, table.columns)
     except ImportError:
-        return [], table, [c.name for c in table.columns]
+        return unchanged
     if not detections:
-        return [], table, [c.name for c in table.columns]
+        return unchanged
     labels = ", ".join(f"{d.name}={d.entity_type}({d.confidence:.0%})" for d in detections)
     console.print(f"[yellow]pii[/]: detected {labels}")
     stripped, original_order = strip_pii(table, detections)
@@ -197,16 +202,11 @@ def _is_multi_table_file(path: Path) -> bool:
     return multi_schema.is_multi_table(raw)
 
 
-def _print_constraint_summary(report: object) -> None:
-    derived = getattr(report, "derived_applied", [])
-    violations = getattr(report, "violations", [])
-    attempted = getattr(report, "rows_attempted", 0)
-    kept = getattr(report, "rows_kept", 0)
+def _print_constraint_summary(report: ConstraintReport) -> None:
     console.print(
-        f"[dim]constraints[/]: derived {len(derived)}, reject-resample kept {kept}/{attempted}"
+        f"[dim]constraints[/]: derived {len(report.derived_applied)}, "
+        f"reject-resample kept {report.rows_kept}/{report.rows_attempted}"
     )
-    for v in violations:
-        rate = getattr(v, "rate", 0.0)
-        label = getattr(v, "constraint_label", "?")
-        if rate > 0:
-            console.print(f"  - {label}: {rate * 100:.1f}% violations in last batch")
+    for v in report.violations:
+        if v.rate > 0:
+            console.print(f"  - {v.constraint_label}: {v.rate * 100:.1f}% violations in last batch")

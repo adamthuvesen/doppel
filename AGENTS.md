@@ -8,7 +8,7 @@ replace) the user's global `~/dotfiles/agents/AGENTS.md`.
 `doppel` — a Python CLI + library that generates synthetic tabular data preserving the
 statistical fingerprint of a source dataset (marginals, correlations, null patterns,
 referential structure). PyPI distribution name: `doppeldata`. CLI binary + import name:
-`doppel`. Repo folder is named `mimic` for historical reasons.
+`doppel`. Repo folder is named `doppel` for historical reasons.
 
 ## Workflow
 

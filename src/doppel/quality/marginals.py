@@ -29,6 +29,9 @@ class MarginalScore:
     n_synth: int
     null_rate_real: float
     null_rate_synth: float
+    # TEXT columns only: fraction of synth non-null values that are verbatim copies
+    # from the real dataset (privacy signal for text resampling).
+    verbatim_rate: float | None = None
 
 
 def compute(real: pl.DataFrame, synth: pl.DataFrame, columns: list[Column]) -> list[MarginalScore]:
@@ -55,6 +58,10 @@ def _score_column(col: Column, real: pl.Series, synth: pl.Series) -> MarginalSco
         value = _tvd(real, synth)
         metric = "tvd"
 
+    verbatim_rate: float | None = None
+    if col.type is ColumnType.TEXT:
+        verbatim_rate = _text_verbatim_rate(real, synth)
+
     return MarginalScore(
         column=col.name,
         type=col.type,
@@ -64,6 +71,7 @@ def _score_column(col: Column, real: pl.Series, synth: pl.Series) -> MarginalSco
         n_synth=n_s,
         null_rate_real=null_r,
         null_rate_synth=null_s,
+        verbatim_rate=verbatim_rate,
     )
 
 
@@ -72,8 +80,10 @@ def _ks(col: Column, real: pl.Series, synth: pl.Series) -> float:
     synth_arr = _to_numeric(col, synth.drop_nulls())
     if real_arr.size == 0 or synth_arr.size == 0:
         return float("nan")
-    # scipy returns a (statistic, pvalue) tuple-shaped result.
-    statistic: float = ks_2samp(real_arr, synth_arr)[0]  # type: ignore[assignment]
+    # Use asymptotic method — exact is prohibitively slow for large samples and
+    # emits a RuntimeWarning when it falls back anyway. Asymp is fine for quality
+    # metrics (we want the statistic, not rigorous p-values).
+    statistic: float = ks_2samp(real_arr, synth_arr, method="asymp")[0]  # type: ignore[assignment]
     return float(statistic)
 
 
@@ -103,3 +113,13 @@ def _tvd(real: pl.Series, synth: pl.Series) -> float:
 
 def _value_counts(series: pl.Series) -> dict[object, int]:
     return {row[0]: row[1] for row in series.value_counts().iter_rows()}
+
+
+def _text_verbatim_rate(real: pl.Series, synth: pl.Series) -> float | None:
+    """Fraction of synth non-null values that appear verbatim in the real dataset."""
+    synth_nn = synth.drop_nulls()
+    if synth_nn.len() == 0:
+        return None
+    real_set = set(real.drop_nulls().to_list())
+    n_verbatim = sum(1 for v in synth_nn.to_list() if v in real_set)
+    return n_verbatim / synth_nn.len()

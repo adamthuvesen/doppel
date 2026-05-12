@@ -66,4 +66,11 @@ def _is_unique_key(series: pl.Series, n_rows: int) -> bool:
 
 def _looks_like_key_name(name: str) -> bool:
     lower = name.lower()
-    return lower == "id" or lower == "uuid" or lower.endswith("_id") or lower.endswith("_key")
+    return (
+        lower == "id"
+        or lower == "uuid"
+        or lower.endswith("_id")
+        or lower.endswith("_key")
+        or name.endswith("Id")  # camelCase / PascalCase: PassengerId, UserId
+        or name.endswith("ID")  # SCREAMING_CASE: PassengerID, userID
+    )

@@ -243,6 +243,26 @@ def _random_uuid_hex(rng: Rng) -> str:
     return uuid.UUID(bytes=bytes(raw)).hex
 
 
+def _detect_ordered_pairs(cols: list[Column], df: pl.DataFrame) -> list[tuple[str, str]]:
+    """Return (col_a, col_b) pairs where col_a <= col_b held for every non-null row pair.
+
+    Used to enforce impossible orderings that CART leaf-sampling can violate (e.g. a pickup
+    datetime synthesised later than its corresponding dropoff datetime).
+    """
+    ordered: list[tuple[str, str]] = []
+    candidates = [c for c in cols if c.type in (ColumnType.NUMERIC, ColumnType.DATETIME)]
+    for i, col_a in enumerate(candidates):
+        for col_b in candidates[i + 1 :]:
+            both_nn = df.filter(pl.col(col_a.name).is_not_null() & pl.col(col_b.name).is_not_null())
+            if both_nn.height == 0:
+                continue
+            a = both_nn[col_a.name].cast(pl.Float64)
+            b = both_nn[col_b.name].cast(pl.Float64)
+            if (a <= b).all():
+                ordered.append((col_a.name, col_b.name))
+    return ordered
+
+
 class CartSynthesizer:
     def __init__(self) -> None:
         self._table_name: str = ""
@@ -252,6 +272,9 @@ class CartSynthesizer:
         self._primary_key: str | None = None
         self._datetime_dtypes: dict[str, pl.DataType] = {}
         self._column_synths: list[_ColumnSynth] = []
+        # Pairs (col_a, col_b) where col_a <= col_b held for all training rows.
+        # Enforced post-sampling to prevent impossible orderings (e.g. pickup > dropoff).
+        self._ordered_pairs: list[tuple[str, str]] = []
         self._fitted: bool = False
 
     @property
@@ -281,6 +304,7 @@ class CartSynthesizer:
         self._key_columns = [c for c in table.columns if c.type is ColumnType.KEY]
 
         df = self._prepare_input(table.data)
+        self._ordered_pairs = _detect_ordered_pairs(self._modeled_columns, df)
 
         features = pl.DataFrame()
         synths: list[_ColumnSynth] = []
@@ -310,6 +334,26 @@ class CartSynthesizer:
             modeled_series[col.name] = series
             feat_values = cs.encoder.transform(series)
             features = features.with_columns(pl.Series(col.name, feat_values, dtype=pl.Float64))
+
+        # Enforce detected ordering constraints (e.g. pickup_time <= dropoff_time).
+        # Datetimes are still Int64 epoch at this point, so comparison is numeric.
+        for col_a_name, col_b_name in self._ordered_pairs:
+            if col_a_name not in modeled_series or col_b_name not in modeled_series:
+                continue
+            a = modeled_series[col_a_name]
+            b = modeled_series[col_b_name]
+            tmp = pl.DataFrame({col_a_name: a, col_b_name: b})
+            tmp = tmp.with_columns(
+                pl.when(
+                    pl.col(col_b_name).is_not_null()
+                    & pl.col(col_a_name).is_not_null()
+                    & (pl.col(col_b_name) < pl.col(col_a_name))
+                )
+                .then(pl.col(col_a_name))
+                .otherwise(pl.col(col_b_name))
+                .alias(col_b_name)
+            )
+            modeled_series[col_b_name] = tmp[col_b_name]
 
         # Recompose datetimes back to their original dtype.
         for name, dtype in self._datetime_dtypes.items():

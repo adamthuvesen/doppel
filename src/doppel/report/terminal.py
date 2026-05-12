@@ -34,6 +34,20 @@ def render(report: QualityReport, console: Console) -> None:
         )
     marg_table.caption = f"average marginal score: {report.avg_marginal:.4f}"
     console.print(marg_table)
+
+    text_warnings = [
+        m for m in report.marginals if m.verbatim_rate is not None and m.verbatim_rate > 0
+    ]
+    if text_warnings:
+        console.print(
+            "[yellow]note:[/] TEXT columns are resampled from training values "
+            "(sample-with-replacement):"
+        )
+        for m in text_warnings:
+            vr = m.verbatim_rate
+            assert vr is not None
+            console.print(f"  [dim]{m.column}[/]  {vr:.1%} of synth values are verbatim copies")
+
     console.print()
 
     corr_table = Table(title="Correlation structure", show_header=False)

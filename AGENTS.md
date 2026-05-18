@@ -13,7 +13,7 @@ referential structure). PyPI distribution name: `doppeldata`. CLI binary + impor
 ## Workflow
 
 ```bash
-uv sync --all-extras          # install everything including pii + quality extras
+uv sync --all-extras          # install everything including the pii extra
 uv run pytest                 # run tests
 uv run ruff check src tests   # lint
 uv run ruff format src tests  # format (writes)

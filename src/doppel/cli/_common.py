@@ -2,12 +2,30 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
+import math
+from collections.abc import Callable, Generator
+from contextlib import contextmanager
+from dataclasses import dataclass
 
 import polars as pl
 from rich.console import Console
+from rich.progress import (
+    BarColumn,
+    Progress,
+    SpinnerColumn,
+    TaskID,
+    TaskProgressColumn,
+    TextColumn,
+    TimeElapsedColumn,
+)
 
+from doppel.quality.aggregate import compute as compute_quality
+from doppel.schema.types import Column
 from doppel.synth.cart import RepairSummary
+
+_QUALITY_SAMPLE_ROWS = 5_000
+_TEXT_LEAK_THRESHOLD = 0.10
+_TEXT_LEAK_HINT_LIMIT = 3
 
 
 def sample_frame(
@@ -24,14 +42,112 @@ def sample_frame(
     return df.sample(n=rows, seed=seed, shuffle=True)
 
 
-def fit_progress(console: Console, *, min_columns: int = 20) -> Callable[[int, int, str], None]:
-    def _progress(done: int, total: int, column: str) -> None:
-        if total < min_columns:
-            return
-        if done == 1 or done == total or done % 10 == 0:
-            console.print(f"[dim]fit progress[/] {done}/{total} columns ({column})")
+@contextmanager
+def fit_progress(console: Console) -> Generator[Callable[[int, int, str], None], None, None]:
+    """Live per-column progress bar for CartSynthesizer.fit.
 
-    return _progress
+    The yielded callable matches `synth.cart.FitProgress` — called as
+    `(done, total, column)`. The bar updates after each column, including a
+    spinner, percentage, elapsed time, and the current column name.
+
+    Usage:
+        with fit_progress(console) as cb:
+            synth.fit(dataset, rng, progress=cb)
+    """
+    progress = Progress(
+        SpinnerColumn(),
+        TextColumn("[dim]fit[/]"),
+        BarColumn(bar_width=None),
+        TaskProgressColumn(),
+        TextColumn("{task.fields[column]}", style="dim"),
+        TimeElapsedColumn(),
+        console=console,
+        transient=False,
+    )
+    task_id: TaskID | None = None
+
+    def _callback(done: int, total: int, column: str) -> None:
+        nonlocal task_id
+        if task_id is None:
+            task_id = progress.add_task("fit", total=total, column=column)
+        progress.update(task_id, completed=done, column=column)
+
+    with progress:
+        yield _callback
+
+
+@dataclass(frozen=True)
+class TextLeak:
+    column: str
+    verbatim_rate: float
+
+
+@dataclass(frozen=True)
+class QualitySummary:
+    avg_marginal: float
+    corr_frobenius: float
+    dcr_p5: float
+    text_leaks: list[TextLeak]
+
+    def format_line(self) -> str:
+        def fmt(value: float) -> str:
+            return f"{value:.4f}" if math.isfinite(value) else "n/a"
+
+        return (
+            f"quality | marginal={fmt(self.avg_marginal)} "
+            f"| corr={fmt(self.corr_frobenius)} "
+            f"| dcr_p5={fmt(self.dcr_p5)} "
+            f"| text_leaks={len(self.text_leaks)}"
+        )
+
+
+def compute_quality_summary(
+    real: pl.DataFrame,
+    synth: pl.DataFrame,
+    columns: list[Column],
+    *,
+    sample_rows: int = _QUALITY_SAMPLE_ROWS,
+    sample_seed: int = 0,
+) -> QualitySummary:
+    """Cheap real-vs-synth quality summary for the end of `doppel gen`.
+
+    Samples up to `sample_rows` from each frame deterministically, runs the
+    standard quality aggregator, and surfaces only the headline numbers plus
+    any TEXT column whose verbatim_rate exceeds `_TEXT_LEAK_THRESHOLD`.
+    """
+    real_s = (
+        real.sample(n=sample_rows, seed=sample_seed, shuffle=True)
+        if real.height > sample_rows
+        else real
+    )
+    synth_s = (
+        synth.sample(n=sample_rows, seed=sample_seed + 1, shuffle=True)
+        if synth.height > sample_rows
+        else synth
+    )
+    report = compute_quality(real_s, synth_s, columns)
+    leaks = [
+        TextLeak(column=m.column, verbatim_rate=m.verbatim_rate)
+        for m in report.marginals
+        if m.verbatim_rate is not None and m.verbatim_rate > _TEXT_LEAK_THRESHOLD
+    ]
+    leaks.sort(key=lambda t: t.verbatim_rate, reverse=True)
+    return QualitySummary(
+        avg_marginal=report.avg_marginal,
+        corr_frobenius=report.correlations.frobenius_distance,
+        dcr_p5=report.privacy.percentile_5,
+        text_leaks=leaks,
+    )
+
+
+def print_quality_summary(console: Console, summary: QualitySummary) -> None:
+    console.print(f"[dim]{summary.format_line()}[/]")
+    for leak in summary.text_leaks[:_TEXT_LEAK_HINT_LIMIT]:
+        pct = round(leak.verbatim_rate * 100)
+        console.print(
+            f"[yellow]tip[/]: column {leak.column!r} is {pct}% verbatim from source; "
+            "rerun with --text-policy hash to mitigate"
+        )
 
 
 def print_repair_summary(console: Console, summary: RepairSummary) -> None:

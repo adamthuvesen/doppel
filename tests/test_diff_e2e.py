@@ -73,6 +73,96 @@ def test_diff_sample_rows_and_top_n_keep_terminal_compact(mixed_csv: Path) -> No
     assert "showing worst 2" in result.stdout
 
 
+def test_diff_threshold_breach_exits_nonzero(mixed_csv: Path, tmp_path: Path) -> None:
+    """A deliberately tight max-marginal must trip the threshold gate."""
+    synth = tmp_path / "synth.csv"
+    fit = runner.invoke(
+        app, ["gen", str(mixed_csv), "--rows", "200", "--output", str(synth), "--seed", "42"]
+    )
+    assert fit.exit_code == 0, fit.stdout
+    result = runner.invoke(
+        app,
+        [
+            "diff",
+            str(mixed_csv),
+            str(synth),
+            "--max-marginal",
+            "0.0001",  # tight enough that real CART output will exceed it
+        ],
+    )
+    assert result.exit_code == 2, result.stdout
+    assert "thresholds:" in result.stdout
+    assert "breach" in result.stdout
+    assert "avg_marginal" in result.stdout
+
+
+def test_diff_threshold_pass_exits_zero(mixed_csv: Path, tmp_path: Path) -> None:
+    """A loose threshold (compared against identical data) must pass."""
+    result = runner.invoke(
+        app,
+        [
+            "diff",
+            str(mixed_csv),
+            str(mixed_csv),
+            "--max-marginal",
+            "0.5",
+            "--max-correlation-distance",
+            "1.0",
+            "--min-dcr-p5",
+            "-1.0",
+        ],
+    )
+    assert result.exit_code == 0, result.stdout
+    assert "all passed" in result.stdout
+
+
+def test_diff_json_includes_thresholds_block(mixed_csv: Path, tmp_path: Path) -> None:
+    json_path = tmp_path / "report.json"
+    result = runner.invoke(
+        app,
+        [
+            "diff",
+            str(mixed_csv),
+            str(mixed_csv),
+            "--json",
+            str(json_path),
+            "--max-marginal",
+            "0.5",
+        ],
+    )
+    assert result.exit_code == 0, result.stdout
+    payload = json.loads(json_path.read_text())
+    assert "thresholds" in payload
+    assert payload["thresholds"]["passed"] is True
+    assert payload["thresholds"]["max_marginal"] == 0.5
+    assert payload["thresholds"]["breaches"] == []
+
+
+def test_diff_fail_on_verbatim_text_flag(tmp_path: Path) -> None:
+    """A TEXT column copied verbatim from source trips --fail-on-verbatim-text."""
+    import polars as pl
+
+    src = tmp_path / "src.csv"
+    n = 120
+    pl.DataFrame(
+        {
+            "company_domain": [f"customer-{i:03d}.example.com" for i in range(n)],
+            "score": list(range(n)),
+        }
+    ).write_csv(src)
+    synth = tmp_path / "synth.csv"
+    fit = runner.invoke(
+        app, ["gen", str(src), "--rows", "100", "--output", str(synth), "--seed", "1"]
+    )
+    assert fit.exit_code == 0, fit.stdout
+    result = runner.invoke(
+        app,
+        ["diff", str(src), str(synth), "--fail-on-verbatim-text"],
+    )
+    assert result.exit_code == 2, result.stdout
+    assert "verbatim_text" in result.stdout
+
+
 def test_diff_against_doppel_gen_output(mixed_csv: Path, tmp_path: Path) -> None:
     synth = tmp_path / "synth.csv"
     fit = runner.invoke(

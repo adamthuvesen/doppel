@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+import time
 import tomllib
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -88,6 +90,11 @@ def run(
         "--no-quality",
         help="Skip the post-generation real-vs-synth quality summary line.",
     ),
+    json_summary: Path | None = typer.Option(
+        None,
+        "--json-summary",
+        help="Write a machine-readable JSON summary (row count, timing, quality) to this path.",
+    ),
 ) -> None:
     if model != "cart":
         raise typer.BadParameter(f"model={model!r} is not supported by this build. Use 'cart'.")
@@ -110,7 +117,9 @@ def run(
         raise typer.BadParameter(
             "input_path is required for single-table synthesis (or pass a multi-table --schema)"
         )
-    _run_single(input_path, output, rows, schema, seed, fit_rows, text_policy, no_quality)
+    _run_single(
+        input_path, output, rows, schema, seed, fit_rows, text_policy, no_quality, json_summary
+    )
 
 
 def _run_single(
@@ -122,6 +131,7 @@ def _run_single(
     fit_rows: int | None,
     text_policy: TextPolicy,
     no_quality: bool,
+    json_summary: Path | None,
 ) -> None:
     console.print(f"[dim]reading[/] {input_path}")
     df = source_file.read(input_path)
@@ -140,10 +150,13 @@ def _run_single(
     dataset = Dataset.single(table_for_fit)
     console.print(f"[dim]fitting CART synthesizer on[/] {table.name!r}")
     synth = CartSynthesizer()
+    fit_started = time.perf_counter()
     with fit_progress(console) as cb:
         synth.fit(dataset, Rng.from_seed(seed), progress=cb)
+    fit_seconds = time.perf_counter() - fit_started
 
     console.print(f"[dim]sampling[/] {rows} rows")
+    sample_started = time.perf_counter()
     sample_rng = Rng.from_seed(seed)
     if schema_toml is not None and schema_toml.constraints:
         console.print(
@@ -155,6 +168,7 @@ def _run_single(
         _print_constraint_summary(creport)
     else:
         synth_ds = synth.sample(rows, sample_rng)
+    sample_seconds = time.perf_counter() - sample_started
     print_repair_summary(console, synth.last_repair_summary)
 
     out_df = synth_ds.only().data
@@ -177,9 +191,37 @@ def _run_single(
     sink_file.write(out_df, output)
     console.print(f"[green]ok[/] wrote {out_df.height} rows x {out_df.width} cols -> {output}")
 
+    quality_dict: dict[str, object] | None = None
     if not no_quality:
         summary = compute_quality_summary(df, out_df, table.columns, sample_seed=seed or 0)
         print_quality_summary(console, summary)
+        quality_dict = {
+            "avg_marginal": summary.avg_marginal,
+            "corr_frobenius": summary.corr_frobenius,
+            "dcr_p5": summary.dcr_p5,
+            "text_leaks": [
+                {"column": leak.column, "verbatim_rate": leak.verbatim_rate}
+                for leak in summary.text_leaks
+            ],
+        }
+
+    if json_summary is not None:
+        payload = {
+            "input_path": str(input_path),
+            "output_path": str(output),
+            "rows_requested": rows,
+            "rows_written": out_df.height,
+            "cols_written": out_df.width,
+            "fit_seconds": round(fit_seconds, 3),
+            "sample_seconds": round(sample_seconds, 3),
+            "seed": seed,
+            "text_policy": text_policy.value,
+            "pii_columns_regenerated": [d.name for d in pii_detected],
+            "quality": quality_dict,
+        }
+        json_summary.parent.mkdir(parents=True, exist_ok=True)
+        json_summary.write_text(json.dumps(payload, indent=2, default=str), encoding="utf-8")
+        console.print(f"[green]ok[/] wrote JSON summary -> {json_summary}")
 
 
 def _strip_pii_if_available(

@@ -52,6 +52,22 @@ Helpful knobs for real datasets:
 - doppel applies conservative soft repairs for exact missingness flags and count bounds
   learned from the source data, then prints a short repair summary.
 
+## CI gate
+
+`doppel diff` accepts threshold flags and exits non-zero on breach, so it drops
+straight into a CI pipeline:
+
+```bash
+doppel diff real.parquet synth.parquet \
+  --max-marginal 0.10 \
+  --min-dcr-p5 0.05 \
+  --fail-on-verbatim-text \
+  --json doppel-report.json
+```
+
+See [examples/github-action/](examples/github-action/) for a copy-pasteable
+GitHub Actions workflow.
+
 ## Limitations (v0.1)
 
 - Numeric integer columns now preserve source dtype, but other numeric

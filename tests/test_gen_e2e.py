@@ -160,6 +160,38 @@ def test_gen_text_leak_hint_fires_on_verbatim_sample(tmp_path: Path) -> None:
     assert "--text-policy hash" in result.stdout
 
 
+def test_gen_json_summary_includes_quality_and_timing(mixed_csv: Path, tmp_path: Path) -> None:
+    import json
+
+    out = tmp_path / "synth.csv"
+    summary_path = tmp_path / "summary.json"
+    result = runner.invoke(
+        app,
+        [
+            "gen",
+            str(mixed_csv),
+            "--rows",
+            "100",
+            "--output",
+            str(out),
+            "--seed",
+            "1",
+            "--json-summary",
+            str(summary_path),
+        ],
+    )
+    assert result.exit_code == 0, result.stdout
+    payload = json.loads(summary_path.read_text())
+    assert payload["rows_requested"] == 100
+    assert payload["rows_written"] == 100
+    assert payload["seed"] == 1
+    assert "fit_seconds" in payload
+    assert "sample_seconds" in payload
+    assert payload["quality"] is not None
+    assert "avg_marginal" in payload["quality"]
+    assert "dcr_p5" in payload["quality"]
+
+
 def test_gen_text_policy_drop_removes_text_columns(tmp_path: Path) -> None:
     src = tmp_path / "domains.csv"
     pl.DataFrame(

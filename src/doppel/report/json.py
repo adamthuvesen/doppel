@@ -10,8 +10,13 @@ from typing import Any
 from doppel.quality.aggregate import QualityReport
 
 
-def to_json(report: QualityReport, *, indent: int = 2) -> str:
-    payload = {
+def to_json(
+    report: QualityReport,
+    *,
+    indent: int = 2,
+    thresholds: dict[str, Any] | None = None,
+) -> str:
+    payload: dict[str, Any] = {
         "real_label": report.real_label,
         "synth_label": report.synth_label,
         "real_rows": report.real_rows,
@@ -30,6 +35,8 @@ def to_json(report: QualityReport, *, indent: int = 2) -> str:
         "dtype_mismatches": [asdict(issue) for issue in report.dtype_mismatches],
         "invariant_issues": [asdict(issue) for issue in report.invariant_issues],
     }
+    if thresholds is not None:
+        payload["thresholds"] = thresholds
     return json.dumps(payload, indent=indent, default=str, allow_nan=False)
 
 

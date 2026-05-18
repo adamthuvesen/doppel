@@ -1,8 +1,7 @@
 # doppel for dbt seeds
 
-Generate a synthetic CSV that drops straight into a dbt project's
-`seeds/` directory, then gate the seed with `doppel diff` so you know
-when the synthetic distribution has drifted from the real source.
+Generate a synthetic CSV for a dbt project's `seeds/` directory; gate it with
+`doppel diff` to catch distribution drift.
 
 ## One-shot synthesis
 
@@ -33,12 +32,9 @@ seeds:
 dbt seed --select users_synthetic
 ```
 
-## Quality gate (optional but recommended)
+## Quality gate
 
-Run `doppel diff` as a CI step that compares the synthetic seed against
-the real export. The job exits non-zero if any quality threshold is
-breached — surfacing schema drift, distribution shifts, or accidental
-data leakage before they hit your pipeline.
+Compare the synthetic seed against the real export in CI; exit non-zero on breach.
 
 ```bash
 doppel diff exports/users.parquet my_dbt_project/seeds/users_synthetic.csv \
@@ -49,19 +45,15 @@ doppel diff exports/users.parquet my_dbt_project/seeds/users_synthetic.csv \
   --json doppel-seed-quality.json
 ```
 
-See [examples/github-action/](../github-action/) for a full workflow.
+See [examples/github-action/](../github-action/) for the full workflow.
 
-## Recommended cadence
+## Cadence
 
-- **Local dev**: regenerate once when the source schema changes.
-- **CI**: regenerate on the same branch that updates the real export,
-  then run `doppel diff` to gate the merge.
-- **Refresh policy**: at most weekly — synthetic seeds should be cheap
-  to regenerate but expensive churn isn't worth it for stable tables.
+- Local dev: regenerate when the source schema changes.
+- CI: regenerate on the branch that updates the export, then `doppel diff` to gate
+  the merge.
 
-## What about Parquet seeds?
+## Parquet vs CSV
 
-If your warehouse / dbt setup supports Parquet seeds (most don't yet,
-but external tables do), prefer `.parquet` over `.csv`: dtype round-trip
-is exact, and `doppel diff` against the same Parquet file is metrically
-cleaner.
+Prefer `.parquet` if your warehouse supports Parquet seeds — dtype round-trip is
+exact and `doppel diff` numbers are cleaner.

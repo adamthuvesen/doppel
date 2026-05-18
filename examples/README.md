@@ -1,7 +1,6 @@
 # doppel demo
 
-This folder contains a small customer-health CSV you can use to try doppel without
-private data or setup.
+A small customer-health CSV to try doppel against without using real data.
 
 ```bash
 mkdir -p /tmp/doppel-demo
@@ -22,14 +21,12 @@ uv run doppel schema infer examples/customer_health.csv \
   --output /tmp/doppel-demo/customer_health.schema.toml
 ```
 
-What this demo exercises:
+Exercised features:
 
-- A unique `org_id` key.
-- High-cardinality domain text via `ultimate_domain`.
-- Categorical columns such as `region` and `plan`.
-- Integer count relationships such as `num_active_users_l90d <= num_users`.
-- A nullable feature plus exact missingness flag.
-- A binary target flag.
-
-Use `--text-policy sample` to see the default highest-fidelity behavior, or
-`hash`, `fake`, and `drop` when you want safer text output.
+- Unique `org_id` key.
+- High-cardinality text (`ultimate_domain`) — defaults will leak; use `--text-policy
+  hash|fake|drop` for safer output.
+- Categorical columns (`region`, `plan`).
+- Integer count invariants (`num_active_users_l90d <= num_users`).
+- Nullable feature + paired missingness flag.
+- Binary target flag.

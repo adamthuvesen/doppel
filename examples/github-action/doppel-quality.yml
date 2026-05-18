@@ -1,16 +1,6 @@
-# Gate a synthetic-data PR with doppel quality thresholds.
-#
-# Copy to .github/workflows/doppel-quality.yml in the repo that produces the
-# synthetic data. Adjust:
-#   - REAL / SYNTH paths to point at your committed (or generated) fixtures
-#   - Threshold values to match your dataset's baseline (run `doppel diff`
-#     once locally to pick numbers, then ratchet down over time)
-#   - The matrix `python-version` to match your repo's Python policy
-#
-# Exit codes:
-#   0 - all thresholds passed
-#   2 - at least one threshold breached (job fails red)
-#   other - tool/setup failure
+# PR gate: doppel quality thresholds.
+# Copy to .github/workflows/. Adjust paths, thresholds, and the python-version
+# matrix. Exit 0 = pass, 2 = threshold breach, other = tool/setup failure.
 
 name: doppel quality gate
 

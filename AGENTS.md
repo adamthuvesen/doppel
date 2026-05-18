@@ -90,20 +90,26 @@ src/doppel/
   `Name | Constant(int|float) | UnaryOp(-) | BinOp(+,-,*,/)` are allowed. Function
   calls, attribute access, and starred forms must remain blocked.
 
-## Known limitations (v1) — don't "fix" these without scope agreement
+## Known limitations (v0.1) — don't "fix" these without scope agreement
 
-These are documented design choices, not bugs:
+Design choices, not bugs:
 
-- **Numeric subtypes collapse to Float64** in synth output. CART produces floats; we
-  don't track the source `Int32`/`Int64` dtype yet.
 - **Datetime decomposition is epoch-seconds only.** Business-hours / weekday patterns
   are lost. Adding `hour`/`dow`/`is_weekend` derived features is a future refinement.
 - **Multi-table cross-correlations are not preserved.** Per-table CART is fit
   independently; FK integrity holds, but "gold users place bigger orders" does not.
-  See `synth/hierarchy.py` docstring.
-- **Free-text columns without detected PII** are sampled-with-replacement and **may
-  leak original strings**. The `diff` report's DCR percentile is the user-facing signal.
-- **No differential privacy in v1.** `--epsilon` is a v2 roadmap item.
+  `inherit_parent_features` schema flag is parsed (raises `NotImplementedError` until
+  wired). See `synth/hierarchy.py` docstring.
+- **Free-text columns without detected PII** are sampled with replacement and **may
+  leak original strings**. `diff`'s DCR percentile + per-column verbatim_rate are the
+  user-facing signal.
+- **`fit` refuses detected PII.** The artifact format doesn't yet carry detection
+  metadata for round-trip regeneration. Use `gen` for one-shot PII regeneration.
+  v0.2 roadmap.
+- **No differential privacy in v0.1.** `--epsilon` is v0.2 roadmap.
+
+(Integer + float subtypes now round-trip — Int32/Int64/UInt*/Float32/Float64 all
+preserved via `_INTEGER_DTYPE_NAMES`/`_FLOAT_DTYPE_NAMES` in `synth/cart.py`.)
 
 ## Where to read more
 

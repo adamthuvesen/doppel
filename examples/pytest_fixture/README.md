@@ -1,50 +1,44 @@
 # doppel as a pytest fixture
 
-Use a fitted `.doppel` artifact as a deterministic source of synthetic
-test data. Each test session gets a fresh sample at a seeded RNG so
-runs are reproducible.
+A fitted `.doppel` artifact as a deterministic, session-scoped source of test data.
 
 ## Setup
 
-Fit once against your real data — typically as a one-time bootstrap or
-as a CI step against a stable schema:
+Fit once against your real data:
 
 ```bash
 doppel fit your_real_data.parquet -o users.doppel --seed 0
 ```
 
-Drop [conftest.py](conftest.py) into your test suite. The
-`synthetic_users` fixture yields a 200-row Polars DataFrame sampled
-deterministically from the artifact.
+Drop [conftest.py](conftest.py) into your test suite. The `synthetic_users` fixture
+yields a 200-row Polars DataFrame sampled deterministically from the artifact.
 
 ## Use in tests
 
 ```python
 import polars as pl
 
-def test_my_pipeline_handles_users(synthetic_users: pl.DataFrame) -> None:
+def test_my_pipeline(synthetic_users: pl.DataFrame) -> None:
     result = my_pipeline.run(synthetic_users)
     assert result.height == synthetic_users.height
 ```
 
 ## Configuration
 
-- `SYNTHETIC_USERS_ARTIFACT` env var — path to the `.doppel` file
-  (defaults to `users.doppel` in the cwd).
-- `SYNTHETIC_USERS_SEED` env var — RNG seed (defaults to `0`).
+- `SYNTHETIC_USERS_ARTIFACT` — path to the `.doppel` file (default `users.doppel`).
+- `SYNTHETIC_USERS_SEED` — RNG seed (default `0`).
 
-## Why this beats a static fixture file
+## Notes
 
-- **No real PII in the test fixture** — `doppel fit` refused to store
-  detected PII; `doppel gen` (used to produce the artifact) regenerates
-  detected PII via Faker.
-- **Easy to vary sample size** without re-fitting — change `.sample(N, …)`.
-- **Determinism preserved across CI machines** — `Rng.from_seed(seed)`
-  produces byte-identical output regardless of platform.
+- The artifact stores a pickled fitted synthesizer, not raw rows. `doppel fit`
+  refuses any source where Presidio detects PII, so detected PII never lands in
+  an artifact. **Undetected free-text may still echo source values** — run
+  `doppel diff` on output before publishing.
+- Sample size is a runtime decision; change `.sample(N, …)` in `conftest.py`
+  without re-fitting.
+- `Rng.from_seed(seed)` is byte-deterministic across machines.
 
 ## Verify locally
-
-From this directory:
 
 ```bash
 doppel fit some_real_data.parquet -o users.doppel --seed 0

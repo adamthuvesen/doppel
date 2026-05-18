@@ -11,6 +11,7 @@ import polars as pl
 _NULL_SENTINELS: frozenset[str] = frozenset(
     ["?", "NA", "N/A", "na", "n/a", "none", "None", "NULL", "null", ""]
 )
+_DATE_PREFIX_RE = r"^\d{4}-\d{2}-\d{2}([T ][0-9]{2}:[0-9]{2}:[0-9]{2})?"
 
 
 def read(path: Path) -> pl.DataFrame:
@@ -22,9 +23,9 @@ def read(path: Path) -> pl.DataFrame:
     if suffix == ".parquet":
         return pl.read_parquet(path)
     if suffix == ".json":
-        return pl.read_json(path)
+        return _normalise_strings(pl.read_json(path))
     if suffix in {".ndjson", ".jsonl"}:
-        return pl.read_ndjson(path)
+        return _normalise_strings(pl.read_ndjson(path))
     if suffix in {".arrow", ".feather", ".ipc"}:
         return pl.read_ipc(path)
     raise ValueError(
@@ -63,4 +64,14 @@ def _normalise_strings(df: pl.DataFrame) -> pl.DataFrame:
         as_float = df[c].cast(pl.Float64, strict=False)
         if as_float.null_count() == original_nulls:
             df = df.with_columns(as_float)
+            continue
+        if _looks_datetime_like(df[c]):
+            as_datetime = df[c].str.to_datetime(strict=False)
+            if as_datetime.null_count() == original_nulls:
+                df = df.with_columns(as_datetime)
     return df
+
+
+def _looks_datetime_like(series: pl.Series) -> bool:
+    non_null = series.drop_nulls()
+    return non_null.len() > 0 and bool(non_null.str.contains(_DATE_PREFIX_RE).all())

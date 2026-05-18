@@ -29,3 +29,11 @@ def test_string_with_high_cardinality_becomes_text() -> None:
     df = pl.DataFrame({"note": [f"note_{i}" for i in range(200)]})
     table = infer_table("t", df)
     assert table.columns[0].type is ColumnType.TEXT
+
+
+def test_integer_binary_column_becomes_categorical_flag() -> None:
+    df = pl.DataFrame({"flag": pl.Series("flag", [0, 1, 1, 0], dtype=pl.Int32)})
+    table = infer_table("flags", df)
+    col = table.columns[0]
+    assert col.type is ColumnType.CATEGORICAL
+    assert col.categories == (0, 1)

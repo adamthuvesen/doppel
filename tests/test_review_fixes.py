@@ -246,6 +246,24 @@ def test_promoted_pk_yields_unique_synth_values() -> None:
     assert out["order_no"].n_unique() == 50
 
 
+def test_promoted_string_pk_yields_string_synth_values() -> None:
+    df = pl.DataFrame(
+        {
+            "order_code": ["A001", "A002", "A003", "A004", "A005"],
+            "amount": [10.0, 20.0, 30.0, 40.0, 50.0],
+        }
+    )
+    inferred = infer_table("orders", df)
+    schema = SchemaToml(table=TableMeta(name="orders", primary_key="order_code"))
+    merged = schema_toml_mod.apply_overrides(inferred, schema)
+    synth = CartSynthesizer()
+    synth.fit(Dataset.single(merged), Rng.from_seed(0))
+    out = synth.sample(50, Rng.from_seed(0)).only().data
+    assert out is not None
+    assert out["order_code"].dtype == pl.String
+    assert out["order_code"].n_unique() == 50
+
+
 # ---------------------------------------------------------------------------
 # M5 — PII confidence is clamped to [0, 1]
 # ---------------------------------------------------------------------------

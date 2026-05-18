@@ -59,6 +59,18 @@ def test_derived_rejects_function_calls() -> None:
         derived_mod.apply(df, [DerivedConstraint(column="x", expression="abs(a)")])
 
 
+def test_derived_apply_does_not_mutate_allowed_columns() -> None:
+    df = pl.DataFrame({"a": [1, 2]})
+    allowed = {"a"}
+    out = derived_mod.apply(
+        df,
+        [DerivedConstraint(column="b", expression="a + 1")],
+        allowed_columns=allowed,
+    )
+    assert out["b"].to_list() == [2, 3]
+    assert allowed == {"a"}
+
+
 def test_range_mask_flags_out_of_bounds() -> None:
     df = pl.DataFrame({"x": [-1, 0, 5, 10, 11]})
     mask = reject_mod.violation_mask_range(df, RangeConstraint(column="x", min=0, max=10))

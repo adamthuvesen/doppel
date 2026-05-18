@@ -104,6 +104,62 @@ def test_gen_text_policy_hash_removes_verbatim_text(tmp_path: Path) -> None:
     assert all(str(v).startswith("hash_") for v in synth["ultimate_domain"].drop_nulls())
 
 
+def test_gen_prints_quality_summary_by_default(mixed_csv: Path, tmp_path: Path) -> None:
+    out = tmp_path / "synth.csv"
+    result = runner.invoke(
+        app,
+        ["gen", str(mixed_csv), "--rows", "100", "--output", str(out), "--seed", "1"],
+    )
+    assert result.exit_code == 0, result.stdout
+    assert "quality |" in result.stdout
+    assert "marginal=" in result.stdout
+    assert "dcr_p5=" in result.stdout
+    assert "text_leaks=" in result.stdout
+
+
+def test_gen_no_quality_flag_suppresses_summary(mixed_csv: Path, tmp_path: Path) -> None:
+    out = tmp_path / "synth.csv"
+    result = runner.invoke(
+        app,
+        [
+            "gen",
+            str(mixed_csv),
+            "--rows",
+            "100",
+            "--output",
+            str(out),
+            "--seed",
+            "1",
+            "--no-quality",
+        ],
+    )
+    assert result.exit_code == 0, result.stdout
+    assert "quality |" not in result.stdout
+
+
+def test_gen_text_leak_hint_fires_on_verbatim_sample(tmp_path: Path) -> None:
+    src = tmp_path / "domains.csv"
+    # >50 unique values + mostly-unique ratio forces TEXT classification.
+    # CART samples TEXT columns from the source pool, so verbatim_rate ~ 1.0
+    # under the default --text-policy sample.
+    n = 120
+    pl.DataFrame(
+        {
+            "ultimate_domain": [f"customer-{i:03d}.example.com" for i in range(n)],
+            "score": list(range(n)),
+        }
+    ).write_csv(src)
+    out = tmp_path / "synth.csv"
+    result = runner.invoke(
+        app,
+        ["gen", str(src), "--rows", "100", "--output", str(out), "--seed", "1"],
+    )
+    assert result.exit_code == 0, result.stdout
+    assert "tip:" in result.stdout
+    assert "verbatim from source" in result.stdout
+    assert "--text-policy hash" in result.stdout
+
+
 def test_gen_text_policy_drop_removes_text_columns(tmp_path: Path) -> None:
     src = tmp_path / "domains.csv"
     pl.DataFrame(

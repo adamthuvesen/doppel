@@ -9,7 +9,13 @@ from typing import TYPE_CHECKING
 import typer
 from rich.console import Console
 
-from doppel.cli._common import fit_progress, print_repair_summary, sample_frame
+from doppel.cli._common import (
+    compute_quality_summary,
+    fit_progress,
+    print_quality_summary,
+    print_repair_summary,
+    sample_frame,
+)
 from doppel.constraints.engine import ConstraintReport, synthesize_with_constraints
 from doppel.dataset import Dataset, Table
 from doppel.schema import multi as multi_schema
@@ -77,6 +83,11 @@ def run(
         "--text-policy",
         help="How to handle free-text columns in output: sample, hash, fake, or drop.",
     ),
+    no_quality: bool = typer.Option(
+        False,
+        "--no-quality",
+        help="Skip the post-generation real-vs-synth quality summary line.",
+    ),
 ) -> None:
     if model != "cart":
         raise typer.BadParameter(f"model={model!r} is not supported by this build. Use 'cart'.")
@@ -99,7 +110,7 @@ def run(
         raise typer.BadParameter(
             "input_path is required for single-table synthesis (or pass a multi-table --schema)"
         )
-    _run_single(input_path, output, rows, schema, seed, fit_rows, text_policy)
+    _run_single(input_path, output, rows, schema, seed, fit_rows, text_policy, no_quality)
 
 
 def _run_single(
@@ -110,6 +121,7 @@ def _run_single(
     seed: int | None,
     fit_rows: int | None,
     text_policy: TextPolicy,
+    no_quality: bool,
 ) -> None:
     console.print(f"[dim]reading[/] {input_path}")
     df = source_file.read(input_path)
@@ -128,7 +140,8 @@ def _run_single(
     dataset = Dataset.single(table_for_fit)
     console.print(f"[dim]fitting CART synthesizer on[/] {table.name!r}")
     synth = CartSynthesizer()
-    synth.fit(dataset, Rng.from_seed(seed), progress=fit_progress(console))
+    with fit_progress(console) as cb:
+        synth.fit(dataset, Rng.from_seed(seed), progress=cb)
 
     console.print(f"[dim]sampling[/] {rows} rows")
     sample_rng = Rng.from_seed(seed)
@@ -163,6 +176,10 @@ def _run_single(
     console.print(f"[dim]writing[/] {output}")
     sink_file.write(out_df, output)
     console.print(f"[green]ok[/] wrote {out_df.height} rows x {out_df.width} cols -> {output}")
+
+    if not no_quality:
+        summary = compute_quality_summary(df, out_df, table.columns, sample_seed=seed or 0)
+        print_quality_summary(console, summary)
 
 
 def _strip_pii_if_available(

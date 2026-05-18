@@ -4,12 +4,17 @@ The pickle blob is deserialised through `safe_pickle.safe_loads`, which refuses 
 class outside an explicit allowlist (sklearn / numpy / polars / doppel / scipy + safe
 builtins). This blocks the standard pickle-RCE vector: a crafted `__reduce__` payload
 calling `os.system` or similar will raise `UnsafeArtifactError` before any code runs.
+
+`inspect_artifact()` is a manifest-only variant that never touches the pickle, used by
+`doppel artifact info` to surface metadata without paying the deserialisation cost or
+risk.
 """
 
 from __future__ import annotations
 
 import tarfile
 import tomllib
+from dataclasses import dataclass
 from pathlib import Path
 
 from doppel.artifact.manifest import ARTIFACT_VERSION, Manifest
@@ -24,6 +29,48 @@ _MAX_PICKLE_BYTES = 512 * 1024 * 1024
 
 class ArtifactError(ValueError):
     """Raised when a `.doppel` artifact is malformed, mis-versioned, or untrusted."""
+
+
+@dataclass(frozen=True)
+class ArtifactInfo:
+    """Metadata-only view of a `.doppel` artifact. Does not unpickle the synthesizer."""
+
+    path: Path
+    file_size: int
+    manifest: Manifest
+    schema_toml: SchemaToml | None
+    pickle_size: int
+
+
+def inspect_artifact(path: Path) -> ArtifactInfo:
+    """Read manifest + schema + pickle size from an artifact without unpickling.
+
+    Manifest version is validated; the pickle blob is never deserialised.
+    """
+    file_size = path.stat().st_size
+    try:
+        with tarfile.open(path, "r:gz") as tar:
+            manifest = _read_manifest(tar)
+            _validate(manifest)
+            schema_blob = _read_optional(tar, "schema.toml", max_bytes=_MAX_SCHEMA_BYTES)
+            try:
+                pickle_member = tar.getmember("synth.pickle")
+            except KeyError as exc:
+                raise ArtifactError("artifact is missing required member 'synth.pickle'") from exc
+            pickle_size = pickle_member.size
+    except tarfile.TarError as exc:
+        raise ArtifactError(f"{path} is not a valid doppel artifact: {exc}") from exc
+
+    schema_toml: SchemaToml | None = None
+    if schema_blob is not None:
+        schema_toml = SchemaToml.model_validate(tomllib.loads(schema_blob.decode("utf-8")))
+    return ArtifactInfo(
+        path=path,
+        file_size=file_size,
+        manifest=manifest,
+        schema_toml=schema_toml,
+        pickle_size=pickle_size,
+    )
 
 
 def load(path: Path) -> tuple[CartSynthesizer, Manifest, SchemaToml | None]:

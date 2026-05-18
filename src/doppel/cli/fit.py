@@ -90,7 +90,8 @@ def fit(
 
     console.print(f"[dim]fitting CART synthesizer on[/] {table.name!r}")
     synth = CartSynthesizer()
-    synth.fit(dataset, Rng.from_seed(seed), progress=fit_progress(console))
+    with fit_progress(console) as cb:
+        synth.fit(dataset, Rng.from_seed(seed), progress=cb)
 
     console.print(f"[dim]writing artifact[/] {output}")
     save_artifact(synth, output, training_row_count=df.height, schema_toml=schema_toml)

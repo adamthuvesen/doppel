@@ -42,6 +42,7 @@ def to_html(report: QualityReport) -> str:
 <p>Per-column similarity. Lower = closer to the real distribution. 0 means identical.</p>
 <p class="summary">average score: {report.avg_marginal:.4f}</p>
 {_marginals_table(report)}
+{_issues(report)}
 
 <h2>Correlation structure</h2>
 <p>How well the synthetic data preserves pairwise associations across columns.</p>
@@ -83,7 +84,7 @@ def _marginals_table(report: QualityReport) -> str:
         f"<td class='num'>{m.null_rate_real * 100:.1f}%</td>"
         f"<td class='num'>{m.null_rate_synth * 100:.1f}%</td>"
         f"</tr>"
-        for m in report.marginals
+        for m in sorted(report.marginals, key=lambda m: m.value, reverse=True)
     )
     return (
         "<table>"
@@ -95,3 +96,43 @@ def _marginals_table(report: QualityReport) -> str:
         f"{rows}"
         "</table>"
     )
+
+
+def _issues(report: QualityReport) -> str:
+    if not report.dtype_mismatches and not report.invariant_issues:
+        return ""
+    blocks: list[str] = ["<h2>Likely issues</h2>"]
+    if report.dtype_mismatches:
+        rows = "\n".join(
+            "<tr>"
+            f"<td>{escape(i.column)}</td>"
+            f"<td>{escape(i.real_dtype)}</td>"
+            f"<td>{escape(i.synth_dtype)}</td>"
+            "</tr>"
+            for i in report.dtype_mismatches
+        )
+        blocks.append(
+            "<h3>Dtype mismatches</h3>"
+            "<table>"
+            "<tr><th>column</th><th>real dtype</th><th>synth dtype</th></tr>"
+            f"{rows}"
+            "</table>"
+        )
+    if report.invariant_issues:
+        rows = "\n".join(
+            "<tr>"
+            f"<td>{escape(i.label)}</td>"
+            f"<td class='num'>{i.real_violations}</td>"
+            f"<td class='num'>{i.synth_violations}</td>"
+            "</tr>"
+            for i in report.invariant_issues
+        )
+        blocks.append(
+            "<h3>Likely count invariant drifts</h3>"
+            "<table>"
+            "<tr><th>relationship</th><th class='num'>real violations</th>"
+            "<th class='num'>synth violations</th></tr>"
+            f"{rows}"
+            "</table>"
+        )
+    return "\n".join(blocks)

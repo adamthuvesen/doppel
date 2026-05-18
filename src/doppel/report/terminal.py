@@ -2,13 +2,15 @@
 
 from __future__ import annotations
 
+import math
+
 from rich.console import Console
 from rich.table import Table
 
 from doppel.quality.aggregate import QualityReport
 
 
-def render(report: QualityReport, console: Console) -> None:
+def render(report: QualityReport, console: Console, *, top_n: int | None = None) -> None:
     console.print(
         f"[bold]doppel quality report[/]  "
         f"{report.real_label} ({report.real_rows} rows) vs. "
@@ -23,7 +25,13 @@ def render(report: QualityReport, console: Console) -> None:
     marg_table.add_column("Score", justify="right")
     marg_table.add_column("Null%real", justify="right")
     marg_table.add_column("Null%synth", justify="right")
-    for m in report.marginals:
+    marginals = sorted(
+        report.marginals,
+        key=lambda m: m.value if math.isfinite(m.value) else -1.0,
+        reverse=True,
+    )
+    shown = marginals[:top_n] if top_n is not None else marginals
+    for m in shown:
         marg_table.add_row(
             m.column,
             m.type.value,
@@ -33,6 +41,8 @@ def render(report: QualityReport, console: Console) -> None:
             f"{m.null_rate_synth * 100:.1f}",
         )
     marg_table.caption = f"average marginal score: {report.avg_marginal:.4f}"
+    if top_n is not None and len(report.marginals) > top_n:
+        marg_table.caption += f" · showing worst {top_n} of {len(report.marginals)} columns"
     console.print(marg_table)
 
     text_warnings = [
@@ -47,6 +57,27 @@ def render(report: QualityReport, console: Console) -> None:
             vr = m.verbatim_rate
             assert vr is not None
             console.print(f"  [dim]{m.column}[/]  {vr:.1%} of synth values are verbatim copies")
+
+    if report.dtype_mismatches or report.invariant_issues:
+        console.print()
+        issue_table = Table(title="Likely issues", show_header=True)
+        issue_table.add_column("Issue")
+        issue_table.add_column("Detail")
+        for issue in report.dtype_mismatches[:10]:
+            issue_table.add_row(
+                "dtype mismatch",
+                f"{issue.column}: real {issue.real_dtype}, synth {issue.synth_dtype}",
+            )
+        for issue in report.invariant_issues[:10]:
+            issue_table.add_row(
+                "count invariant",
+                f"{issue.label}: {issue.synth_violations} synth violations",
+            )
+        issue_table.caption = (
+            f"{len(report.dtype_mismatches)} dtype mismatches, "
+            f"{len(report.invariant_issues)} likely count invariant drifts"
+        )
+        console.print(issue_table)
 
     console.print()
 

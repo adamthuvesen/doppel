@@ -27,6 +27,8 @@ def to_json(report: QualityReport, *, indent: int = 2) -> str:
             "synth_matrix": _without_non_finite(report.correlations.synth_matrix),
         },
         "privacy": _without_non_finite(asdict(report.privacy)),
+        "dtype_mismatches": [asdict(issue) for issue in report.dtype_mismatches],
+        "invariant_issues": [asdict(issue) for issue in report.invariant_issues],
     }
     return json.dumps(payload, indent=indent, default=str, allow_nan=False)
 

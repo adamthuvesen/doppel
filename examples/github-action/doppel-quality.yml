@@ -1,0 +1,68 @@
+# Gate a synthetic-data PR with doppel quality thresholds.
+#
+# Copy to .github/workflows/doppel-quality.yml in the repo that produces the
+# synthetic data. Adjust:
+#   - REAL / SYNTH paths to point at your committed (or generated) fixtures
+#   - Threshold values to match your dataset's baseline (run `doppel diff`
+#     once locally to pick numbers, then ratchet down over time)
+#   - The matrix `python-version` to match your repo's Python policy
+#
+# Exit codes:
+#   0 - all thresholds passed
+#   2 - at least one threshold breached (job fails red)
+#   other - tool/setup failure
+
+name: doppel quality gate
+
+on:
+  pull_request:
+    paths:
+      - "data/**"
+      - "synth/**"
+  workflow_dispatch:
+
+jobs:
+  doppel-diff:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.12"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install doppel
+        run: pip install doppeldata
+
+      - name: Verify environment
+        run: doppel doctor
+
+      - name: Run quality diff with thresholds
+        id: diff
+        run: |
+          doppel diff \
+            data/real_sample.parquet \
+            synth/output.parquet \
+            --sample-rows 50000 \
+            --top-n 25 \
+            --html doppel-report.html \
+            --json doppel-report.json \
+            --max-marginal 0.10 \
+            --max-correlation-distance 0.15 \
+            --min-dcr-p5 0.05 \
+            --fail-on-verbatim-text
+
+      - name: Upload HTML report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: doppel-quality-report
+          path: |
+            doppel-report.html
+            doppel-report.json
+          if-no-files-found: error
+          retention-days: 30

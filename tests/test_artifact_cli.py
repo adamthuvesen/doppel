@@ -21,9 +21,7 @@ def _fit_artifact(tmp_path: Path) -> Path:
         }
     ).write_csv(src)
     artifact = tmp_path / "model.doppel"
-    result = runner.invoke(
-        app, ["fit", str(src), "--output", str(artifact), "--seed", "1"]
-    )
+    result = runner.invoke(app, ["fit", str(src), "--output", str(artifact), "--seed", "1"])
     assert result.exit_code == 0, result.stdout
     return artifact
 

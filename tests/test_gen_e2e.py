@@ -160,6 +160,58 @@ def test_gen_text_leak_hint_fires_on_verbatim_sample(tmp_path: Path) -> None:
     assert "--text-policy hash" in result.stdout
 
 
+def test_gen_auto_fit_rows_caps_huge_source(tmp_path: Path) -> None:
+    """A 150k-row source with no --fit-rows should trigger the auto-cap message."""
+    src = tmp_path / "big.parquet"
+    n = 150_000
+    pl.DataFrame({"value": list(range(n)), "flag": [0, 1] * (n // 2)}).write_parquet(src)
+    out = tmp_path / "synth.parquet"
+    result = runner.invoke(
+        app,
+        ["gen", str(src), "--rows", "1000", "--output", str(out), "--seed", "1"],
+    )
+    assert result.exit_code == 0, result.stdout
+    assert "fit-rows:" in result.stdout
+    assert "sampling" in result.stdout
+    # min(1000*5, 100000) = 5000
+    assert "5,000" in result.stdout
+
+
+def test_gen_auto_fit_rows_skipped_when_below_threshold(mixed_csv: Path, tmp_path: Path) -> None:
+    """Small sources should NOT see the auto-cap message."""
+    out = tmp_path / "synth.csv"
+    result = runner.invoke(
+        app,
+        ["gen", str(mixed_csv), "--rows", "50", "--output", str(out), "--seed", "1"],
+    )
+    assert result.exit_code == 0, result.stdout
+    assert "fit-rows:" not in result.stdout
+
+
+def test_gen_explicit_fit_rows_zero_disables_auto_cap(mixed_csv: Path, tmp_path: Path) -> None:
+    """Passing --fit-rows 0 should suppress the auto-cap path and the sampling-fit-rows message."""
+    out = tmp_path / "synth.csv"
+    result = runner.invoke(
+        app,
+        [
+            "gen",
+            str(mixed_csv),
+            "--rows",
+            "100",
+            "--fit-rows",
+            "0",
+            "--output",
+            str(out),
+            "--seed",
+            "1",
+        ],
+    )
+    assert result.exit_code == 0, result.stdout
+    # Small source, no auto-cap would trigger anyway, but the --fit-rows 0 flag must be accepted
+    assert "fit-rows:" not in result.stdout
+    assert "sampling fit rows" not in result.stdout
+
+
 def test_gen_json_summary_includes_quality_and_timing(mixed_csv: Path, tmp_path: Path) -> None:
     import json
 

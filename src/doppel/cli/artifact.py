@@ -55,9 +55,7 @@ def info(
                 table.add_row(name, str(spec.type.value), str(spec.nullable))
             console.print(table)
         if info_obj.schema_toml.constraints:
-            console.print(
-                f"[dim]constraints embedded:[/] {len(info_obj.schema_toml.constraints)}"
-            )
+            console.print(f"[dim]constraints embedded:[/] {len(info_obj.schema_toml.constraints)}")
         if info_obj.schema_toml.table.primary_key:
             console.print(f"[dim]primary key:[/] {info_obj.schema_toml.table.primary_key}")
     else:

@@ -10,6 +10,7 @@ This is a heuristic, *not* a formal privacy guarantee — differential privacy l
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 
 import numpy as np
@@ -33,7 +34,27 @@ class PrivacyReport:
     mean_distance: float
 
 
-def compute(real: pl.DataFrame, synth: pl.DataFrame, columns: list[Column]) -> PrivacyReport:
+_DEFAULT_BATCH_SIZE = 4096
+ProgressCallback = Callable[[int, int], None]
+
+
+def compute(
+    real: pl.DataFrame,
+    synth: pl.DataFrame,
+    columns: list[Column],
+    *,
+    max_real_rows: int | None = None,
+    max_synth_rows: int | None = None,
+    sample_seed: int = 0,
+    progress: ProgressCallback | None = None,
+    batch_size: int = _DEFAULT_BATCH_SIZE,
+) -> PrivacyReport:
+    """Compute DCR percentiles.
+
+    `max_real_rows` / `max_synth_rows` deterministically sample each frame before the
+    nearest-neighbour query — useful for large datasets where O(synth * log real) becomes
+    slow. `progress(done, total)` fires after each batch of synth rows is processed.
+    """
     eligible = [
         c
         for c in columns
@@ -41,7 +62,9 @@ def compute(real: pl.DataFrame, synth: pl.DataFrame, columns: list[Column]) -> P
         and c.name in real.columns
         and c.name in synth.columns
     ]
-    real_x, synth_x = _build_feature_matrices(real, synth, eligible)
+    real_sampled = _maybe_sample(real, max_real_rows, sample_seed)
+    synth_sampled = _maybe_sample(synth, max_synth_rows, sample_seed + 1)
+    real_x, synth_x = _build_feature_matrices(real_sampled, synth_sampled, eligible)
     if real_x.shape[0] == 0 or synth_x.shape[0] == 0 or real_x.shape[1] == 0:
         return PrivacyReport(
             n_real=real.height,
@@ -55,8 +78,7 @@ def compute(real: pl.DataFrame, synth: pl.DataFrame, columns: list[Column]) -> P
         )
     nn = NearestNeighbors(n_neighbors=1, algorithm="auto", metric="euclidean")
     nn.fit(real_x)
-    distances, _ = nn.kneighbors(synth_x, return_distance=True)
-    dcr = distances[:, 0]
+    dcr = _kneighbors_batched(nn, synth_x, batch_size=batch_size, progress=progress)
     return PrivacyReport(
         n_real=real.height,
         n_synth=synth.height,
@@ -67,6 +89,36 @@ def compute(real: pl.DataFrame, synth: pl.DataFrame, columns: list[Column]) -> P
         percentile_50=float(np.percentile(dcr, 50)),
         mean_distance=float(np.mean(dcr)),
     )
+
+
+def _maybe_sample(df: pl.DataFrame, cap: int | None, seed: int) -> pl.DataFrame:
+    if cap is None or df.height <= cap:
+        return df
+    return df.sample(n=cap, seed=seed, shuffle=True)
+
+
+def _kneighbors_batched(
+    nn: NearestNeighbors,
+    synth_x: np.ndarray,
+    *,
+    batch_size: int,
+    progress: ProgressCallback | None,
+) -> np.ndarray:
+    n = synth_x.shape[0]
+    if progress is None or n <= batch_size:
+        distances, _ = nn.kneighbors(synth_x, return_distance=True)
+        if progress is not None:
+            progress(n, n)
+        return distances[:, 0]
+    out = np.empty(n, dtype=np.float64)
+    done = 0
+    for start in range(0, n, batch_size):
+        end = min(start + batch_size, n)
+        distances, _ = nn.kneighbors(synth_x[start:end], return_distance=True)
+        out[start:end] = distances[:, 0]
+        done = end
+        progress(done, n)
+    return out
 
 
 def _build_feature_matrices(

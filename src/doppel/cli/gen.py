@@ -77,8 +77,12 @@ def run(
     fit_rows: int | None = typer.Option(
         None,
         "--fit-rows",
-        min=1,
-        help="Randomly sample this many source rows before fitting (useful for large files).",
+        min=0,
+        help=(
+            "Randomly sample this many source rows before fitting (useful for large files). "
+            "Defaults to min(rows*5, 100k) when source > 100k rows. "
+            "Pass 0 to disable the auto-cap and fit on the full source."
+        ),
     ),
     text_policy: TextPolicy = typer.Option(
         TextPolicy.SAMPLE,
@@ -143,7 +147,8 @@ def _run_single(
 ) -> None:
     console.print(f"[dim]reading[/] {input_path}")
     df = source_file.read(input_path)
-    df = sample_frame(df, fit_rows, seed=seed, console=console, label="fit")
+    effective_fit_rows = _auto_fit_rows(fit_rows, df.height, rows)
+    df = sample_frame(df, effective_fit_rows, seed=seed, console=console, label="fit")
     console.print(f"[dim]inferring schema for[/] {df.height} rows x {df.width} columns")
     table = infer_table(input_path.stem, df)
 
@@ -297,6 +302,35 @@ def _run_multi(
         console.print(f"[green]ok[/] {name}: {out_df.height} rows -> {dest}")
 
 
+_AUTO_FIT_TRIGGER_ROWS = 100_000
+_AUTO_FIT_CAP = 100_000
+_AUTO_FIT_MULTIPLIER = 5
+
+
+def _auto_fit_rows(user_value: int | None, source_rows: int, requested_rows: int) -> int | None:
+    """Pick an effective `--fit-rows` value.
+
+    - User passed `--fit-rows 0`: opt out of capping; fit on the full source.
+    - User explicitly passed `--fit-rows N` (N >= 1): honour it verbatim.
+    - User omitted the flag AND source ≤ trigger (100k rows): no sampling.
+    - User omitted the flag AND source > trigger: cap at `min(rows*5, 100k)`
+      and print a one-liner so the user understands what was sampled.
+    """
+    if user_value == 0:
+        return None
+    if user_value is not None:
+        return user_value
+    if source_rows <= _AUTO_FIT_TRIGGER_ROWS:
+        return None
+    cap = min(requested_rows * _AUTO_FIT_MULTIPLIER, _AUTO_FIT_CAP)
+    console.print(
+        f"[dim]fit-rows:[/] source has {source_rows:,} rows; "
+        f"sampling {cap:,} (deterministic) for fit. "
+        "pass `--fit-rows 0` to disable, or `--fit-rows N` to set explicitly."
+    )
+    return cap
+
+
 def _parse_rows_per_table(raw: str | None, root_names: set[str]) -> dict[str, int]:
     """Parse `--rows-per-table name=N,other=M` into a dict, validating against known roots."""
     if raw is None:
@@ -307,9 +341,7 @@ def _parse_rows_per_table(raw: str | None, root_names: set[str]) -> dict[str, in
         if not pair:
             continue
         if "=" not in pair:
-            raise typer.BadParameter(
-                f"--rows-per-table item {pair!r} must be in `name=N` form"
-            )
+            raise typer.BadParameter(f"--rows-per-table item {pair!r} must be in `name=N` form")
         name, _, count_str = pair.partition("=")
         name = name.strip()
         if name not in root_names:

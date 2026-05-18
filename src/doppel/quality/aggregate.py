@@ -58,6 +58,9 @@ def compute(
     *,
     real_label: str = "real",
     synth_label: str = "synth",
+    max_dcr_rows: int | None = None,
+    privacy_progress: priv_mod.ProgressCallback | None = None,
+    privacy_sample_seed: int = 0,
 ) -> QualityReport:
     return QualityReport(
         real_label=real_label,
@@ -67,7 +70,15 @@ def compute(
         columns=columns,
         marginals=marg_mod.compute(real, synth, columns),
         correlations=corr_mod.compute(real, synth, columns),
-        privacy=priv_mod.compute(real, synth, columns),
+        privacy=priv_mod.compute(
+            real,
+            synth,
+            columns,
+            max_real_rows=max_dcr_rows,
+            max_synth_rows=max_dcr_rows,
+            sample_seed=privacy_sample_seed,
+            progress=privacy_progress,
+        ),
         dtype_mismatches=_dtype_mismatches(real, synth),
         invariant_issues=_count_invariant_issues(real, synth, columns),
     )

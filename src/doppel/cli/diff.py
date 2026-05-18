@@ -3,11 +3,22 @@
 from __future__ import annotations
 
 import math
+from collections.abc import Callable, Generator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 
 import typer
 from rich.console import Console
+from rich.progress import (
+    BarColumn,
+    Progress,
+    SpinnerColumn,
+    TaskID,
+    TaskProgressColumn,
+    TextColumn,
+    TimeElapsedColumn,
+)
 
 from doppel.cli._common import sample_frame
 from doppel.quality.aggregate import QualityReport
@@ -147,6 +158,16 @@ def run(
         "--fail-on-verbatim-text",
         help="Fail (exit 2) if any TEXT column has any verbatim source values in the output.",
     ),
+    max_dcr_rows: int = typer.Option(
+        50_000,
+        "--max-dcr-rows",
+        min=1,
+        help=(
+            "Cap rows fed into the DCR nearest-neighbour search (per side). "
+            "Larger values are more accurate but slower; default 50,000 keeps a 100k+ frame "
+            "responsive."
+        ),
+    ),
 ) -> None:
     console.print(f"[dim]reading[/] {real}")
     real_df = source_file.read(real)
@@ -162,9 +183,17 @@ def run(
         f"[dim]computing report for[/] {len(columns)} columns "
         f"({real_df.height} real vs {synth_df.height} synth rows)"
     )
-    report = compute_quality(
-        real_df, synth_df, columns, real_label=real.name, synth_label=synth.name
-    )
+    with _dcr_progress(console, min(synth_df.height, max_dcr_rows)) as progress_cb:
+        report = compute_quality(
+            real_df,
+            synth_df,
+            columns,
+            real_label=real.name,
+            synth_label=synth.name,
+            max_dcr_rows=max_dcr_rows,
+            privacy_progress=progress_cb,
+            privacy_sample_seed=sample_seed,
+        )
 
     render_terminal(report, console, top_n=top_n)
 
@@ -197,6 +226,36 @@ def run(
         console.print("[green]thresholds: all passed[/]")
 
 
+@contextmanager
+def _dcr_progress(
+    console: Console, total_rows: int
+) -> Generator[Callable[[int, int], None] | None, None, None]:
+    """Live Rich progress bar for DCR computation when the workload is large enough."""
+    if total_rows < 5_000:
+        yield None
+        return
+    progress = Progress(
+        SpinnerColumn(),
+        TextColumn("[dim]dcr[/]"),
+        BarColumn(bar_width=None),
+        TaskProgressColumn(),
+        TextColumn("{task.completed}/{task.total} rows", style="dim"),
+        TimeElapsedColumn(),
+        console=console,
+        transient=False,
+    )
+    task_id: TaskID | None = None
+
+    def _cb(done: int, total: int) -> None:
+        nonlocal task_id
+        if task_id is None:
+            task_id = progress.add_task("dcr", total=total)
+        progress.update(task_id, completed=done)
+
+    with progress:
+        yield _cb
+
+
 def _threshold_payload(
     spec: ThresholdSpec, breaches: list[ThresholdBreach]
 ) -> dict[str, object] | None:
@@ -208,7 +267,5 @@ def _threshold_payload(
         "min_dcr_p5": spec.min_dcr_p5,
         "fail_on_verbatim_text": spec.fail_on_verbatim_text,
         "passed": not breaches,
-        "breaches": [
-            {"name": b.name, "actual": b.actual, "allowed": b.allowed} for b in breaches
-        ],
+        "breaches": [{"name": b.name, "actual": b.actual, "allowed": b.allowed} for b in breaches],
     }

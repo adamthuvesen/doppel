@@ -1,1 +1,1 @@
-"""Synthesizers — sequential CART (default), Gaussian copula, multi-table orchestration."""
+"""Synthesizers — sequential CART plus multi-table orchestration."""

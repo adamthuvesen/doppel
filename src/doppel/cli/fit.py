@@ -10,6 +10,7 @@ from rich.console import Console
 
 from doppel.artifact import load as load_artifact
 from doppel.artifact import save as save_artifact
+from doppel.cli._common import fit_progress, print_repair_summary, sample_frame
 from doppel.constraints.engine import synthesize_with_constraints
 from doppel.dataset import Dataset
 from doppel.schema import toml as schema_toml_mod
@@ -18,6 +19,8 @@ from doppel.sinks import file as sink_file
 from doppel.sources import file as source_file
 from doppel.synth.cart import CartSynthesizer
 from doppel.synth.seed import Rng
+from doppel.text_policy import TextPolicy
+from doppel.text_policy import apply as apply_text_policy
 
 if TYPE_CHECKING:
     from doppel.dataset import Table
@@ -46,16 +49,25 @@ def fit(
         readable=True,
         help="Optional schema.toml (embedded into the artifact for use at sample time).",
     ),
-    model: str = typer.Option("cart", "--model", help="Synthesizer: 'cart' or 'copula'."),
+    model: str = typer.Option(
+        "cart",
+        "--model",
+        help="Synthesizer model. Currently only 'cart' is supported.",
+    ),
     seed: int | None = typer.Option(None, "--seed", help="Deterministic RNG seed."),
+    fit_rows: int | None = typer.Option(
+        None,
+        "--fit-rows",
+        min=1,
+        help="Randomly sample this many source rows before fitting (useful for large files).",
+    ),
 ) -> None:
     if model != "cart":
-        raise NotImplementedError(
-            f"model={model!r} not available yet. Phase 7 adds 'copula'. Use 'cart'."
-        )
+        raise typer.BadParameter(f"model={model!r} is not supported by this build. Use 'cart'.")
 
     console.print(f"[dim]reading[/] {input_path}")
     df = source_file.read(input_path)
+    df = sample_frame(df, fit_rows, seed=seed, console=console, label="fit")
     console.print(f"[dim]inferring schema for[/] {df.height} rows x {df.width} columns")
     table = infer_table(input_path.stem, df)
 
@@ -78,7 +90,7 @@ def fit(
 
     console.print(f"[dim]fitting CART synthesizer on[/] {table.name!r}")
     synth = CartSynthesizer()
-    synth.fit(dataset, Rng.from_seed(seed))
+    synth.fit(dataset, Rng.from_seed(seed), progress=fit_progress(console))
 
     console.print(f"[dim]writing artifact[/] {output}")
     save_artifact(synth, output, training_row_count=df.height, schema_toml=schema_toml)
@@ -106,6 +118,11 @@ def sample(
         help="Number of synthetic rows to generate.",
     ),
     seed: int | None = typer.Option(None, "--seed", help="Deterministic RNG seed."),
+    text_policy: TextPolicy = typer.Option(
+        TextPolicy.SAMPLE,
+        "--text-policy",
+        help="How to handle free-text columns in output: sample, hash, fake, or drop.",
+    ),
 ) -> None:
     console.print(f"[dim]loading[/] {artifact}")
     synth, manifest, schema_toml = load_artifact(artifact)
@@ -124,8 +141,14 @@ def sample(
         out_ds, _ = synthesize_with_constraints(synth, schema_toml.constraints, rows, rng)
     else:
         out_ds = synth.sample(rows, rng)
+    print_repair_summary(console, synth.last_repair_summary)
     out_df = out_ds.only().data
     assert out_df is not None
+    out_df = apply_text_policy(
+        out_df, synth.original_columns, text_policy, Rng.from_seed(seed).spawn()
+    )
+    if text_policy is not TextPolicy.SAMPLE:
+        console.print(f"[dim]text policy[/] {text_policy.value}")
 
     console.print(f"[dim]writing[/] {output}")
     sink_file.write(out_df, output)

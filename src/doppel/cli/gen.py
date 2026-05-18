@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING
 import typer
 from rich.console import Console
 
+from doppel.cli._common import fit_progress, print_repair_summary, sample_frame
 from doppel.constraints.engine import ConstraintReport, synthesize_with_constraints
 from doppel.dataset import Dataset, Table
 from doppel.schema import multi as multi_schema
@@ -19,6 +20,8 @@ from doppel.sources import file as source_file
 from doppel.synth.cart import CartSynthesizer
 from doppel.synth.hierarchy import HierarchicalSynthesizer
 from doppel.synth.seed import Rng
+from doppel.text_policy import TextPolicy
+from doppel.text_policy import apply as apply_text_policy
 
 if TYPE_CHECKING:
     from doppel.pii.detect import PIIDetection
@@ -56,18 +59,27 @@ def run(
     model: str = typer.Option(
         "cart",
         "--model",
-        help="Synthesizer: 'cart' (default) or 'copula'.",
+        help="Synthesizer model. Currently only 'cart' is supported.",
     ),
     seed: int | None = typer.Option(
         None,
         "--seed",
         help="Deterministic RNG seed.",
     ),
+    fit_rows: int | None = typer.Option(
+        None,
+        "--fit-rows",
+        min=1,
+        help="Randomly sample this many source rows before fitting (useful for large files).",
+    ),
+    text_policy: TextPolicy = typer.Option(
+        TextPolicy.SAMPLE,
+        "--text-policy",
+        help="How to handle free-text columns in output: sample, hash, fake, or drop.",
+    ),
 ) -> None:
     if model != "cart":
-        raise NotImplementedError(
-            f"model={model!r} not available yet. Phase 7 adds 'copula'. Use 'cart'."
-        )
+        raise typer.BadParameter(f"model={model!r} is not supported by this build. Use 'cart'.")
 
     is_multi = schema is not None and _is_multi_table_file(schema)
 
@@ -78,14 +90,16 @@ def run(
                 "input_path is implicit for multi-table schemas — drop the positional arg "
                 "and let `tables[*].file` declare the source files"
             )
-        _run_multi(schema, output, rows, seed)
+        if fit_rows is not None:
+            raise typer.BadParameter("--fit-rows is currently only supported for single-table gen")
+        _run_multi(schema, output, rows, seed, text_policy)
         return
 
     if input_path is None:
         raise typer.BadParameter(
             "input_path is required for single-table synthesis (or pass a multi-table --schema)"
         )
-    _run_single(input_path, output, rows, schema, seed)
+    _run_single(input_path, output, rows, schema, seed, fit_rows, text_policy)
 
 
 def _run_single(
@@ -94,9 +108,12 @@ def _run_single(
     rows: int,
     schema: Path | None,
     seed: int | None,
+    fit_rows: int | None,
+    text_policy: TextPolicy,
 ) -> None:
     console.print(f"[dim]reading[/] {input_path}")
     df = source_file.read(input_path)
+    df = sample_frame(df, fit_rows, seed=seed, console=console, label="fit")
     console.print(f"[dim]inferring schema for[/] {df.height} rows x {df.width} columns")
     table = infer_table(input_path.stem, df)
 
@@ -111,7 +128,7 @@ def _run_single(
     dataset = Dataset.single(table_for_fit)
     console.print(f"[dim]fitting CART synthesizer on[/] {table.name!r}")
     synth = CartSynthesizer()
-    synth.fit(dataset, Rng.from_seed(seed))
+    synth.fit(dataset, Rng.from_seed(seed), progress=fit_progress(console))
 
     console.print(f"[dim]sampling[/] {rows} rows")
     sample_rng = Rng.from_seed(seed)
@@ -125,6 +142,7 @@ def _run_single(
         _print_constraint_summary(creport)
     else:
         synth_ds = synth.sample(rows, sample_rng)
+    print_repair_summary(console, synth.last_repair_summary)
 
     out_df = synth_ds.only().data
     assert out_df is not None
@@ -137,6 +155,10 @@ def _run_single(
         out_df = restore_pii(
             out_df, pii_detected, original_columns, Rng.from_seed(seed), row_count=rows
         )
+
+    out_df = apply_text_policy(out_df, table.columns, text_policy, Rng.from_seed(seed).spawn())
+    if text_policy is not TextPolicy.SAMPLE:
+        console.print(f"[dim]text policy[/] {text_policy.value}")
 
     console.print(f"[dim]writing[/] {output}")
     sink_file.write(out_df, output)
@@ -171,7 +193,13 @@ def _strip_pii_if_available(
     return detections, stripped, original_order
 
 
-def _run_multi(schema_path: Path, output_dir: Path, rows: int, seed: int | None) -> None:
+def _run_multi(
+    schema_path: Path,
+    output_dir: Path,
+    rows: int,
+    seed: int | None,
+    text_policy: TextPolicy,
+) -> None:
     console.print(f"[dim]loading multi-table schema[/] {schema_path}")
     schema = multi_schema.load(schema_path)
     dataset = multi_schema.to_dataset(schema, schema_path.parent)
@@ -185,7 +213,7 @@ def _run_multi(schema_path: Path, output_dir: Path, rows: int, seed: int | None)
     roots = [name for name in dataset.tables if name not in parents]
     rows_per_root = dict.fromkeys(roots, rows)
     console.print(f"[dim]sampling roots[/]: {rows_per_root}")
-    out_dataset, report = synth.sample(rows_per_root, Rng.from_seed(seed))
+    out_dataset, _report = synth.sample(rows_per_root, Rng.from_seed(seed))
 
     output_dir.mkdir(parents=True, exist_ok=True)
     for name, table in out_dataset.tables.items():
@@ -193,8 +221,11 @@ def _run_multi(schema_path: Path, output_dir: Path, rows: int, seed: int | None)
         suffix = Path(spec.file).suffix if spec and spec.file else ".csv"
         dest = output_dir / f"{name}{suffix}"
         assert table.data is not None
-        sink_file.write(table.data, dest)
-        console.print(f"[green]ok[/] {name}: {report.rows_per_table[name]} rows -> {dest}")
+        out_df = apply_text_policy(
+            table.data, table.columns, text_policy, Rng.from_seed(seed).spawn()
+        )
+        sink_file.write(out_df, dest)
+        console.print(f"[green]ok[/] {name}: {out_df.height} rows -> {dest}")
 
 
 def _is_multi_table_file(path: Path) -> bool:

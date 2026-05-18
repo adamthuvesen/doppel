@@ -297,7 +297,11 @@ def _run_multi(
 ) -> None:
     console.print(f"[dim]loading multi-table schema[/] {schema_path}")
     schema = multi_schema.load(schema_path)
-    dataset = multi_schema.to_dataset(schema, schema_path.parent)
+    try:
+        dataset = multi_schema.to_dataset(schema, schema_path.parent)
+    except NotImplementedError as exc:
+        # Re-raise as a clean BadParameter so the user sees the message without a traceback.
+        raise typer.BadParameter(str(exc)) from exc
     console.print(f"[dim]read[/] {len(dataset.tables)} tables, {len(dataset.edges)} FK edges")
 
     console.print("[dim]fitting hierarchical synthesizer[/]")

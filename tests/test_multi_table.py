@@ -274,6 +274,53 @@ parent_column = "user_id"
         multi_schema.to_dataset(schema, tmp_path)
 
 
+def test_gen_multi_table_inherit_parent_features_clean_cli_error(tmp_path: Path) -> None:
+    """At the CLI layer, the NotImplementedError should surface as a clean BadParameter
+    (exit 2, no traceback) instead of a raw NotImplementedError dump."""
+    users, orders = _make_relational_fixture()
+    (tmp_path / "users.csv").write_text(users.write_csv())
+    (tmp_path / "orders.csv").write_text(orders.write_csv())
+    schema_path = tmp_path / "schema.toml"
+    schema_path.write_text(
+        """
+[tables.users]
+file = "users.csv"
+primary_key = "user_id"
+
+[tables.orders]
+file = "orders.csv"
+primary_key = "order_id"
+inherit_parent_features = true
+
+[[foreign_keys]]
+child_table = "orders"
+child_column = "user_id"
+parent_table = "users"
+parent_column = "user_id"
+"""
+    )
+    out_dir = tmp_path / "out"
+    result = runner.invoke(
+        app,
+        [
+            "gen",
+            "--schema",
+            str(schema_path),
+            "--rows",
+            "10",
+            "--output",
+            str(out_dir),
+            "--seed",
+            "1",
+        ],
+    )
+    assert result.exit_code == 2  # typer BadParameter convention
+    combined = result.stdout + (result.stderr or "")
+    assert "inherit_parent_features" in combined
+    assert "v0.2 roadmap" in combined
+    assert "Traceback" not in combined  # clean error, no stack dump
+
+
 def test_gen_multi_table_rows_per_table_rejects_unknown(tmp_path: Path) -> None:
     users, orders = _make_relational_fixture()
     (tmp_path / "users.csv").write_text(users.write_csv())

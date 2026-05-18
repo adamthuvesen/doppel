@@ -6,9 +6,18 @@ Point doppel at a tabular dataset (CSV, TSV, Parquet, JSON/NDJSON, Arrow/IPC) an
 generates a new dataset that matches the statistical fingerprint of the original:
 distributions, correlations, null patterns, cardinality, and relational structure.
 doppel is deterministic with `--seed` and reports quality/privacy heuristics, but it is
-not a formal privacy system: detected PII can be regenerated when the optional `[pii]`
-extra is installed, while undetected free-text values may be copied from the source.
-Use `doppel diff` before sharing synthetic output.
+not a formal privacy system. The privacy posture is tiered:
+
+- No differential privacy in v0.1 (no `--epsilon`).
+- Detected PII (emails, phones, names, etc.) is regenerated via Faker when the optional
+  `[pii]` extra is installed, so detected columns do not carry source values into output.
+- Undetected free-text values are sampled with replacement and **may copy verbatim from
+  the source**. Mitigate with `--text-policy hash|fake|drop` for any column that could
+  identify the underlying record.
+- Always run `doppel diff` before sharing synthetic output — the report includes a
+  distance-to-closest-record (DCR) percentile and a per-column verbatim-text fraction.
+
+See [SECURITY.md](SECURITY.md) for the full threat model.
 
 Useful for testing data pipelines, creating demo fixtures, and augmenting small datasets.
 
@@ -42,6 +51,20 @@ Helpful knobs for real datasets:
 - `doppel diff --sample-rows N --top-n 20` keeps large quality checks fast and readable.
 - doppel applies conservative soft repairs for exact missingness flags and count bounds
   learned from the source data, then prints a short repair summary.
+
+## Limitations (v0.1)
+
+- Numeric integer columns now preserve source dtype, but other numeric
+  subtypes may collapse — Float32 round-trips as Float64.
+- Datetime modelling uses epoch-seconds only. Hour-of-day, day-of-week, and
+  business-hours patterns are not preserved.
+- Multi-table synthesis preserves FK referential integrity and per-table
+  marginals, not cross-table correlations (e.g. "gold users place bigger
+  orders" — opt-in `inherit_parent_features` flag on the roadmap).
+- Free-text columns without detected PII are sampled with replacement and
+  may copy verbatim from the source. Run `doppel diff` and use
+  `--text-policy hash|fake|drop` for any identifying column.
+- No differential privacy (`--epsilon` is v0.2 roadmap).
 
 ## Development
 

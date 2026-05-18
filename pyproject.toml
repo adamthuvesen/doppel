@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "doppeldata"
-version = "0.0.0"
+version = "0.1.0"
 description = "Synthetic data that looks real — a statistical double of your dataset."
 readme = "README.md"
 license = "MIT"
@@ -44,12 +44,10 @@ dependencies = [
 
 [project.optional-dependencies]
 quality = ["scipy>=1.13", "matplotlib>=3.9"]
-copula = ["copulas>=0.11"]
 pii = ["presidio-analyzer>=2.2", "faker>=26"]
 all = [
     "scipy>=1.13",
     "matplotlib>=3.9",
-    "copulas>=0.11",
     "presidio-analyzer>=2.2",
     "faker>=26",
 ]

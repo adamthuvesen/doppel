@@ -1,5 +1,9 @@
 # doppel
 
+[![Python](https://img.shields.io/badge/python-3.11%20%7C%203.12%20%7C%203.13-blue)](https://www.python.org/)
+[![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
+[![PyPI](https://img.shields.io/badge/pypi-doppeldata-orange)](https://pypi.org/project/doppeldata/)
+
 Synthetic data generator for tabular datasets.
 
 Point doppel at a tabular dataset (CSV, TSV, Parquet, JSON/NDJSON, Arrow/IPC) and it
@@ -26,6 +30,30 @@ PII inline) when working with detected-PII columns. Storing + regenerating
 detected PII from a saved artifact is on the v0.2 roadmap.
 
 Useful for testing data pipelines, creating demo fixtures, and augmenting small datasets.
+
+## Quickstart
+
+```bash
+# Install
+uv tool install doppeldata
+
+# Generate 1,000 synthetic rows from a real CSV with a quality check
+doppel gen examples/saas_accounts.csv -n 1000 -o synth.csv --seed 1
+# → progress bar during fit
+# → ok wrote 1,000 rows x 15 cols -> synth.csv
+# → quality | marginal=0.03 | corr=0.11 | dcr_p5=0.05 | text_leaks=1
+# → tip: column 'company_domain' is 100% verbatim from source;
+#        rerun with --text-policy hash to mitigate
+
+# Quality gate for CI (exit 2 on any breach)
+doppel diff real.parquet synth.parquet \
+  --max-marginal 0.10 \
+  --min-dcr-p5 0.05 \
+  --fail-on-verbatim-text
+
+# Environment + version check
+doppel doctor
+```
 
 ## Install
 
@@ -57,6 +85,15 @@ Helpful knobs for real datasets:
 - `doppel diff --sample-rows N --top-n 20` keeps large quality checks fast and readable.
 - doppel applies conservative soft repairs for exact missingness flags and count bounds
   learned from the source data, then prints a short repair summary.
+
+## Recipes
+
+- [examples/pytest_fixture/](examples/pytest_fixture/) — use a fitted
+  `.doppel` artifact as a deterministic, session-scoped pytest fixture.
+- [examples/dbt_seed/](examples/dbt_seed/) — generate dbt seeds from a
+  real export and gate them with `doppel diff`.
+- [examples/github-action/](examples/github-action/) — full PR-gate
+  GitHub Actions workflow.
 
 ## CI gate
 

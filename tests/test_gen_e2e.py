@@ -244,6 +244,31 @@ def test_gen_json_summary_includes_quality_and_timing(mixed_csv: Path, tmp_path:
     assert "dcr_p5" in payload["quality"]
 
 
+def test_gen_explain_prints_modelling_choices(mixed_csv: Path, tmp_path: Path) -> None:
+    """`--explain` prints a per-column modelling table to stderr."""
+    out = tmp_path / "synth.csv"
+    result = runner.invoke(
+        app,
+        [
+            "gen",
+            str(mixed_csv),
+            "--rows",
+            "100",
+            "--output",
+            str(out),
+            "--seed",
+            "1",
+            "--explain",
+        ],
+    )
+    assert result.exit_code == 0, result.stdout
+    # The explain table is rendered to stderr but CliRunner merges them by default.
+    combined = result.stdout + (result.stderr or "")
+    assert "explain" in combined
+    assert "ColumnType" in combined or "column" in combined
+    assert "strategy" in combined
+
+
 def test_gen_text_policy_drop_removes_text_columns(tmp_path: Path) -> None:
     src = tmp_path / "domains.csv"
     pl.DataFrame(

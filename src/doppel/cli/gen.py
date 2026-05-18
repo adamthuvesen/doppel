@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING
 
 import typer
 from rich.console import Console
+from rich.table import Table as _Table
 
 from doppel.cli._common import (
     compute_quality_summary,
@@ -107,6 +108,14 @@ def run(
             "Example: --rows-per-table users=1000,orders=5000"
         ),
     ),
+    explain: bool = typer.Option(
+        False,
+        "--explain",
+        help=(
+            "Print per-column modelling choices (ColumnType, fit strategy, soft repairs) to "
+            "stderr after fit. Useful for debugging schema inference and synth quality."
+        ),
+    ),
 ) -> None:
     if model != "cart":
         raise typer.BadParameter(f"model={model!r} is not supported by this build. Use 'cart'.")
@@ -130,7 +139,16 @@ def run(
             "input_path is required for single-table synthesis (or pass a multi-table --schema)"
         )
     _run_single(
-        input_path, output, rows, schema, seed, fit_rows, text_policy, no_quality, json_summary
+        input_path,
+        output,
+        rows,
+        schema,
+        seed,
+        fit_rows,
+        text_policy,
+        no_quality,
+        json_summary,
+        explain,
     )
 
 
@@ -144,6 +162,7 @@ def _run_single(
     text_policy: TextPolicy,
     no_quality: bool,
     json_summary: Path | None,
+    explain: bool,
 ) -> None:
     console.print(f"[dim]reading[/] {input_path}")
     df = source_file.read(input_path)
@@ -167,6 +186,9 @@ def _run_single(
     with fit_progress(console) as cb:
         synth.fit(dataset, Rng.from_seed(seed), progress=cb)
     fit_seconds = time.perf_counter() - fit_started
+
+    if explain:
+        _print_explain(synth, table)
 
     console.print(f"[dim]sampling[/] {rows} rows")
     sample_started = time.perf_counter()
@@ -366,6 +388,47 @@ def _parse_rows_per_table(raw: str | None, root_names: set[str]) -> dict[str, in
 def _is_multi_table_file(path: Path) -> bool:
     raw = tomllib.loads(path.read_text(encoding="utf-8"))
     return multi_schema.is_multi_table(raw)
+
+
+def _print_explain(synth: CartSynthesizer, table: Table) -> None:
+    """Emit a per-column modelling-choices report to stderr.
+
+    Goes to stderr so it doesn't pollute pipes consuming the synth output.
+    """
+    import sys
+
+    err = Console(file=sys.stderr)
+    err.print("[bold]explain[/] per-column modelling choices")
+    table_view = _Table(title=None, show_header=True, header_style="bold")
+    table_view.add_column("column", no_wrap=True)
+    table_view.add_column("ColumnType")
+    table_view.add_column("strategy")
+    table_view.add_column("notes")
+
+    info_by_name = {info.column.name: info for info in synth.explain_columns()}
+    for col in table.columns:
+        info = info_by_name.get(col.name)
+        if info is None:
+            # KEY columns are not modeled — handled by _generate_key
+            table_view.add_row(col.name, str(col.type.value), "key-generator", "")
+            continue
+        notes_bits: list[str] = []
+        if info.empirical_null_rate > 0:
+            notes_bits.append(f"null_rate={info.empirical_null_rate:.2f}")
+        if info.nonnull_pool_size:
+            notes_bits.append(f"pool={info.nonnull_pool_size}")
+        if info.leaf_count:
+            notes_bits.append(f"leaves={info.leaf_count}")
+        table_view.add_row(col.name, str(col.type.value), info.strategy, ", ".join(notes_bits))
+
+    err.print(table_view)
+
+    repairs = synth.last_repair_summary
+    if repairs.total > 0:
+        rule_count = len(repairs.missing_flags) + len(repairs.count_bounds)
+        err.print(
+            f"[dim]soft repairs available:[/] {repairs.total} values across {rule_count} rules"
+        )
 
 
 def _print_constraint_summary(report: ConstraintReport) -> None:

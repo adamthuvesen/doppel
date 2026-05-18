@@ -60,3 +60,7 @@ doppel's privacy posture is **heuristic**, not formal:
 sklearn estimators, leaf-sampling, UUID-typed key columns, and Faker-generated PII
 replacements. If you find a code path where the same seed produces different output
 across runs in the same process, that's a bug — please report it.
+
+The full contract — what `--seed` controls, what implementation patterns break it,
+and why `gen` re-seeds three times — is documented in
+[docs/determinism.md](docs/determinism.md).

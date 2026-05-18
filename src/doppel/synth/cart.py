@@ -40,6 +40,28 @@ FitProgress = Callable[[int, int, str], None]
 
 
 @dataclass(frozen=True)
+class ColumnFitInfo:
+    """Public, read-only summary of how one column was modeled. Used by --explain."""
+
+    column: Column
+    is_first: bool
+    has_value_model: bool
+    has_null_model: bool
+    has_constant: bool
+    empirical_null_rate: float
+    nonnull_pool_size: int
+    leaf_count: int
+
+    @property
+    def strategy(self) -> str:
+        if self.has_constant:
+            return "constant"
+        if self.has_value_model:
+            return "cart+leaf-sample" if self.has_null_model else "cart-no-nulls"
+        return "empirical-resample"
+
+
+@dataclass(frozen=True)
 class RepairSummary:
     missing_flags: dict[str, int] = field(default_factory=dict)
     count_bounds: dict[str, int] = field(default_factory=dict)
@@ -368,6 +390,28 @@ class CartSynthesizer:
     @property
     def last_repair_summary(self) -> RepairSummary:
         return self._last_repair_summary
+
+    def explain_columns(self) -> list[ColumnFitInfo]:
+        """Read-only summary of how each modeled column was fitted.
+
+        Used by `doppel gen --explain` to surface per-column modeling choices
+        without exposing internal synth state.
+        """
+        out: list[ColumnFitInfo] = []
+        for cs in self._column_synths:
+            out.append(
+                ColumnFitInfo(
+                    column=cs.column,
+                    is_first=cs.is_first,
+                    has_value_model=cs.value_model is not None,
+                    has_null_model=cs.null_model is not None,
+                    has_constant=cs.has_constant,
+                    empirical_null_rate=cs.empirical_null_rate,
+                    nonnull_pool_size=len(cs.nonnull_pool),
+                    leaf_count=len(cs.leaf_values),
+                )
+            )
+        return out
 
     def fit(self, dataset: Dataset, rng: Rng, progress: FitProgress | None = None) -> None:
         table = dataset.only()

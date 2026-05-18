@@ -267,6 +267,21 @@ def _generate_key(
     *,
     source_dtype: pl.DataType | None = None,
 ) -> pl.Series:
+    """Generate `n` synthetic key values, preserving the source dtype.
+
+    Strategy by source dtype:
+
+    - UUID-named columns (`uuid` or `*_uuid`): deterministic RFC-4122 v4
+      hex strings, drawn from the seeded `Rng` so two runs with the same
+      seed produce byte-identical output. Never uses `uuid.uuid4()`.
+    - `pl.String`: emits `f"{column_name}_{i}"` for `i` in `1..=n`. The
+      format is intentionally simple and predictable; users who need a
+      different shape should provide a `[[constraints]] kind = "derived"`
+      block or model the column as a regular non-KEY column.
+    - Integer / Float dtypes: sequential `1..=n` cast back to the source
+      dtype so downstream consumers see the same numeric type.
+    - Anything else: sequential `Int64` `1..=n`.
+    """
     name = col.name
     if _looks_like_uuid_key_name(name):
         return pl.Series(name, [_random_uuid_hex(rng) for _ in range(n)], dtype=pl.String)

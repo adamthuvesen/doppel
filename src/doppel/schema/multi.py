@@ -44,6 +44,12 @@ class TableSpec(BaseModel):
     file: str | None = None
     primary_key: str | None = None
     columns: dict[str, ColumnSpec] = Field(default_factory=dict)
+    inherit_parent_features: bool = False
+    """Opt-in (v0.2 roadmap): when fitting this child table, join parent rows on the FK
+    and use parent features to condition the child column distributions. Preserves
+    cross-table correlations like 'gold users place bigger orders'. Currently parsed but
+    not yet wired into HierarchicalSynthesizer — setting it raises a clear error so users
+    aren't silently misled about which behaviour they got."""
 
 
 class ForeignKeySpec(BaseModel):
@@ -81,6 +87,8 @@ def save(schema: MultiSchemaToml, path: Path) -> None:
             entry["columns"] = {
                 cname: _drop_none(cspec.model_dump()) for cname, cspec in spec.columns.items()
             }
+        if spec.inherit_parent_features:
+            entry["inherit_parent_features"] = True
         payload["tables"][name] = entry
     if schema.foreign_keys:
         payload["foreign_keys"] = [_drop_none(fk.model_dump()) for fk in schema.foreign_keys]
@@ -89,6 +97,12 @@ def save(schema: MultiSchemaToml, path: Path) -> None:
 
 def to_dataset(schema: MultiSchemaToml, base_dir: Path) -> Dataset:
     """Materialise a Dataset: read each table's file, infer schema, apply overrides, wire FKs."""
+    unsupported = [name for name, spec in schema.tables.items() if spec.inherit_parent_features]
+    if unsupported:
+        raise NotImplementedError(
+            f"tables {unsupported} declare `inherit_parent_features = true`, but cross-table "
+            "conditional sampling is not yet implemented (v0.2 roadmap). Remove the flag for now."
+        )
     tables: dict[str, Table] = {}
     for name, spec in schema.tables.items():
         if spec.file is None:

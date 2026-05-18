@@ -95,6 +95,14 @@ def run(
         "--json-summary",
         help="Write a machine-readable JSON summary (row count, timing, quality) to this path.",
     ),
+    rows_per_table: str | None = typer.Option(
+        None,
+        "--rows-per-table",
+        help=(
+            "Multi-table only: comma-separated `name=N` pairs overriding `-n` per root table. "
+            "Example: --rows-per-table users=1000,orders=5000"
+        ),
+    ),
 ) -> None:
     if model != "cart":
         raise typer.BadParameter(f"model={model!r} is not supported by this build. Use 'cart'.")
@@ -110,7 +118,7 @@ def run(
             )
         if fit_rows is not None:
             raise typer.BadParameter("--fit-rows is currently only supported for single-table gen")
-        _run_multi(schema, output, rows, seed, text_policy)
+        _run_multi(schema, output, rows, seed, text_policy, rows_per_table)
         return
 
     if input_path is None:
@@ -258,6 +266,7 @@ def _run_multi(
     rows: int,
     seed: int | None,
     text_policy: TextPolicy,
+    rows_per_table: str | None,
 ) -> None:
     console.print(f"[dim]loading multi-table schema[/] {schema_path}")
     schema = multi_schema.load(schema_path)
@@ -270,7 +279,8 @@ def _run_multi(
 
     parents = {e.child_table for e in dataset.edges}
     roots = [name for name in dataset.tables if name not in parents]
-    rows_per_root = dict.fromkeys(roots, rows)
+    overrides = _parse_rows_per_table(rows_per_table, set(roots))
+    rows_per_root = {name: overrides.get(name, rows) for name in roots}
     console.print(f"[dim]sampling roots[/]: {rows_per_root}")
     out_dataset, _report = synth.sample(rows_per_root, Rng.from_seed(seed))
 
@@ -285,6 +295,40 @@ def _run_multi(
         )
         sink_file.write(out_df, dest)
         console.print(f"[green]ok[/] {name}: {out_df.height} rows -> {dest}")
+
+
+def _parse_rows_per_table(raw: str | None, root_names: set[str]) -> dict[str, int]:
+    """Parse `--rows-per-table name=N,other=M` into a dict, validating against known roots."""
+    if raw is None:
+        return {}
+    out: dict[str, int] = {}
+    for pair in raw.split(","):
+        pair = pair.strip()
+        if not pair:
+            continue
+        if "=" not in pair:
+            raise typer.BadParameter(
+                f"--rows-per-table item {pair!r} must be in `name=N` form"
+            )
+        name, _, count_str = pair.partition("=")
+        name = name.strip()
+        if name not in root_names:
+            raise typer.BadParameter(
+                f"--rows-per-table references unknown root table {name!r}; "
+                f"known roots: {sorted(root_names)}"
+            )
+        try:
+            count = int(count_str.strip())
+        except ValueError as exc:
+            raise typer.BadParameter(
+                f"--rows-per-table count for {name!r} must be an integer, got {count_str!r}"
+            ) from exc
+        if count < 1:
+            raise typer.BadParameter(
+                f"--rows-per-table count for {name!r} must be >= 1, got {count}"
+            )
+        out[name] = count
+    return out
 
 
 def _is_multi_table_file(path: Path) -> bool:

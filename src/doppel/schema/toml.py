@@ -28,7 +28,6 @@ auto-inferred types.
 from __future__ import annotations
 
 import tomllib
-from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
@@ -203,7 +202,6 @@ __all__ = [
     "SchemaToml",
     "TableMeta",
     "apply_overrides",
-    "asdict",
     "from_table",
     "load",
     "save",

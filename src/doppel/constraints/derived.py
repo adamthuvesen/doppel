@@ -42,7 +42,7 @@ def apply(
     """Overwrite each `column` with its computed expression."""
     if not constraints:
         return df
-    columns = allowed_columns if allowed_columns is not None else set(df.columns)
+    columns = set(allowed_columns) if allowed_columns is not None else set(df.columns)
     out = df
     for c in constraints:
         expr = compile_expression(c.expression, columns)

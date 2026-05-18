@@ -11,7 +11,7 @@ ARTIFACT_VERSION = "doppel-artifact-v1"
 
 class Manifest(BaseModel):
     version: str = ARTIFACT_VERSION
-    synthesizer_class: str  # "cart"; "copula" will land in Phase 7
+    synthesizer_class: str  # "cart"
     doppel_version: str
     table_name: str
     training_row_count: int

@@ -1,1 +1,1 @@
-"""Readers — DuckDB-backed adapters from CSV/Parquet/JSON/Arrow/SQL to a uniform table handle."""
+"""Readers — adapters from CSV/TSV/Parquet/JSON/NDJSON/Arrow into Polars DataFrames."""

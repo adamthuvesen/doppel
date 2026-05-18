@@ -27,7 +27,6 @@ table-scoped section; v1 multi-table ships with FKs only.
 from __future__ import annotations
 
 import tomllib
-from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
@@ -223,7 +222,6 @@ __all__ = [
     "ForeignKeySpec",
     "MultiSchemaToml",
     "TableSpec",
-    "asdict",
     "from_dataset",
     "is_multi_table",
     "load",

@@ -1,1 +1,1 @@
-"""Writers — symmetric counterpart of `sources`, emitting CSV/Parquet/JSON/Arrow/SQL."""
+"""Writers — symmetric counterpart of `sources`, emitting CSV/TSV/Parquet/JSON/Arrow."""

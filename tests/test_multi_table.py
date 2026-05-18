@@ -196,3 +196,122 @@ parent_column = "user_id"
     # FK integrity end-to-end
     parent_pks = set(out_users["user_id"].to_list())
     assert set(out_orders["user_id"].to_list()).issubset(parent_pks)
+
+
+def test_gen_multi_table_rows_per_table_override(tmp_path: Path) -> None:
+    users, orders = _make_relational_fixture()
+    (tmp_path / "users.csv").write_text(users.write_csv())
+    (tmp_path / "orders.csv").write_text(orders.write_csv())
+    schema_path = tmp_path / "schema.toml"
+    schema_path.write_text(
+        """
+[tables.users]
+file = "users.csv"
+primary_key = "user_id"
+
+[tables.orders]
+file = "orders.csv"
+primary_key = "order_id"
+
+[[foreign_keys]]
+child_table = "orders"
+child_column = "user_id"
+parent_table = "users"
+parent_column = "user_id"
+"""
+    )
+    out_dir = tmp_path / "out"
+    result = runner.invoke(
+        app,
+        [
+            "gen",
+            "--schema",
+            str(schema_path),
+            "--rows",
+            "10",  # default for any root not in --rows-per-table
+            "--output",
+            str(out_dir),
+            "--seed",
+            "7",
+            "--rows-per-table",
+            "users=25",
+        ],
+    )
+    assert result.exit_code == 0, result.stdout
+    out_users = pl.read_csv(out_dir / "users.csv")
+    assert out_users.height == 25, "rows-per-table users=25 should override default -n 10"
+
+
+def test_inherit_parent_features_raises_until_implemented(tmp_path: Path) -> None:
+    """The flag is parsed but the algorithmic work is v0.2 — should fail loudly, not silently."""
+    users, orders = _make_relational_fixture()
+    (tmp_path / "users.csv").write_text(users.write_csv())
+    (tmp_path / "orders.csv").write_text(orders.write_csv())
+    schema_path = tmp_path / "schema.toml"
+    schema_path.write_text(
+        """
+[tables.users]
+file = "users.csv"
+primary_key = "user_id"
+
+[tables.orders]
+file = "orders.csv"
+primary_key = "order_id"
+inherit_parent_features = true
+
+[[foreign_keys]]
+child_table = "orders"
+child_column = "user_id"
+parent_table = "users"
+parent_column = "user_id"
+"""
+    )
+    schema = multi_schema.load(schema_path)
+    assert schema.tables["orders"].inherit_parent_features is True
+    import pytest
+
+    with pytest.raises(NotImplementedError, match="inherit_parent_features"):
+        multi_schema.to_dataset(schema, tmp_path)
+
+
+def test_gen_multi_table_rows_per_table_rejects_unknown(tmp_path: Path) -> None:
+    users, orders = _make_relational_fixture()
+    (tmp_path / "users.csv").write_text(users.write_csv())
+    (tmp_path / "orders.csv").write_text(orders.write_csv())
+    schema_path = tmp_path / "schema.toml"
+    schema_path.write_text(
+        """
+[tables.users]
+file = "users.csv"
+primary_key = "user_id"
+
+[tables.orders]
+file = "orders.csv"
+primary_key = "order_id"
+
+[[foreign_keys]]
+child_table = "orders"
+child_column = "user_id"
+parent_table = "users"
+parent_column = "user_id"
+"""
+    )
+    out_dir = tmp_path / "out"
+    result = runner.invoke(
+        app,
+        [
+            "gen",
+            "--schema",
+            str(schema_path),
+            "--rows",
+            "10",
+            "--output",
+            str(out_dir),
+            "--seed",
+            "7",
+            "--rows-per-table",
+            "ghosts=50",  # unknown root
+        ],
+    )
+    assert result.exit_code != 0
+    assert "ghosts" in result.stdout or "ghosts" in (result.stderr or "")

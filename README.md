@@ -19,6 +19,12 @@ not a formal privacy system. The privacy posture is tiered:
 
 See [SECURITY.md](SECURITY.md) for the full threat model.
 
+**PII and `.doppel` artifacts**: `doppel fit` refuses any source data where
+Presidio detects PII. The artifact format does not yet carry detection
+metadata for round-trip regeneration, so use `doppel gen` (one-shot, regenerates
+PII inline) when working with detected-PII columns. Storing + regenerating
+detected PII from a saved artifact is on the v0.2 roadmap.
+
 Useful for testing data pipelines, creating demo fixtures, and augmenting small datasets.
 
 ## Install

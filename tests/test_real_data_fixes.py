@@ -192,6 +192,25 @@ def test_detect_ordered_pairs_finds_datetime_pair() -> None:
     assert ("pickup", "dropoff") in synth._ordered_pairs  # type: ignore[reportPrivateUsage]
 
 
+def test_detect_ordered_pairs_finds_reversed_datetime_pair() -> None:
+    from datetime import datetime, timedelta
+
+    from doppel.dataset import Dataset
+    from doppel.schema.infer import infer_table
+    from doppel.synth.cart import CartSynthesizer
+    from doppel.synth.seed import Rng
+
+    n = 100
+    base = datetime(2023, 1, 1)
+    pickup = [base + timedelta(minutes=i * 15) for i in range(n)]
+    dropoff = [p + timedelta(minutes=10) for p in pickup]
+    df = pl.DataFrame({"dropoff": dropoff, "pickup": pickup, "fare": [10.0] * n})
+    table = infer_table("trip", df)
+    synth = CartSynthesizer()
+    synth.fit(Dataset.single(table), Rng.from_seed(0))
+    assert ("pickup", "dropoff") in synth._ordered_pairs  # type: ignore[reportPrivateUsage]
+
+
 def test_ordered_pair_enforcement_eliminates_violations() -> None:
     from datetime import datetime, timedelta
 
@@ -213,3 +232,49 @@ def test_ordered_pair_enforcement_eliminates_violations() -> None:
     assert out.data is not None
     duration = (out.data["dropoff"] - out.data["pickup"]).dt.total_seconds()
     assert (duration >= 0).all(), f"Found {(duration < 0).sum()} negative durations"
+
+
+def test_numeric_rate_count_columns_are_not_auto_ordered() -> None:
+    from doppel.dataset import Dataset
+    from doppel.schema.infer import infer_table
+    from doppel.synth.cart import CartSynthesizer
+    from doppel.synth.seed import Rng
+
+    # Real ML feature tables often have fractional rate/share features that are
+    # always <= absolute count features. That is not a business invariant, and
+    # enforcing it can copy fractional rates into integer-like count columns.
+    df = pl.DataFrame(
+        {
+            "active_users_rate_l90d": [0.0, 0.2, 0.5, 0.9] * 25,
+            "num_users": [1, 2, 4, 8] * 25,
+            "target": [0, 1] * 50,
+        }
+    )
+    table = infer_table("org_features", df)
+    synth = CartSynthesizer()
+    synth.fit(Dataset.single(table), Rng.from_seed(0))
+    assert synth._ordered_pairs == []  # type: ignore[reportPrivateUsage]
+
+    out = synth.sample(200, Rng.from_seed(1)).only().data
+    assert out is not None
+    assert ((out["num_users"] % 1) == 0).all()
+
+
+@pytest.mark.parametrize("suffix", [".json", ".ndjson"])
+def test_json_reader_parses_datetime_strings_written_by_sink(tmp_path: Path, suffix: str) -> None:
+    from datetime import datetime
+
+    from doppel.sinks.file import write
+    from doppel.sources.file import read
+
+    path = tmp_path / f"events{suffix}"
+    df = pl.DataFrame(
+        {
+            "created_at": [datetime(2024, 1, 1, 12, 0), datetime(2024, 1, 2, 13, 30)],
+            "value": [1, 2],
+        }
+    )
+    write(df, path)
+    out = read(path)
+    assert out["created_at"].dtype.is_temporal()
+    assert out["created_at"].to_list() == df["created_at"].to_list()

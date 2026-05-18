@@ -66,6 +66,49 @@ def test_sample_is_deterministic_across_runs(mixed_csv: Path, tmp_path: Path) ->
     assert out_a.read_text() == out_b.read_text()
 
 
+def test_fit_supports_fit_rows(mixed_csv: Path, tmp_path: Path) -> None:
+    artifact = tmp_path / "model.doppel"
+    result = runner.invoke(
+        app,
+        ["fit", str(mixed_csv), "--output", str(artifact), "--seed", "3", "--fit-rows", "50"],
+    )
+    assert result.exit_code == 0, result.stdout
+    assert "sampling fit rows" in result.stdout
+    assert artifact.exists()
+
+
+def test_sample_text_policy_fake_for_artifact(tmp_path: Path) -> None:
+    src = tmp_path / "domains.csv"
+    pl.DataFrame(
+        {
+            "ultimate_domain": [f"customer-{i}.example.com" for i in range(80)],
+            "score": list(range(80)),
+        }
+    ).write_csv(src)
+    artifact = tmp_path / "model.doppel"
+    out = tmp_path / "synth.csv"
+    fit = runner.invoke(app, ["fit", str(src), "--output", str(artifact), "--seed", "5"])
+    assert fit.exit_code == 0, fit.stdout
+    sample_result = runner.invoke(
+        app,
+        [
+            "sample",
+            str(artifact),
+            "--rows",
+            "30",
+            "--output",
+            str(out),
+            "--seed",
+            "5",
+            "--text-policy",
+            "fake",
+        ],
+    )
+    assert sample_result.exit_code == 0, sample_result.stdout
+    synth = pl.read_csv(out)
+    assert all(str(v).endswith(".example") for v in synth["ultimate_domain"].drop_nulls())
+
+
 def test_gen_and_fit_then_sample_produce_same_output(mixed_csv: Path, tmp_path: Path) -> None:
     """`doppel gen` should equal `doppel fit && doppel sample` for the same seed pipeline."""
     gen_out = tmp_path / "gen.csv"

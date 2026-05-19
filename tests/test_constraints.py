@@ -59,6 +59,38 @@ def test_derived_rejects_function_calls() -> None:
         derived_mod.apply(df, [DerivedConstraint(column="x", expression="abs(a)")])
 
 
+# Hostile-input coverage — every node type the AST evaluator must reject.
+# CLAUDE.md names Call / Attribute / eval / import explicitly; this parametrized
+# set is the broader allowlist tripwire so any future loosening trips immediately.
+@pytest.mark.parametrize(
+    "expression",
+    [
+        pytest.param("__import__('os')", id="dunder-import-call"),
+        pytest.param("a.real", id="attribute-access"),
+        pytest.param("a[0]", id="subscript"),
+        pytest.param("lambda: 1", id="lambda"),
+        pytest.param("a < 1", id="compare"),
+        pytest.param("a and 1", id="boolop-and"),
+        pytest.param("1 if a else 2", id="if-expression"),
+        pytest.param("'literal'", id="string-constant"),
+        pytest.param("True", id="bool-constant"),
+        pytest.param("None", id="none-constant"),
+        pytest.param("a % 2", id="modulo"),
+        pytest.param("a // 2", id="floor-div"),
+        pytest.param("a << 1", id="lshift"),
+        pytest.param("[a]", id="list-literal"),
+        pytest.param("(a,)", id="tuple-literal"),
+        pytest.param("{a}", id="set-literal"),
+        pytest.param("{a: 1}", id="dict-literal"),
+        pytest.param("a if a else a", id="ternary"),
+    ],
+)
+def test_derived_rejects_hostile_nodes(expression: str) -> None:
+    df = pl.DataFrame({"a": [1, 2]})
+    with pytest.raises(ValueError):
+        derived_mod.apply(df, [DerivedConstraint(column="x", expression=expression)])
+
+
 def test_derived_apply_does_not_mutate_allowed_columns() -> None:
     df = pl.DataFrame({"a": [1, 2]})
     allowed = {"a"}

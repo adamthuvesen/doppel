@@ -81,7 +81,7 @@ def synthesize_with_constraints(
     kept = pl.DataFrame()
     factor = initial_factor
     attempted = 0
-    last_counts: list[ConstraintViolation] = []
+    violation_totals: dict[str, tuple[int, int]] = {}
 
     while kept.height < n and factor <= max_factor + 1e-9:
         deficit = n - kept.height
@@ -93,7 +93,7 @@ def synthesize_with_constraints(
         mask, counts = reject_mod.combined_violation_mask(
             batch, parts.ranges, parts.inequalities, compiled_wheres
         )
-        last_counts = counts
+        _add_violation_counts(violation_totals, counts)
         kept = pl.concat([kept, batch.filter(~mask)], how="vertical")
         attempted += batch_size
         if on_iteration is not None:
@@ -116,7 +116,7 @@ def synthesize_with_constraints(
     )
     return Dataset.single(table), ConstraintReport(
         derived_applied=derived_labels,
-        violations=last_counts,
+        violations=_violation_counts_from_totals(violation_totals),
         rows_attempted=attempted,
         rows_kept=final.height,
         oversample_factor=attempted / max(n, 1),
@@ -149,4 +149,26 @@ def _compile_wheres(
             predicate=expr_mod.compile_expression(w.expression, allowed_columns, mode="boolean"),
         )
         for w in wheres
+    ]
+
+
+def _add_violation_counts(
+    totals: dict[str, tuple[int, int]], counts: list[ConstraintViolation]
+) -> None:
+    for count in counts:
+        prev_violations, prev_rows = totals.get(count.constraint_label, (0, 0))
+        totals[count.constraint_label] = (
+            prev_violations + count.n_violations,
+            prev_rows + count.n_rows,
+        )
+
+
+def _violation_counts_from_totals(totals: dict[str, tuple[int, int]]) -> list[ConstraintViolation]:
+    return [
+        ConstraintViolation(
+            constraint_label=label,
+            n_violations=n_violations,
+            n_rows=n_rows,
+        )
+        for label, (n_violations, n_rows) in totals.items()
     ]

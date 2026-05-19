@@ -27,7 +27,7 @@ from doppel.cli._common import (
 from doppel.constraints import expr as expr_mod
 from doppel.constraints.dsl import Constraint, WhereConstraint
 from doppel.constraints.engine import ConstraintReport, synthesize_with_constraints
-from doppel.dataset import Dataset, Table
+from doppel.dataset import Dataset, ForeignKey, Table
 from doppel.schema import multi as multi_schema
 from doppel.schema import toml as schema_toml_mod
 from doppel.schema.infer import infer_table
@@ -628,7 +628,9 @@ def _print_constraint_summary(report: ConstraintReport) -> None:
     )
     for v in report.violations:
         if v.rate > 0:
-            console.print(f"  - {v.constraint_label}: {v.rate * 100:.1f}% violations in last batch")
+            console.print(
+                f"  - {v.constraint_label}: {v.rate * 100:.1f}% violations across attempts"
+            )
 
 
 def _precheck_where(expression: str, source_df: pl.DataFrame, source_label: str) -> None:
@@ -740,23 +742,28 @@ def _filter_multi_table_where(
 ) -> Dataset:
     """Apply the where predicate to one table of an already-sampled multi-table output.
 
-    Strategy: filter the named table's rows in place; if the result is short, oversample
-    by re-running the hierarchical sample with bigger row counts until satisfied or the
-    oversample budget is exhausted.
+    Strategy: filter the named table's rows in place. Root-table predicates preserve the
+    requested root row count via oversampling; child-table predicates simply narrow that
+    child table, because `--rows` is defined per root table in the hierarchical flow.
     """
     table = out_dataset.tables[where_table]
     assert table.data is not None
-    target = rows_per_root.get(where_table, table.data.height)
     column_set = {c.name for c in table.columns}
     try:
         predicate = expr_mod.compile_expression(where, column_set, mode="boolean")
     except ValueError as exc:
         raise typer.BadParameter(f"--where invalid: {exc}") from exc
 
+    root_target = rows_per_root.get(where_table)
     kept_df = _apply_predicate_mask(table.data, predicate)
-    if kept_df.height >= target:
-        kept_df = kept_df.head(target)
-    else:
+    if root_target is None:
+        return _replace_table_and_prune(out_dataset, table, kept_df)
+
+    if kept_df.height >= root_target:
+        return _replace_table_and_prune(out_dataset, table, kept_df.head(root_target))
+
+    target = root_target
+    if kept_df.height < target:
         # Re-sample the dataset with a larger root row count for the target table only.
         factor = 1.5
         while kept_df.height < target and factor <= max_oversample + 1e-9:
@@ -766,22 +773,59 @@ def _filter_multi_table_where(
             extra_table = extra_ds.tables[where_table]
             assert extra_table.data is not None
             kept_df = _apply_predicate_mask(extra_table.data, predicate)
+            out_dataset = extra_ds
+            table = extra_table
             factor *= 1.5
         if kept_df.height < target:
             raise ValueError(
                 f"could not synthesize {target} rows for table {where_table!r} satisfying "
                 f"--where after oversample factor {factor:.1f}x. Constraint may be too rare."
             )
-        kept_df = kept_df.head(target)
+    return _replace_table_and_prune(out_dataset, table, kept_df.head(target))
 
-    tables = dict(out_dataset.tables)
-    tables[where_table] = Table(
+
+def _replace_table_and_prune(dataset: Dataset, table: Table, data: pl.DataFrame) -> Dataset:
+    tables = dict(dataset.tables)
+    tables[table.name] = Table(
         name=table.name,
         columns=list(table.columns),
         primary_key=table.primary_key,
-        data=kept_df,
+        data=data,
     )
-    return Dataset(tables=tables, edges=list(out_dataset.edges))
+    return _prune_descendants_for_fk_integrity(Dataset(tables=tables, edges=list(dataset.edges)))
+
+
+def _prune_descendants_for_fk_integrity(dataset: Dataset) -> Dataset:
+    """Drop child rows whose parent row was removed by a multi-table `--where` filter."""
+    tables = dict(dataset.tables)
+    children_by_parent: dict[str, list[ForeignKey]] = {}
+    for edge in dataset.edges:
+        children_by_parent.setdefault(edge.parent_table, []).append(edge)
+
+    for parent_name in dataset.topological_order():
+        parent_table = tables[parent_name]
+        parent_df = parent_table.data
+        if parent_df is None:
+            continue
+        for edge in children_by_parent.get(parent_name, []):
+            child_table = tables[edge.child_table]
+            child_df = child_table.data
+            if child_df is None:
+                continue
+            parent_values = parent_df[edge.parent_column].drop_nulls().unique()
+            filtered = child_df.filter(
+                pl.col(edge.child_column).is_null()
+                | pl.col(edge.child_column).is_in(parent_values.implode())
+            )
+            if filtered.height == child_df.height:
+                continue
+            tables[edge.child_table] = Table(
+                name=child_table.name,
+                columns=list(child_table.columns),
+                primary_key=child_table.primary_key,
+                data=filtered,
+            )
+    return Dataset(tables=tables, edges=list(dataset.edges))
 
 
 def _apply_predicate_mask(df: pl.DataFrame, predicate: pl.Expr) -> pl.DataFrame:

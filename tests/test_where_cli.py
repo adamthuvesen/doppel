@@ -585,7 +585,71 @@ def test_gen_where_multi_table_single_scope(tmp_path: Path) -> None:
     assert result.exit_code == 0, result.stdout
     # Filter applies to users; orders unconditional. FK integrity check below.
     users_out = pl.read_csv(out_dir / "users.csv")
+    orders_out = pl.read_csv(out_dir / "orders.csv")
     assert (users_out["plan"] == "enterprise").all()
+    orphans = orders_out.filter(~pl.col("user_id").is_in(users_out["user_id"].implode()))
+    assert orphans.is_empty()
+
+
+def test_gen_where_multi_table_parent_filter_prunes_children(tmp_path: Path) -> None:
+    schema = _write_multi_table_fixture(tmp_path)
+    out_dir = tmp_path / "out"
+    result = runner.invoke(
+        app,
+        [
+            "gen",
+            "--schema",
+            str(schema),
+            "--rows",
+            "30",
+            "--where",
+            "plan == 'enterprise'",
+            "--seed",
+            "1",
+            "--output",
+            str(out_dir),
+            "--max-oversample",
+            "16.0",
+        ],
+    )
+
+    assert result.exit_code == 0, result.stdout
+    users_out = pl.read_csv(out_dir / "users.csv")
+    orders_out = pl.read_csv(out_dir / "orders.csv")
+    assert users_out.height == 30
+    assert (users_out["plan"] == "enterprise").all()
+    orphans = orders_out.filter(~pl.col("user_id").is_in(users_out["user_id"].implode()))
+    assert orphans.is_empty()
+
+
+def test_gen_where_multi_table_child_filter_preserves_fk_integrity(tmp_path: Path) -> None:
+    schema = _write_multi_table_fixture(tmp_path)
+    out_dir = tmp_path / "out"
+    result = runner.invoke(
+        app,
+        [
+            "gen",
+            "--schema",
+            str(schema),
+            "--rows",
+            "30",
+            "--where",
+            "amount > 100",
+            "--seed",
+            "1",
+            "--output",
+            str(out_dir),
+            "--max-oversample",
+            "16.0",
+        ],
+    )
+
+    assert result.exit_code == 0, result.stdout
+    users_out = pl.read_csv(out_dir / "users.csv")
+    orders_out = pl.read_csv(out_dir / "orders.csv")
+    assert (orders_out["amount"] > 100).all()
+    orphans = orders_out.filter(~pl.col("user_id").is_in(users_out["user_id"].implode()))
+    assert orphans.is_empty()
 
 
 def test_gen_where_multi_table_emits_child_warning(tmp_path: Path) -> None:

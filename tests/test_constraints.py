@@ -157,6 +157,28 @@ def test_synthesize_with_constraints_returns_clean_rows(mixed_df: pl.DataFrame) 
     assert report.rows_attempted >= 50
 
 
+def test_synthesize_with_constraints_reports_all_attempted_rows(mixed_df: pl.DataFrame) -> None:
+    table = infer_table("mixed", mixed_df)
+    synth = CartSynthesizer()
+    synth.fit(Dataset.single(table), Rng.from_seed(42))
+
+    out, report = synthesize_with_constraints(
+        synth,
+        [RangeConstraint(column="height_cm", max=170.0)],
+        50,
+        Rng.from_seed(7),
+        initial_factor=1.0,
+        max_factor=4.0,
+    )
+
+    out_df = out.only().data
+    assert out_df is not None
+    assert out_df.height == 50
+    assert report.rows_attempted > 50
+    assert report.violations
+    assert report.violations[0].n_rows == report.rows_attempted
+
+
 def test_synthesize_raises_when_constraints_unsatisfiable(mixed_df: pl.DataFrame) -> None:
     table = infer_table("mixed", mixed_df)
     synth = CartSynthesizer()

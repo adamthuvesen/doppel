@@ -50,9 +50,7 @@ def build_pushdown_sql(
     if scheme in {"postgres", "postgresql"}:
         # Compute probability from row-count estimate; clamp to (0, 100].
         if row_count_estimate and row_count_estimate > 0:
-            probability = min(
-                100.0, 100.0 * fit_rows * _POSTGRES_OVERSAMPLE / row_count_estimate
-            )
+            probability = min(100.0, 100.0 * fit_rows * _POSTGRES_OVERSAMPLE / row_count_estimate)
         else:
             probability = 100.0
         seed_clause = f" REPEATABLE({seed})" if seed is not None else ""
@@ -128,9 +126,7 @@ def read(
         if row_count_estimate is not None:
             _enforce_row_count_threshold(spec, row_count_estimate, fit_rows)
 
-    sql, fallback = build_pushdown_sql(
-        spec.scheme, base_query, fit_rows, seed, row_count_estimate
-    )
+    sql, fallback = build_pushdown_sql(spec.scheme, base_query, fit_rows, seed, row_count_estimate)
     if fallback and seed is not None:
         warnings.warn(
             f"using ANSI sample fallback for scheme {spec.scheme!r}; determinism "
@@ -157,9 +153,7 @@ def _base_query(spec: DatabaseUri) -> str:
     raise ValueError("DatabaseUri must have either `table` or `query` set")
 
 
-def _enforce_row_count_threshold(
-    spec: DatabaseUri, estimate: int, fit_rows: int | None
-) -> None:
+def _enforce_row_count_threshold(spec: DatabaseUri, estimate: int, fit_rows: int | None) -> None:
     """If the table is huge and the user didn't ask to sample, refuse to read.
 
     The 1M threshold is a safety net: streaming a billion-row Snowflake table
@@ -199,9 +193,7 @@ def _probe_row_count(spec: DatabaseUri, *, timeout: int) -> int | None:
         # Re-raise — the user-facing error is more useful than a silent skip.
         raise
     except Exception as exc:  # pragma: no cover - defensive
-        raise RowCountProbeError(
-            f"row-count probe failed for {spec.uri}: {exc}"
-        ) from exc
+        raise RowCountProbeError(f"row-count probe failed for {spec.uri}: {exc}") from exc
     if df.height == 0 or df.width == 0:
         return None
     raw = df.row(0)[0]
@@ -257,7 +249,9 @@ def _read_via_connectorx(spec: DatabaseUri, sql: str, *, timeout: int) -> pl.Dat
     try:
         # Importing connectorx eagerly gives us a deterministic error message
         # before Polars' own optional-import path runs.
-        import connectorx  # noqa: F401
+        import importlib
+
+        importlib.import_module("connectorx")
     except ImportError as exc:
         import typer
 
@@ -280,9 +274,7 @@ def _read_via_connectorx(spec: DatabaseUri, sql: str, *, timeout: int) -> pl.Dat
             )
             return cast("pl.DataFrame", df)
         except Exception as exc:
-            raise WarehouseConnectionError(
-                f"failed to read from {spec.uri}: {exc}"
-            ) from exc
+            raise WarehouseConnectionError(f"failed to read from {spec.uri}: {exc}") from exc
 
     return _run_with_timeout(_do_read, timeout=timeout, spec=spec)
 
@@ -307,7 +299,7 @@ def _run_with_timeout(
     def _runner() -> None:
         try:
             result.append(fn())
-        except BaseException as exc:  # noqa: BLE001 - we propagate
+        except BaseException as exc:
             error.append(exc)
 
     thread = threading.Thread(target=_runner, daemon=True)

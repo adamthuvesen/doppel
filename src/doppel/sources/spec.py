@@ -137,9 +137,7 @@ def _resolve_password_cmd(password_cmd: str, *, timeout: int) -> str:
         ) from exc
     if result.returncode != 0:
         stderr = (result.stderr or "").strip() or "<no stderr output>"
-        raise typer.BadParameter(
-            f"--password-cmd exited {result.returncode}: {stderr}"
-        )
+        raise typer.BadParameter(f"--password-cmd exited {result.returncode}: {stderr}")
     password = (result.stdout or "").rstrip("\n")
     if not password:
         raise typer.BadParameter("--password-cmd produced no output on stdout")
@@ -253,13 +251,10 @@ def _parse_database_uri(
 ) -> DatabaseUri:
     if scheme not in _SUPPORTED_SCHEMES:
         raise typer.BadParameter(
-            f"unsupported URI scheme {scheme!r}. Supported: "
-            f"{sorted(_SUPPORTED_SCHEMES)}"
+            f"unsupported URI scheme {scheme!r}. Supported: {sorted(_SUPPORTED_SCHEMES)}"
         )
     if table is None and query is None:
-        raise typer.BadParameter(
-            "URI sources require exactly one of --table or --query"
-        )
+        raise typer.BadParameter("URI sources require exactly one of --table or --query")
     if table is not None and query is not None:
         raise typer.BadParameter("--table and --query are mutually exclusive")
 
@@ -272,8 +267,7 @@ def _parse_database_uri(
         password = _resolve_password_cmd(password_cmd, timeout=password_cmd_timeout)
         if parsed.username is None and scheme in _AUTH_REQUIRED_SCHEMES:
             raise typer.BadParameter(
-                "--password-cmd requires the URI to contain a username "
-                "(scheme://user@host/...)"
+                "--password-cmd requires the URI to contain a username (scheme://user@host/...)"
             )
         if uri_has_password:
             _warn(

@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import polars as pl
 
-from doppel.sources.spec import DuckDbSink, FilePath, SinkSpec
+from doppel.sources.spec import FilePath, SinkSpec
 
 
 def write(df: pl.DataFrame, spec: SinkSpec) -> None:
@@ -19,12 +19,10 @@ def write(df: pl.DataFrame, spec: SinkSpec) -> None:
 
         _file.write(df, spec.path)
         return
-    if isinstance(spec, DuckDbSink):
-        from doppel.sinks import sql as _sql
+    # Only remaining variant is DuckDbSink (tagged union exhaustiveness).
+    from doppel.sinks import sql as _sql
 
-        _sql.write_duckdb(df, spec)
-        return
-    raise TypeError(f"unknown SinkSpec variant: {type(spec).__name__}")
+    _sql.write_duckdb(df, spec)
 
 
 __all__ = ["write"]

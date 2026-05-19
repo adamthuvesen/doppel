@@ -18,6 +18,8 @@ from doppel.cli._common import (
     fit_progress,
     print_quality_summary,
     print_repair_summary,
+    resolve_sink,
+    resolve_source,
     sample_frame,
 )
 from doppel.constraints.engine import ConstraintReport, synthesize_with_constraints
@@ -25,8 +27,9 @@ from doppel.dataset import Dataset, Table
 from doppel.schema import multi as multi_schema
 from doppel.schema import toml as schema_toml_mod
 from doppel.schema.infer import infer_table
-from doppel.sinks import file as sink_file
-from doppel.sources import file as source_file
+from doppel.sinks import write as sink_write
+from doppel.sources import read as source_read
+from doppel.sources.spec import DatabaseUri, FilePath, SinkSpec
 from doppel.synth.cart import CartSynthesizer
 from doppel.synth.hierarchy import HierarchicalSynthesizer
 from doppel.synth.seed import Rng
@@ -40,17 +43,22 @@ console = Console()
 
 
 def run(
-    input_path: Path | None = typer.Argument(
+    input_path: str | None = typer.Argument(
         None,
-        exists=True,
-        readable=True,
-        help="Source dataset (CSV, Parquet, JSON, Arrow). Omit when using a multi-table schema.",
+        help=(
+            "Source dataset — file path (CSV / Parquet / JSON / Arrow) or database URI "
+            "(duckdb:///path.db, snowflake://..., postgres://...). "
+            "Omit when using a multi-table schema."
+        ),
     ),
-    output: Path = typer.Option(
+    output: str = typer.Option(
         ...,
         "--output",
         "-o",
-        help="Destination path (file for single-table, directory for multi-table).",
+        help=(
+            "Destination — file path (single-table), directory (multi-table), or DuckDB URI "
+            "(duckdb:///path.db?table=NAME)."
+        ),
     ),
     rows: int = typer.Option(
         ...,
@@ -83,8 +91,36 @@ def run(
         help=(
             "Randomly sample this many source rows before fitting (useful for large files). "
             "Defaults to min(rows*5, 100k) when source > 100k rows. "
-            "Pass 0 to disable the auto-cap and fit on the full source."
+            "Pass 0 to disable the auto-cap and fit on the full source. "
+            "For SQL sources, pushes the sample into the warehouse via vendor-native syntax."
         ),
+    ),
+    sql_table: str | None = typer.Option(
+        None,
+        "--table",
+        help="SQL sources only: table to read from. Mutually exclusive with --query.",
+    ),
+    sql_query: str | None = typer.Option(
+        None,
+        "--query",
+        help=(
+            "SQL sources only: read the result of this query. Mutually exclusive with --table. "
+            "Treated as developer-trust input — no injection sanitization."
+        ),
+    ),
+    password_cmd: str | None = typer.Option(
+        None,
+        "--password-cmd",
+        help=(
+            'Shell command whose stdout is the SQL password (e.g. "op read op://vault/db/pw"). '
+            "Overrides URI-embedded password with a warning."
+        ),
+    ),
+    connection_timeout: int = typer.Option(
+        300,
+        "--connection-timeout",
+        min=1,
+        help="SQL sources only: connection/query timeout in seconds.",
     ),
     text_policy: TextPolicy = typer.Option(
         TextPolicy.SAMPLE,
@@ -132,16 +168,39 @@ def run(
             )
         if fit_rows is not None:
             raise typer.BadParameter("--fit-rows is currently only supported for single-table gen")
-        _run_multi(schema, output, rows, seed, text_policy, rows_per_table)
+        if sql_table is not None or sql_query is not None:
+            raise typer.BadParameter(
+                "--table / --query apply only to single-table URI sources; multi-table "
+                "SQL is configured per-table in schema.toml"
+            )
+        output_path = Path(output)
+        _run_multi(
+            schema,
+            output_path,
+            rows,
+            seed,
+            text_policy,
+            rows_per_table,
+            password_cmd=password_cmd,
+            connection_timeout=connection_timeout,
+        )
         return
 
     if input_path is None:
         raise typer.BadParameter(
             "input_path is required for single-table synthesis (or pass a multi-table --schema)"
         )
-    _run_single(
+    source_spec = resolve_source(
         input_path,
-        output,
+        table=sql_table,
+        query=sql_query,
+        password_cmd=password_cmd,
+        connection_timeout=connection_timeout,
+    )
+    sink_spec = resolve_sink(output)
+    _run_single(
+        source_spec,
+        sink_spec,
         rows,
         schema,
         seed,
@@ -150,12 +209,13 @@ def run(
         no_quality,
         json_summary,
         explain,
+        connection_timeout=connection_timeout,
     )
 
 
 def _run_single(
-    input_path: Path,
-    output: Path,
+    source_spec: FilePath | DatabaseUri,
+    sink_spec: SinkSpec,
     rows: int,
     schema: Path | None,
     seed: int | None,
@@ -164,13 +224,29 @@ def _run_single(
     no_quality: bool,
     json_summary: Path | None,
     explain: bool,
+    *,
+    connection_timeout: int = 300,
 ) -> None:
-    console.print(f"[dim]reading[/] {input_path}")
-    real_df = source_file.read(input_path)
-    effective_fit_rows = _auto_fit_rows(fit_rows, real_df.height, rows)
+    source_label = _source_label(source_spec)
+    console.print(f"[dim]reading[/] {source_label}")
+    # SQL sources push the sample into the warehouse; file sources still
+    # client-sample (matches historical behaviour and the spec).
+    sql_fit_rows = fit_rows if isinstance(source_spec, DatabaseUri) else None
+    real_df = source_read(
+        source_spec,
+        fit_rows=sql_fit_rows,
+        seed=seed,
+        timeout=connection_timeout,
+    )
+    if isinstance(source_spec, DatabaseUri):
+        # The pushdown already capped rows at the warehouse — don't re-sample.
+        effective_fit_rows: int | None = None
+    else:
+        effective_fit_rows = _auto_fit_rows(fit_rows, real_df.height, rows)
     fit_df = sample_frame(real_df, effective_fit_rows, seed=seed, console=console, label="fit")
     console.print(f"[dim]inferring schema for[/] {fit_df.height} rows x {fit_df.width} columns")
-    table = infer_table(input_path.stem, fit_df)
+    table_name = _table_name_for_spec(source_spec)
+    table = infer_table(table_name, fit_df)
 
     schema_toml = None
     if schema is not None:
@@ -227,9 +303,10 @@ def _run_single(
     if text_policy is not TextPolicy.SAMPLE:
         console.print(f"[dim]text policy[/] {text_policy.value}")
 
-    console.print(f"[dim]writing[/] {output}")
-    sink_file.write(out_df, output)
-    console.print(f"[green]ok[/] wrote {out_df.height} rows x {out_df.width} cols -> {output}")
+    sink_label = _sink_label(sink_spec)
+    console.print(f"[dim]writing[/] {sink_label}")
+    sink_write(out_df, sink_spec)
+    console.print(f"[green]ok[/] wrote {out_df.height} rows x {out_df.width} cols -> {sink_label}")
 
     quality_dict: dict[str, object] | None = None
     if not no_quality:
@@ -250,8 +327,8 @@ def _run_single(
 
     if json_summary is not None:
         payload = {
-            "input_path": str(input_path),
-            "output_path": str(output),
+            "input_path": source_label,
+            "output_path": sink_label,
             "rows_requested": rows,
             "rows_written": out_df.height,
             "cols_written": out_df.width,
@@ -299,11 +376,19 @@ def _run_multi(
     seed: int | None,
     text_policy: TextPolicy,
     rows_per_table: str | None,
+    *,
+    password_cmd: str | None = None,
+    connection_timeout: int = 300,
 ) -> None:
     console.print(f"[dim]loading multi-table schema[/] {schema_path}")
     schema = multi_schema.load(schema_path)
     try:
-        dataset = multi_schema.to_dataset(schema, schema_path.parent)
+        dataset = multi_schema.to_dataset(
+            schema,
+            schema_path.parent,
+            password_cmd=password_cmd,
+            connection_timeout=connection_timeout,
+        )
     except NotImplementedError as exc:
         # Re-raise as a clean BadParameter so the user sees the message without a traceback.
         raise typer.BadParameter(str(exc)) from exc
@@ -321,16 +406,44 @@ def _run_multi(
     out_dataset, _report = synth.sample(rows_per_root, Rng.from_seed(seed))
 
     output_dir.mkdir(parents=True, exist_ok=True)
-    for name, table in out_dataset.tables.items():
+    for name, out_table in out_dataset.tables.items():
         spec = schema.tables.get(name)
-        suffix = Path(spec.file).suffix if spec and spec.file and spec.file.strip() else ".csv"
+        # `.file` may be absent (SQL-only multi-table); default to .csv when unknown.
+        if spec is not None and spec.file and spec.file.strip():
+            suffix = Path(spec.file).suffix
+        else:
+            suffix = ".csv"
         dest = output_dir / f"{name}{suffix}"
-        assert table.data is not None
+        assert out_table.data is not None
         out_df = apply_text_policy(
-            table.data, table.columns, text_policy, Rng.from_seed(seed).spawn()
+            out_table.data, out_table.columns, text_policy, Rng.from_seed(seed).spawn()
         )
-        sink_file.write(out_df, dest)
+        sink_write(out_df, FilePath(path=dest))
         console.print(f"[green]ok[/] {name}: {out_df.height} rows -> {dest}")
+
+
+def _source_label(spec: FilePath | DatabaseUri) -> str:
+    """Human-readable identifier for the source — file path or redacted URI."""
+    if isinstance(spec, FilePath):
+        return str(spec.path)
+    return spec.uri
+
+
+def _sink_label(spec: SinkSpec) -> str:
+    """Human-readable identifier for the sink."""
+    if isinstance(spec, FilePath):
+        return str(spec.path)
+    # DuckDbSink
+    return f"duckdb:///{spec.path}?table={spec.table}"
+
+
+def _table_name_for_spec(spec: FilePath | DatabaseUri) -> str:
+    """Pick a sensible table-name for schema inference. For URIs we prefer
+    the user's --table or a synthetic name from --query; for files we use
+    the stem like before."""
+    if isinstance(spec, FilePath):
+        return spec.path.stem
+    return spec.table or "query"
 
 
 _AUTO_FIT_TRIGGER_ROWS = 100_000

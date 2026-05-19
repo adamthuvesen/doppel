@@ -26,9 +26,7 @@ def write_duckdb(df: pl.DataFrame, spec: DuckDbSink) -> None:
         # `con.register` exposes the polars frame as a virtual table; the
         # CREATE OR REPLACE materialises it persistently.
         con.register("_doppel_synth_df", df)
-        con.execute(
-            f"CREATE OR REPLACE TABLE {spec.table} AS SELECT * FROM _doppel_synth_df"
-        )
+        con.execute(f"CREATE OR REPLACE TABLE {spec.table} AS SELECT * FROM _doppel_synth_df")
         con.unregister("_doppel_synth_df")
     finally:
         con.close()

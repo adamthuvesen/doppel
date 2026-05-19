@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import polars as pl
 
-from doppel.sources.spec import DatabaseUri, FilePath, SourceSpec
+from doppel.sources.spec import FilePath, SourceSpec
 
 
 def read(
@@ -26,11 +26,10 @@ def read(
         from doppel.sources import file as _file
 
         return _file.read(spec.path)
-    if isinstance(spec, DatabaseUri):
-        from doppel.sources import sql as _sql
+    # Only remaining variant is DatabaseUri (tagged union exhaustiveness).
+    from doppel.sources import sql as _sql
 
-        return _sql.read(spec, fit_rows=fit_rows, seed=seed, timeout=timeout)
-    raise TypeError(f"unknown SourceSpec variant: {type(spec).__name__}")
+    return _sql.read(spec, fit_rows=fit_rows, seed=seed, timeout=timeout)
 
 
 __all__ = ["read"]

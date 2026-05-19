@@ -41,16 +41,35 @@ class _Exploit:
 
 def test_safe_pickle_refuses_os_system() -> None:
     payload = pickle.dumps(_Exploit())
-    # Python pickles `os.system` as `posix.system` on Unix and `nt.system` on Windows.
-    with pytest.raises(UnsafeArtifactError, match=r"\bsystem\b"):
+    with pytest.raises(UnsafeArtifactError, match="not in doppel artifact allowlist"):
         safe_loads(payload)
 
 
 def test_safe_pickle_refuses_builtins_eval() -> None:
     # Hand-craft a pickle that calls builtins.eval — pickle.dumps(eval) directly.
     payload = pickle.dumps(eval)
-    with pytest.raises(UnsafeArtifactError):
+    with pytest.raises(UnsafeArtifactError, match="not in doppel artifact allowlist"):
         safe_loads(payload)
+
+
+# Allowlist is the security boundary: any regression that whitelists a stdlib module
+# under which a pickle gadget exists would bypass it. Parametrize across representative
+# modules so a wider whitelist trips the suite immediately.
+@pytest.mark.parametrize(
+    "obj",
+    [
+        pytest.param(pickle.dumps(__import__("subprocess").Popen), id="subprocess.Popen"),
+        pytest.param(pickle.dumps(__import__("shutil").rmtree), id="shutil.rmtree"),
+        pytest.param(
+            pickle.dumps(__import__("importlib").import_module), id="importlib.import_module"
+        ),
+        pytest.param(pickle.dumps(__import__("builtins").exec), id="builtins.exec"),
+        pytest.param(pickle.dumps(__import__("builtins").open), id="builtins.open"),
+    ],
+)
+def test_safe_pickle_refuses_disallowed_stdlib_classes(obj: bytes) -> None:
+    with pytest.raises(UnsafeArtifactError, match="not in doppel artifact allowlist"):
+        safe_loads(obj)
 
 
 def test_artifact_load_rejects_malicious_pickle(tmp_path: Path) -> None:

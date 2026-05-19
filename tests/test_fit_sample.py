@@ -110,22 +110,27 @@ def test_sample_text_policy_fake_for_artifact(tmp_path: Path) -> None:
 
 
 def test_gen_and_fit_then_sample_produce_same_output(mixed_csv: Path, tmp_path: Path) -> None:
-    """`doppel gen` should equal `doppel fit && doppel sample` for the same seed pipeline."""
+    """`doppel gen` should equal `doppel fit && doppel sample` for the same seed pipeline.
+
+    Both paths derive their fit and sample RNGs from the same root seed via `Rng.from_seed(5)`
+    + `spawn()`, so byte-identical output is the invariant.
+    """
     gen_out = tmp_path / "gen.csv"
     fit_out = tmp_path / "model.doppel"
     sample_out = tmp_path / "sample.csv"
 
-    runner.invoke(
+    gen_result = runner.invoke(
         app,
         ["gen", str(mixed_csv), "--rows", "30", "--output", str(gen_out), "--seed", "5"],
     )
-    runner.invoke(app, ["fit", str(mixed_csv), "--output", str(fit_out), "--seed", "5"])
-    runner.invoke(
+    assert gen_result.exit_code == 0, gen_result.stdout
+    fit_result = runner.invoke(
+        app, ["fit", str(mixed_csv), "--output", str(fit_out), "--seed", "5"]
+    )
+    assert fit_result.exit_code == 0, fit_result.stdout
+    sample_result = runner.invoke(
         app,
         ["sample", str(fit_out), "--rows", "30", "--output", str(sample_out), "--seed", "5"],
     )
-    # `doppel gen` consumes one RNG across both fit and sample; the two-step path also reuses
-    # the same seed (3 -> fit, 5 -> sample). The fit-seed determines tree structure; both paths
-    # use seed 5 for fit, so the trees match. The sample-seed feeds the leaf-sample RNG and
-    # matches too. Therefore the outputs must be byte-identical.
+    assert sample_result.exit_code == 0, sample_result.stdout
     assert gen_out.read_text() == sample_out.read_text()

@@ -28,7 +28,14 @@ import polars as pl
 from sklearn.tree import DecisionTreeClassifier, DecisionTreeRegressor
 
 from doppel.dataset import Dataset, Table
-from doppel.schema.datetime import decompose, recompose
+from doppel.schema.datetime import (
+    CalendarFeature,
+    decompose,
+    recompose,
+)
+from doppel.schema.datetime import (
+    calendar_features as extract_calendar_features,
+)
 from doppel.schema.heuristics import (
     FLOAT_DTYPE_NAMES,
     INTEGER_DTYPE_NAMES,
@@ -42,6 +49,10 @@ from doppel.schema.types import Column, ColumnType
 from doppel.synth.seed import Rng
 
 _MIN_SAMPLES_LEAF = 5
+# Reserved prefix for calendar features inside the CART feature matrix. Double-underscore
+# mirrors `__doppel_null__` and is collision-proof against user column names — the fit-time
+# guard raises ValueError if any source column starts with this prefix.
+_CALENDAR_FEATURE_PREFIX = "__dt_"
 FitProgress = Callable[[int, int, str], None]
 
 
@@ -57,6 +68,10 @@ class ColumnFitInfo:
     empirical_null_rate: float
     nonnull_pool_size: int
     leaf_count: int
+    # Resolved calendar features for this column. `None` for non-DATETIME columns;
+    # tuple of feature names (e.g. ``("hour", "dow", "month")``) for DATETIME columns;
+    # empty tuple when the user explicitly disabled calendar features via the schema.
+    calendar_features: tuple[str, ...] | None = None
 
     @property
     def strategy(self) -> str:
@@ -370,6 +385,9 @@ class CartSynthesizer:
         self._key_dtypes: dict[str, pl.DataType] = {}
         self._primary_key: str | None = None
         self._datetime_dtypes: dict[str, pl.DataType] = {}
+        # Resolved calendar features per datetime column name. Set at fit time, replayed
+        # at sample time so source and synth feature matrices have the same shape.
+        self._calendar_features: dict[str, tuple[CalendarFeature, ...]] = {}
         self._column_synths: list[_ColumnSynth] = []
         self._missing_flags: list[_MissingFlag] = []
         self._count_bounds: list[_CountBound] = []
@@ -406,7 +424,12 @@ class CartSynthesizer:
         without exposing internal synth state.
         """
         out: list[ColumnFitInfo] = []
+        calendar_map = getattr(self, "_calendar_features", {})
         for cs in self._column_synths:
+            cal: tuple[str, ...] | None = None
+            if cs.column.type is ColumnType.DATETIME:
+                resolved = calendar_map.get(cs.column.name, ())
+                cal = tuple(f.value for f in resolved)
             out.append(
                 ColumnFitInfo(
                     column=cs.column,
@@ -417,6 +440,7 @@ class CartSynthesizer:
                     empirical_null_rate=cs.empirical_null_rate,
                     nonnull_pool_size=len(cs.nonnull_pool),
                     leaf_count=len(cs.leaf_values),
+                    calendar_features=cal,
                 )
             )
         return out
@@ -425,6 +449,15 @@ class CartSynthesizer:
         table = dataset.only()
         if table.data is None:
             raise ValueError(f"table {table.name!r} has no data attached")
+        # Guard against user column names that would collide with the calendar-feature
+        # prefix and silently corrupt the running feature matrix.
+        for col in table.columns:
+            if col.name.startswith(_CALENDAR_FEATURE_PREFIX):
+                raise ValueError(
+                    f"source column {col.name!r} starts with the reserved prefix "
+                    f"{_CALENDAR_FEATURE_PREFIX!r}, which doppel uses internally for "
+                    "calendar-feature columns. Rename the column upstream."
+                )
         self._table_name = table.name
         self._original_columns = list(table.columns)
         self._primary_key = table.primary_key
@@ -441,6 +474,23 @@ class CartSynthesizer:
         self._missing_flags = _detect_missing_flags(table.columns, table.data)
         self._count_bounds = _detect_count_bounds(table.columns, table.data)
 
+        # Resolve calendar features per datetime column from the source dtype, then
+        # extract them from the original (un-decomposed) series for use as predictors.
+        self._calendar_features = {}
+        source_calendar_series: dict[str, dict[str, pl.Series]] = {}
+        for col in self._modeled_columns:
+            if col.type is not ColumnType.DATETIME:
+                continue
+            source_dtype = self._datetime_dtypes.get(col.name)
+            if source_dtype is None:
+                continue
+            resolved = col.resolved_calendar_features(source_dtype)
+            self._calendar_features[col.name] = resolved
+            if resolved:
+                source_calendar_series[col.name] = extract_calendar_features(
+                    table.data[col.name], resolved
+                )
+
         features = pl.DataFrame()
         synths: list[_ColumnSynth] = []
         total = len(self._modeled_columns)
@@ -451,6 +501,9 @@ class CartSynthesizer:
             synths.append(cs)
             feat_values = cs.encoder.transform(target)
             features = features.with_columns(pl.Series(col.name, feat_values, dtype=pl.Float64))
+            cal = source_calendar_series.get(col.name)
+            if cal:
+                features = _append_calendar_features(features, col.name, cal)
             if progress is not None:
                 progress(idx, total, col.name)
         self._column_synths = synths
@@ -473,6 +526,23 @@ class CartSynthesizer:
             modeled_series[col.name] = series
             feat_values = cs.encoder.transform(series)
             features = features.with_columns(pl.Series(col.name, feat_values, dtype=pl.Float64))
+            # Extract calendar features from the synth datetime so downstream columns
+            # see the same kind of predictors they saw at fit time. The synth epoch is
+            # leaf-sampled from a real source epoch, so the calendar values match a
+            # real source row by construction (see design D5).
+            # `getattr` keeps pre-change pickled artifacts working: they have no
+            # `_calendar_features` attribute, which is equivalent to "disabled".
+            if col.type is ColumnType.DATETIME:
+                calendar_map = getattr(self, "_calendar_features", {})
+                resolved = calendar_map.get(col.name, ())
+                if resolved:
+                    target_dtype = self._datetime_dtypes.get(col.name)
+                    if target_dtype is not None:
+                        # `series` is still Int64 epoch_s at this point; recompose so
+                        # the Polars `dt.*` accessors apply to a real temporal series.
+                        recomposed = recompose(series, target_dtype)
+                        cal = extract_calendar_features(recomposed, resolved)
+                        features = _append_calendar_features(features, col.name, cal)
 
         # Enforce detected ordering constraints (e.g. pickup_time <= dropoff_time).
         # Datetimes are still Int64 epoch at this point, so comparison is numeric.
@@ -530,6 +600,28 @@ class CartSynthesizer:
                 self._datetime_dtypes[col.name] = series.dtype
                 out = out.with_columns(decompose(series).alias(col.name))
         return out
+
+
+def _append_calendar_features(
+    features: pl.DataFrame, source_col: str, cal: dict[str, pl.Series]
+) -> pl.DataFrame:
+    """Append `__dt_<source_col>_<feature>` columns to the running feature matrix.
+
+    Each calendar feature is cast to Float64 alongside every other feature column.
+    Nulls in the source datetime propagate to nulls in the calendar feature; those
+    rows then go through the same null-imputation path as any other feature (median
+    fill in `encode_feature` — but encode_feature is per-target-column; here we
+    fill_null with 0 inline to keep the matrix sklearn-ready). Calendar values are
+    bounded small integers, so 0 is a safe sentinel for the rare null case.
+    """
+    new_cols: list[pl.Series] = []
+    for feature_name, series in cal.items():
+        col_name = f"{_CALENDAR_FEATURE_PREFIX}{source_col}_{feature_name}"
+        filled = series.fill_null(0).cast(pl.Float64).rename(col_name)
+        new_cols.append(filled)
+    if not new_cols:
+        return features
+    return features.with_columns(new_cols)
 
 
 def _interleave(nonnull_values: list[object], null_mask: np.ndarray) -> list[object | None]:

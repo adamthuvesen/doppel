@@ -44,6 +44,7 @@ def to_html(report: QualityReport) -> str:
 <p class="summary">average score: {_fmt(report.avg_marginal)}</p>
 {_marginals_table(report)}
 {_verbatim_warning(report)}
+{_calendar_fidelity_section(report)}
 {_issues(report)}
 
 <h2>Correlation structure</h2>
@@ -133,6 +134,34 @@ def _verbatim_warning(report: QualityReport) -> str:
         " Synthetic values may be verbatim copies of the real data:"
         f"<ul>{items}</ul></div>"
     )
+
+
+def _calendar_fidelity_section(report: QualityReport) -> str:
+    """One per-feature KS table per datetime column, under a "Calendar fidelity" heading."""
+    if not report.calendar_fidelity:
+        return ""
+    blocks: list[str] = [
+        "<h2>Calendar fidelity</h2>",
+        "<p>Per-feature KS distance between real and synth temporal patterns "
+        "(hour-of-day, day-of-week, month-of-year). Lower is better.</p>",
+    ]
+    for column, scores in report.calendar_fidelity.items():
+        rows = "\n".join(
+            f"<tr><td>{escape(s.feature)}</td>"
+            f"<td class='num'>{_fmt(s.value)}</td>"
+            f"<td class='num'>{s.n_real}</td>"
+            f"<td class='num'>{s.n_synth}</td></tr>"
+            for s in scores
+        )
+        blocks.append(
+            f"<h3><code>{escape(column)}</code></h3>"
+            "<table>"
+            "<tr><th>feature</th><th class='num'>KS</th>"
+            "<th class='num'>n real</th><th class='num'>n synth</th></tr>"
+            f"{rows}"
+            "</table>"
+        )
+    return "\n".join(blocks)
 
 
 def _issues(report: QualityReport) -> str:

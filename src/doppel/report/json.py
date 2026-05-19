@@ -37,6 +37,10 @@ def to_json(
         "privacy": _without_non_finite(asdict(report.privacy)),
         "dtype_mismatches": [asdict(issue) for issue in report.dtype_mismatches],
         "invariant_issues": [asdict(issue) for issue in report.invariant_issues],
+        "calendar_fidelity": {
+            column: [_without_non_finite(asdict(s)) for s in scores]
+            for column, scores in report.calendar_fidelity.items()
+        },
     }
     if thresholds is not None:
         payload["thresholds"] = thresholds

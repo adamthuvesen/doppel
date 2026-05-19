@@ -32,7 +32,8 @@ from pathlib import Path
 from typing import Any
 
 import tomli_w
-from pydantic import BaseModel, Field
+import typer
+from pydantic import BaseModel, Field, field_validator
 
 from doppel.constraints.dsl import (
     Constraint,
@@ -40,6 +41,7 @@ from doppel.constraints.dsl import (
     RangeConstraint,
 )
 from doppel.dataset import Table
+from doppel.schema.datetime import CalendarFeature
 from doppel.schema.types import Column, ColumnType
 
 
@@ -48,11 +50,50 @@ class TableMeta(BaseModel):
     primary_key: str | None = None
 
 
+_CALENDAR_ALLOWLIST = tuple(f.value for f in CalendarFeature)
+
+
 class ColumnSpec(BaseModel):
     type: ColumnType
     nullable: bool = True
     ordered: bool = False
     categories: list[Any] | None = None
+    # `calendar_features` accepts three TOML forms:
+    #   - omitted/None      → use the dtype default at fit time.
+    #   - `false`           → disabled (empty tuple after validation).
+    #   - list[str]         → validated allowlist members.
+    # `true` is intentionally rejected — omission already means "default".
+    calendar_features: tuple[CalendarFeature, ...] | None = None
+
+    @field_validator("calendar_features", mode="before")
+    @classmethod
+    def _parse_calendar_features(cls, value: object) -> tuple[CalendarFeature, ...] | None:
+        if value is None:
+            return None
+        if value is True:
+            # Pydantic would otherwise coerce `True` to a 1-element tuple via iter.
+            raise ValueError(
+                "calendar_features = true is not supported; omit the key for the default"
+            )
+        if value is False:
+            return ()
+        if not isinstance(value, list | tuple):
+            raise ValueError(
+                "calendar_features must be `false`, a list of feature names, or omitted"
+            )
+        items: list[CalendarFeature] = []
+        for raw in value:
+            if not isinstance(raw, str):
+                raise ValueError(
+                    f"calendar_features entries must be strings, got {type(raw).__name__}"
+                )
+            try:
+                items.append(CalendarFeature(raw))
+            except ValueError as exc:
+                raise typer.BadParameter(
+                    f"unknown calendar feature {raw!r}; allowed: {', '.join(_CALENDAR_ALLOWLIST)}"
+                ) from exc
+        return tuple(items)
 
 
 class SchemaToml(BaseModel):
@@ -80,6 +121,8 @@ def from_table(table: Table) -> SchemaToml:
                 nullable=col.nullable,
                 ordered=col.ordered,
                 categories=list(col.categories) if col.categories is not None else None,
+                # `schema infer` leaves calendar_features unset — default-by-omission.
+                calendar_features=col.calendar_features,
             )
             for col in table.columns
         },
@@ -130,6 +173,7 @@ def merge_columns(
                 categories=(
                     tuple(spec.categories) if spec.categories is not None else col.categories
                 ),
+                calendar_features=spec.calendar_features,
             )
         if (
             declared_pk is not None
@@ -201,13 +245,29 @@ def _drop_none(d: dict[str, Any]) -> dict[str, Any]:
     return {k: v for k, v in d.items() if v is not None}
 
 
+def _column_payload(spec: ColumnSpec) -> dict[str, Any]:
+    """Render one column spec for tomli_w: drop Nones; emit calendar_features as
+    `false` (when disabled) or a list of strings (when customised)."""
+    raw = spec.model_dump()
+    cf = raw.pop("calendar_features", None)
+    out = _drop_none(raw)
+    if cf is None:
+        return out
+    if not cf:
+        out["calendar_features"] = False
+    else:
+        # StrEnum members serialise to plain strings via .value.
+        out["calendar_features"] = [
+            f.value if isinstance(f, CalendarFeature) else str(f) for f in cf
+        ]
+    return out
+
+
 def to_payload(schema: SchemaToml) -> dict[str, Any]:
     """Render a SchemaToml as the nested-dict shape used by tomli_w + artifact metadata."""
     payload: dict[str, Any] = {"table": _drop_none(schema.table.model_dump())}
     if schema.columns:
-        payload["columns"] = {
-            name: _drop_none(spec.model_dump()) for name, spec in schema.columns.items()
-        }
+        payload["columns"] = {name: _column_payload(spec) for name, spec in schema.columns.items()}
     if schema.constraints:
         payload["constraints"] = [_drop_none(c.model_dump()) for c in schema.constraints]
     return payload

@@ -15,7 +15,8 @@ import numpy as np
 import polars as pl
 from scipy.stats import ks_2samp
 
-from doppel.schema.datetime import decompose
+from doppel.schema.datetime import to_float_array
+from doppel.schema.nullable import null_rate
 from doppel.schema.types import Column, ColumnType
 
 
@@ -46,11 +47,6 @@ def compute(real: pl.DataFrame, synth: pl.DataFrame, columns: list[Column]) -> l
 
 
 def _score_column(col: Column, real: pl.Series, synth: pl.Series) -> MarginalScore:
-    n_r = real.len()
-    n_s = synth.len()
-    null_r = (real.null_count() / n_r) if n_r else 0.0
-    null_s = (synth.null_count() / n_s) if n_s else 0.0
-
     if col.type in (ColumnType.NUMERIC, ColumnType.DATETIME):
         value = _ks(col, real, synth)
         metric: Literal["ks", "tvd"] = "ks"
@@ -67,17 +63,19 @@ def _score_column(col: Column, real: pl.Series, synth: pl.Series) -> MarginalSco
         type=col.type,
         metric=metric,
         value=value,
-        n_real=n_r,
-        n_synth=n_s,
-        null_rate_real=null_r,
-        null_rate_synth=null_s,
+        n_real=real.len(),
+        n_synth=synth.len(),
+        null_rate_real=null_rate(real),
+        null_rate_synth=null_rate(synth),
         verbatim_rate=verbatim_rate,
     )
 
 
 def _ks(col: Column, real: pl.Series, synth: pl.Series) -> float:
-    real_arr = _to_numeric(col, real.drop_nulls())
-    synth_arr = _to_numeric(col, synth.drop_nulls())
+    # Polars distinguishes float NaN from null; drop_nulls keeps NaN, but scipy.stats
+    # doesn't handle NaN and would return NaN for the statistic. Filter both here.
+    real_arr = _finite(to_float_array(col, real.drop_nulls()))
+    synth_arr = _finite(to_float_array(col, synth.drop_nulls()))
     if real_arr.size == 0 or synth_arr.size == 0:
         return float("nan")
     # Use asymptotic method — exact is prohibitively slow for large samples and
@@ -87,10 +85,8 @@ def _ks(col: Column, real: pl.Series, synth: pl.Series) -> float:
     return float(statistic)
 
 
-def _to_numeric(col: Column, series: pl.Series) -> np.ndarray:
-    if col.type is ColumnType.DATETIME:
-        return decompose(series).cast(pl.Float64).to_numpy().astype(np.float64)
-    return series.cast(pl.Float64).to_numpy().astype(np.float64)
+def _finite(arr: np.ndarray) -> np.ndarray:
+    return arr[np.isfinite(arr)]
 
 
 def _tvd(real: pl.Series, synth: pl.Series) -> float:
@@ -120,6 +116,8 @@ def _text_verbatim_rate(real: pl.Series, synth: pl.Series) -> float | None:
     synth_nn = synth.drop_nulls()
     if synth_nn.len() == 0:
         return None
+    # Pass a Python set to `is_in` so polars doesn't emit the "ambiguous collection"
+    # deprecation warning. Set construction is O(n) and avoids the per-row Python loop the
+    # earlier implementation used.
     real_set = set(real.drop_nulls().to_list())
-    n_verbatim = sum(1 for v in synth_nn.to_list() if v in real_set)
-    return n_verbatim / synth_nn.len()
+    return float(synth_nn.is_in(real_set).sum()) / synth_nn.len()

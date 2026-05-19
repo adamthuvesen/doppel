@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import datetime as dt
 import json
 import math
 from dataclasses import asdict
 from typing import Any
+
+import numpy as np
 
 from doppel.quality.aggregate import QualityReport
 
@@ -37,7 +40,20 @@ def to_json(
     }
     if thresholds is not None:
         payload["thresholds"] = thresholds
-    return json.dumps(payload, indent=indent, default=str, allow_nan=False)
+    return json.dumps(payload, indent=indent, default=_json_default, allow_nan=False)
+
+
+def _json_default(value: Any) -> Any:
+    """Explicit converter for types stdlib json can't handle natively.
+
+    Fails loudly on anything outside this list rather than silently stringifying — a
+    silent fallback would produce e.g. quoted numbers and break downstream consumers.
+    """
+    if isinstance(value, np.generic):
+        return value.item()
+    if isinstance(value, dt.datetime | dt.date | dt.time):
+        return value.isoformat()
+    raise TypeError(f"object of type {type(value).__name__} is not JSON serializable")
 
 
 def _finite_or_none(value: float) -> float | None:

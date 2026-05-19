@@ -73,7 +73,11 @@ def _emit(node: ast.AST, allowed: set[str]) -> pl.Expr:
                 f"unknown column {node.id!r} in derived expression (allowed: {sorted(allowed)})"
             )
         return pl.col(node.id)
-    if isinstance(node, ast.Constant) and isinstance(node.value, int | float):
+    if (
+        isinstance(node, ast.Constant)
+        and isinstance(node.value, int | float)
+        and not isinstance(node.value, bool)
+    ):
         return pl.lit(node.value)
     raise ValueError(
         f"unsupported expression node: {type(node).__name__}. "

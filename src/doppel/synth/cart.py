@@ -29,13 +29,19 @@ from sklearn.tree import DecisionTreeClassifier, DecisionTreeRegressor
 
 from doppel.dataset import Dataset, Table
 from doppel.schema.datetime import decompose, recompose
+from doppel.schema.heuristics import (
+    FLOAT_DTYPE_NAMES,
+    INTEGER_DTYPE_NAMES,
+    is_binary_flag,
+    is_integer_dtype,
+    looks_like_count_column,
+)
 from doppel.schema.nullable import encode_feature
+from doppel.schema.nullable import null_rate as _null_rate
 from doppel.schema.types import Column, ColumnType
 from doppel.synth.seed import Rng
 
 _MIN_SAMPLES_LEAF = 5
-_INTEGER_DTYPE_NAMES = {"Int8", "Int16", "Int32", "Int64", "UInt8", "UInt16", "UInt32", "UInt64"}
-_FLOAT_DTYPE_NAMES = {"Float32", "Float64"}
 FitProgress = Callable[[int, int, str], None]
 
 
@@ -137,7 +143,7 @@ def _fit_column(
     encoder = _Encoder.fit(col.type, target)
     n = target.len()
     null_count = target.null_count()
-    null_rate = 0.0 if n == 0 else null_count / n
+    null_rate = _null_rate(target)
     nonnull = target.drop_nulls()
     nonnull_list = nonnull.to_list()
     is_first = features.width == 0
@@ -206,10 +212,10 @@ def _fit_column(
             null_model=null_model,
             value_model=value_model,
             leaf_values=dict(leaf_values),
+            nonnull_pool=nonnull_list,
         )
 
     # Categorical / Text classification path.
-    cats = list(encoder.code.keys())
     code_for = encoder.code
     y_codes = np.array([code_for[v] for v in nonnull_list], dtype=np.int64)
     if np.unique(y_codes).size <= 1:
@@ -232,7 +238,6 @@ def _fit_column(
     leaf_values = defaultdict(list)
     for leaf, val in zip(leaves, nonnull_list, strict=True):
         leaf_values[int(leaf)].append(val)
-    _ = cats  # silence unused warning; categories live in encoder.code.
     return _ColumnSynth(
         column=col,
         encoder=encoder,
@@ -242,6 +247,7 @@ def _fit_column(
         null_model=null_model,
         value_model=value_model,
         leaf_values=dict(leaf_values),
+        nonnull_pool=nonnull_list,
     )
 
 
@@ -305,14 +311,16 @@ def _generate_key(
     - Anything else: sequential `Int64` `1..=n`.
     """
     name = col.name
-    if _looks_like_uuid_key_name(name):
+    # UUID-name heuristic only applies when the source dtype is string-compatible.
+    # A column named `customer_uuid` with an integer source dtype should still get
+    # a sequential integer — emitting strings would break the dtype round-trip.
+    string_source = source_dtype is None or source_dtype == pl.String
+    if string_source and _looks_like_uuid_key_name(name):
         return pl.Series(name, [_random_uuid_hex(rng) for _ in range(n)], dtype=pl.String)
     if source_dtype == pl.String:
         return pl.Series(name, [f"{name}_{i}" for i in range(1, n + 1)], dtype=pl.String)
     out = pl.Series(name, list(range(1, n + 1)), dtype=pl.Int64)
-    if source_dtype is not None and str(source_dtype) in (
-        _INTEGER_DTYPE_NAMES | _FLOAT_DTYPE_NAMES
-    ):
+    if source_dtype is not None and str(source_dtype) in (INTEGER_DTYPE_NAMES | FLOAT_DTYPE_NAMES):
         return out.cast(source_dtype)
     return out
 
@@ -491,10 +499,9 @@ class CartSynthesizer:
             modeled_series[name] = recompose(modeled_series[name], dtype).alias(name)
 
         # Generate keys for KEY columns.
-        key_dtypes: dict[str, pl.DataType] = getattr(self, "_key_dtypes", {})
         for col in self._key_columns:
             modeled_series[col.name] = _generate_key(
-                col, n, rng, source_dtype=key_dtypes.get(col.name)
+                col, n, rng, source_dtype=self._key_dtypes.get(col.name)
             )
 
         # Restore original column order from the input table.
@@ -526,13 +533,16 @@ class CartSynthesizer:
 
 
 def _interleave(nonnull_values: list[object], null_mask: np.ndarray) -> list[object | None]:
-    """Place sampled values into a length-N list at positions where null_mask is False."""
-    out: list[object | None] = [None] * len(null_mask)
-    it = iter(nonnull_values)
-    for i, is_null in enumerate(null_mask.tolist()):
-        if not is_null:
-            out[i] = next(it)
-    return out
+    """Place sampled values into a length-N list at positions where null_mask is False.
+
+    Numpy scatter via the boolean mask avoids the per-row Python loop that dominated
+    sample-time CPU on million-row outputs.
+    """
+    out = np.empty(len(null_mask), dtype=object)
+    out[null_mask] = None
+    if nonnull_values:
+        out[~null_mask] = np.asarray(nonnull_values, dtype=object)
+    return out.tolist()
 
 
 def _build_series(
@@ -544,9 +554,9 @@ def _build_series(
         return pl.Series(col.name, coerced, dtype=pl.Int64)
     if col.type is ColumnType.NUMERIC:
         series = pl.Series(col.name, values, dtype=pl.Float64)
-        if source_dtype is not None and str(source_dtype) in _INTEGER_DTYPE_NAMES:
+        if source_dtype is not None and str(source_dtype) in INTEGER_DTYPE_NAMES:
             return series.round(0).cast(source_dtype)
-        if source_dtype is not None and str(source_dtype) in _FLOAT_DTYPE_NAMES:
+        if source_dtype is not None and str(source_dtype) in FLOAT_DTYPE_NAMES:
             return series.cast(source_dtype)
         return series
     series = pl.Series(col.name, values)
@@ -613,7 +623,7 @@ def _detect_missing_flags(columns: list[Column], df: pl.DataFrame) -> list[_Miss
         if source is None or source not in df.columns or col.name not in df.columns:
             continue
         flag_series = df[col.name]
-        if not _is_binary_flag_series(flag_series):
+        if not is_binary_flag(flag_series):
             continue
         if (_flag_truth(flag_series) == df[source].is_null()).all():
             flags.append(_MissingFlag(col.name, source, flag_series.dtype))
@@ -644,8 +654,8 @@ def _detect_count_bounds(columns: list[Column], df: pl.DataFrame) -> list[_Count
         for c in columns
         if c.name in df.columns
         and c.type is ColumnType.NUMERIC
-        and _is_integer_dtype(df[c.name].dtype)
-        and _looks_like_count_column(c.name)
+        and is_integer_dtype(df[c.name].dtype)
+        and looks_like_count_column(c.name)
     ]
     bounds: list[_CountBound] = []
     for low in candidates:
@@ -660,25 +670,5 @@ def _detect_count_bounds(columns: list[Column], df: pl.DataFrame) -> list[_Count
     return bounds
 
 
-def _is_binary_flag_series(series: pl.Series) -> bool:
-    values = set(series.drop_nulls().unique().to_list())
-    return bool(values) and values <= {0, 1}
-
-
 def _flag_truth(series: pl.Series) -> pl.Series:
     return series.fill_null(0).cast(pl.Int8) == 1
-
-
-def _is_integer_dtype(dtype: pl.DataType) -> bool:
-    return str(dtype) in _INTEGER_DTYPE_NAMES
-
-
-def _looks_like_count_column(name: str) -> bool:
-    upper = name.upper()
-    return (
-        upper.startswith("NUM_")
-        or upper.startswith("N_")
-        or upper.startswith("TOTAL_")
-        or upper.endswith("_COUNT")
-        or "_COUNT_" in upper
-    )

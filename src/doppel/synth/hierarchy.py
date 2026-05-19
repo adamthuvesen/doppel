@@ -125,14 +125,23 @@ class HierarchicalSynthesizer:
             counts_pool = [0]
         counts = rng.numpy.choice(np.asarray(counts_pool), size=parent_df.height)
         total = int(counts.sum())
+        parent_pk_series = parent_df[edge.parent_column]
         if total == 0:
-            return _empty_like(self._table_metadata[name])
+            template = self._table_metadata[name]
+            return pl.DataFrame(
+                {
+                    col.name: pl.Series(col.name, [], dtype=_dtype_for(col.name, template))
+                    for col in template.columns
+                }
+            )
         child_df = self._sample_root(name, total, rng)
-        parent_pks = parent_df[edge.parent_column].to_list()
-        fk_values: list[object] = []
-        for parent_pk, k in zip(parent_pks, counts.tolist(), strict=True):
-            fk_values.extend([parent_pk] * int(k))
-        return child_df.with_columns(pl.Series(edge.child_column, fk_values))
+        # np.repeat over the parent's PK column: dtype is preserved if we
+        # construct the polars Series with the parent's dtype explicitly,
+        # so Int32/UInt64/Float32 FKs don't silently widen to Int64 / String.
+        fk_values = np.repeat(parent_pk_series.to_numpy(), counts)
+        return child_df.with_columns(
+            pl.Series(edge.child_column, fk_values, dtype=parent_pk_series.dtype)
+        )
 
 
 def _empirical_child_counts(dataset: Dataset, edge: ForeignKey) -> list[int]:
@@ -140,7 +149,11 @@ def _empirical_child_counts(dataset: Dataset, edge: ForeignKey) -> list[int]:
     child = dataset.tables[edge.child_table]
     if parent.data is None or child.data is None:
         raise ValueError("FK edge requires both parent and child tables to have data")
-    grouped = child.data.group_by(edge.child_column).len()
+    # Drop orphan-null FK rows before grouping so they don't accidentally collide with
+    # parent rows whose PK is also null (rare but silent if it happens).
+    grouped = (
+        child.data.filter(pl.col(edge.child_column).is_not_null()).group_by(edge.child_column).len()
+    )
     by_pk = {row[0]: int(row[1]) for row in grouped.iter_rows()}
     parent_pks = parent.data[edge.parent_column].to_list()
     return [by_pk.get(pk, 0) for pk in parent_pks]
@@ -151,15 +164,6 @@ def _parents_by_child(edges: list[ForeignKey]) -> dict[str, list[ForeignKey]]:
     for e in edges:
         out.setdefault(e.child_table, []).append(e)
     return out
-
-
-def _empty_like(template: Table) -> pl.DataFrame:
-    return pl.DataFrame(
-        {
-            col.name: pl.Series(col.name, [], dtype=_dtype_for(col.name, template))
-            for col in template.columns
-        }
-    )
 
 
 def _dtype_for(name: str, template: Table) -> pl.DataType:

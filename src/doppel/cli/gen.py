@@ -602,8 +602,7 @@ def _resolve_multi_table_for_where(where: str, dataset: Dataset) -> str:
     # A column that appears in multiple tables (rare but legal: e.g. both have `created_at`)
     # is ambiguous. Treat the where as cross-table to be safe — the user should rename or
     # qualify before retrying.
-    distinct_tables = {t for owners in tables_hit.values() for t in owners}
-    if len(distinct_tables) > 1:
+    if len(tables_hit) > 1:
         detail = ", ".join(
             f"{t}={sorted(set(cols))}" for t, cols in sorted(tables_hit.items())
         )
@@ -611,7 +610,7 @@ def _resolve_multi_table_for_where(where: str, dataset: Dataset) -> str:
             f"--where references columns from multiple tables ({detail}); "
             "v1 supports single-table predicates only. Run separate `gen` commands per table."
         )
-    return next(iter(distinct_tables))
+    return next(iter(tables_hit))
 
 
 def _filter_multi_table_where(

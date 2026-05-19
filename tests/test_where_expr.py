@@ -13,7 +13,6 @@ import pytest
 
 from doppel.constraints.expr import compile_expression
 
-
 # Happy paths ──────────────────────────────────────────────────────────────────
 
 

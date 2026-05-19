@@ -53,6 +53,13 @@ Sharing one `Rng` across all three would mean any fit-time change (e.g. adding a
 column) shifts the sample output even when no sampling logic changed. Three roots
 keep each phase stable under refactors.
 
+## Composes with `--where`
+
+`--where` is a filter, not an entropy source. The reject-resample loop draws from
+the same `Rng` whether or not a where is in play; rejected rows just shift which
+draws survive into the output. Same `(--seed, --where, -n, --max-oversample)` →
+byte-identical output. Tested in `tests/test_where_cli.py::test_gen_where_is_deterministic_given_seed`.
+
 ## Scope
 
 - **Cross-process**: same seed → identical output across two CLI runs. Tested.

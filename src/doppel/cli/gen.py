@@ -158,9 +158,7 @@ def run(
             )
         if fit_rows is not None:
             raise typer.BadParameter("--fit-rows is currently only supported for single-table gen")
-        _run_multi(
-            schema, output, rows, seed, text_policy, rows_per_table, where, max_oversample
-        )
+        _run_multi(schema, output, rows, seed, text_policy, rows_per_table, where, max_oversample)
         return
 
     if input_path is None:
@@ -520,9 +518,7 @@ def _precheck_where(expression: str, source_df: pl.DataFrame, input_path: Path) 
       >=100       → silent
     """
     try:
-        predicate = expr_mod.compile_expression(
-            expression, set(source_df.columns), mode="boolean"
-        )
+        predicate = expr_mod.compile_expression(expression, set(source_df.columns), mode="boolean")
     except ValueError as exc:
         raise typer.BadParameter(f"--where invalid: {exc}") from exc
 
@@ -603,9 +599,7 @@ def _resolve_multi_table_for_where(where: str, dataset: Dataset) -> str:
     # is ambiguous. Treat the where as cross-table to be safe — the user should rename or
     # qualify before retrying.
     if len(tables_hit) > 1:
-        detail = ", ".join(
-            f"{t}={sorted(set(cols))}" for t, cols in sorted(tables_hit.items())
-        )
+        detail = ", ".join(f"{t}={sorted(set(cols))}" for t, cols in sorted(tables_hit.items()))
         raise typer.BadParameter(
             f"--where references columns from multiple tables ({detail}); "
             "v1 supports single-table predicates only. Run separate `gen` commands per table."

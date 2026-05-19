@@ -198,9 +198,7 @@ def _emit_comparand(node: ast.AST, allowed: set[str]) -> pl.Expr:
 
 def _emit_name(node: ast.Name, allowed: set[str]) -> pl.Expr:
     if node.id not in allowed:
-        raise ValueError(
-            f"unknown column {node.id!r} in expression (allowed: {sorted(allowed)})"
-        )
+        raise ValueError(f"unknown column {node.id!r} in expression (allowed: {sorted(allowed)})")
     return pl.col(node.id)
 
 

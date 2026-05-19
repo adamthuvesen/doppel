@@ -231,7 +231,9 @@ def test_gen_where_zero_match_fails_hard(plan_csv: Path, tmp_path: Path) -> None
     assert not out.exists()
 
 
-def test_gen_where_zero_match_skips_fit(plan_csv: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_gen_where_zero_match_skips_fit(
+    plan_csv: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """Precheck must fire BEFORE the synthesizer is fitted — otherwise a zero-match
     where wastes the whole fit cost before erroring."""
     out = tmp_path / "synth.csv"

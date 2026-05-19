@@ -23,9 +23,7 @@ def test_apply_drops_rows_violating_where() -> None:
 
 
 def test_apply_composes_where_with_range() -> None:
-    df = pl.DataFrame(
-        {"plan": ["enterprise", "pro", "enterprise"], "amount": [50.0, 200.0, 500.0]}
-    )
+    df = pl.DataFrame({"plan": ["enterprise", "pro", "enterprise"], "amount": [50.0, 200.0, 500.0]})
     out, _ = apply(
         df,
         [
@@ -89,9 +87,7 @@ def test_synthesize_with_where_combined_and() -> None:
     constraints = [
         WhereConstraint(expression="is_premium == True and age > 100"),
     ]
-    out, _ = synthesize_with_constraints(
-        synth, constraints, 20, Rng.from_seed(7), max_factor=8.0
-    )
+    out, _ = synthesize_with_constraints(synth, constraints, 20, Rng.from_seed(7), max_factor=8.0)
     out_df = out.only().data
     assert out_df is not None
     assert out_df["is_premium"].all()
@@ -112,9 +108,7 @@ def test_synthesize_with_where_oversample_exhaustion_raises() -> None:
 
 
 def test_on_iteration_callback_fires_per_batch() -> None:
-    df = pl.DataFrame(
-        {"plan": ["enterprise"] * 100 + ["pro"] * 100, "age": list(range(200))}
-    )
+    df = pl.DataFrame({"plan": ["enterprise"] * 100 + ["pro"] * 100, "age": list(range(200))})
     table = infer_table("balanced", df)
     synth = CartSynthesizer()
     synth.fit(Dataset.single(table), Rng.from_seed(0))

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections import deque
 from dataclasses import dataclass, field
 
 import polars as pl
@@ -73,9 +74,9 @@ class Dataset:
         order: list[str] = []
         visited: set[str] = set()
         # Kahn's algorithm.
-        queue = list(roots)
+        queue: deque[str] = deque(roots)
         while queue:
-            name = queue.pop(0)
+            name = queue.popleft()
             if name in visited:
                 continue
             visited.add(name)

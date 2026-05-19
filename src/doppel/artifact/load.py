@@ -50,6 +50,7 @@ def inspect_artifact(path: Path) -> ArtifactInfo:
     file_size = path.stat().st_size
     try:
         with tarfile.open(path, "r:gz") as tar:
+            tar.extraction_filter = tarfile.data_filter
             manifest = _read_manifest(tar)
             _validate(manifest)
             schema_blob = _read_optional(tar, "schema.toml", max_bytes=_MAX_SCHEMA_BYTES)
@@ -76,6 +77,7 @@ def inspect_artifact(path: Path) -> ArtifactInfo:
 def load(path: Path) -> tuple[CartSynthesizer, Manifest, SchemaToml | None]:
     try:
         with tarfile.open(path, "r:gz") as tar:
+            tar.extraction_filter = tarfile.data_filter
             manifest = _read_manifest(tar)
             _validate(manifest)
             synth_blob = _read_member(tar, "synth.pickle", max_bytes=_MAX_PICKLE_BYTES)

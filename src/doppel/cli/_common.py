@@ -39,7 +39,9 @@ def sample_frame(
     if rows is None or rows >= df.height:
         return df
     console.print(f"[dim]sampling {label} rows[/] {rows} of {df.height}")
-    return df.sample(n=rows, seed=seed, shuffle=True)
+    # Coerce None to 0 so the sampling step is reproducible across runs even when the
+    # user omitted --seed. Polars otherwise falls back to OS entropy here.
+    return df.sample(n=rows, seed=seed if seed is not None else 0, shuffle=True)
 
 
 @contextmanager

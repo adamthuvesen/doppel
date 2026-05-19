@@ -5,6 +5,7 @@ from __future__ import annotations
 import math
 
 from rich.console import Console
+from rich.markup import escape
 from rich.table import Table
 
 from doppel.quality.aggregate import QualityReport
@@ -33,7 +34,7 @@ def render(report: QualityReport, console: Console, *, top_n: int | None = None)
     shown = marginals[:top_n] if top_n is not None else marginals
     for m in shown:
         marg_table.add_row(
-            m.column,
+            escape(m.column),
             m.type.value,
             m.metric,
             f"{m.value:.4f}",
@@ -56,7 +57,9 @@ def render(report: QualityReport, console: Console, *, top_n: int | None = None)
         for m in text_warnings:
             vr = m.verbatim_rate
             assert vr is not None
-            console.print(f"  [dim]{m.column}[/]  {vr:.1%} of synth values are verbatim copies")
+            console.print(
+                f"  [dim]{escape(m.column)}[/]  {vr:.1%} of synth values are verbatim copies"
+            )
 
     if report.dtype_mismatches or report.invariant_issues:
         console.print()
@@ -66,12 +69,12 @@ def render(report: QualityReport, console: Console, *, top_n: int | None = None)
         for issue in report.dtype_mismatches[:10]:
             issue_table.add_row(
                 "dtype mismatch",
-                f"{issue.column}: real {issue.real_dtype}, synth {issue.synth_dtype}",
+                escape(f"{issue.column}: real {issue.real_dtype}, synth {issue.synth_dtype}"),
             )
         for issue in report.invariant_issues[:10]:
             issue_table.add_row(
                 "count invariant",
-                f"{issue.label}: {issue.synth_violations} synth violations",
+                escape(f"{issue.label}: {issue.synth_violations} synth violations"),
             )
         issue_table.caption = (
             f"{len(report.dtype_mismatches)} dtype mismatches, "

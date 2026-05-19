@@ -39,6 +39,13 @@ def restore(
     row_count: int | None = None,
 ) -> pl.DataFrame:
     """Add fake PII columns back to a synthesized DataFrame and restore original column order."""
+    original_set = set(original_order)
+    missing = [d.name for d in detections if d.name not in original_set]
+    if missing:
+        raise ValueError(
+            f"PII detections reference columns absent from original_order: {missing}. "
+            "Either include them in original_order or filter the detections list before restore()."
+        )
     out = synthesized
     n = out.height if row_count is None else row_count
     for d in detections:

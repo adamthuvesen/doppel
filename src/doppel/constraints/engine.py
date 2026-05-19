@@ -68,7 +68,8 @@ def synthesize_with_constraints(
     last_counts: list[ConstraintViolation] = []
 
     while kept.height < n and factor <= max_factor + 1e-9:
-        batch_size = max(int(n * factor) - attempted, 1)
+        deficit = n - kept.height
+        batch_size = max(int(deficit * factor), 1)
         batch = synth.sample(batch_size, rng).only().data
         if batch is None:
             raise RuntimeError("synthesizer returned a table with no data")

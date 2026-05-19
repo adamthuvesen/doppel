@@ -3,6 +3,10 @@
 Returns boolean masks the engine uses to drop violating rows (reject-resample). Per-
 constraint violation rates are surfaced separately so the quality report can show
 where rejections came from.
+
+Null semantics: a row with NULL on either side of a comparison is treated as a
+violation (NULL of unknown truth cannot be proven to satisfy the constraint). This
+is the safer default for reject-resample: keeping a row only when we know it holds.
 """
 
 from __future__ import annotations
@@ -27,11 +31,11 @@ class ConstraintViolation:
 
 def violation_mask_range(df: pl.DataFrame, c: RangeConstraint) -> pl.Series:
     series = df[c.column]
-    mask = pl.Series([False] * df.height)
+    mask = pl.zeros(df.height, dtype=pl.Boolean, eager=True)
     if c.min is not None:
-        mask = mask | (series < c.min).fill_null(False)
+        mask = mask | (series < c.min).fill_null(True)
     if c.max is not None:
-        mask = mask | (series > c.max).fill_null(False)
+        mask = mask | (series > c.max).fill_null(True)
     return mask
 
 
@@ -46,7 +50,7 @@ def violation_mask_inequality(df: pl.DataFrame, c: InequalityConstraint) -> pl.S
         "==": left == right,
         "!=": left != right,
     }[c.op]
-    return (~holds).fill_null(False)
+    return (~holds).fill_null(True)
 
 
 def combined_violation_mask(
@@ -55,7 +59,7 @@ def combined_violation_mask(
     inequality_constraints: list[InequalityConstraint],
 ) -> tuple[pl.Series, list[ConstraintViolation]]:
     """Return (any-violation mask, per-constraint counts)."""
-    overall = pl.Series([False] * df.height)
+    overall = pl.zeros(df.height, dtype=pl.Boolean, eager=True)
     counts: list[ConstraintViolation] = []
     for rc in range_constraints:
         m = violation_mask_range(df, rc)

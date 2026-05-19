@@ -43,12 +43,19 @@ SUPPORTED_ENTITIES: frozenset[str] = frozenset(
 )
 
 
+# Cap per-cell text length so a column of multi-MB blobs doesn't hang spaCy.
+# Presidio runtime scales ~linearly with input length and the heuristic doesn't
+# need more than the first paragraph to spot an email / phone / SSN.
+_MAX_ANALYZE_CHARS = 1000
+
+
 def detect(
     df: pl.DataFrame,
     columns: list[Column],
     *,
     sample_size: int = 200,
     min_confidence: float = 0.6,
+    max_chars: int = _MAX_ANALYZE_CHARS,
 ) -> list[PIIDetection]:
     """Return one `PIIDetection` per TEXT column that looks like PII."""
     candidates = [c for c in columns if c.type is ColumnType.TEXT and c.name in df.columns]
@@ -66,8 +73,9 @@ def detect(
         # downweights low-confidence detections.
         entity_score: dict[str, float] = {}
         for value in sample:
+            truncated = value[:max_chars]
             best_per_value: dict[str, float] = {}
-            for r in analyzer.analyze(text=value, language="en"):
+            for r in analyzer.analyze(text=truncated, language="en"):
                 best_per_value[r.entity_type] = max(
                     best_per_value.get(r.entity_type, 0.0), float(r.score)
                 )

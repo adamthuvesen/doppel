@@ -52,6 +52,8 @@ doppel doctor   # environment + dep versions
 doppel gen sales.csv -n 100000 -o synth.csv
 doppel gen big.parquet -n 100000 -o synth.parquet --fit-rows 25000
 doppel gen customers.csv -n 10000 -o synth.csv --text-policy hash
+doppel gen sales.csv -n 5000 -o synth.csv \
+  --where "plan == 'enterprise' and tenure_days > 365" --seed 1
 doppel fit sales.parquet -o sales.doppel
 doppel sample sales.doppel -n 1_000_000 -o synth.parquet
 doppel diff sales.csv synth.csv -o report.html --sample-rows 50000
@@ -66,6 +68,10 @@ Useful flags:
   `gen` auto-caps to `min(rows*5, 100k)` when source > 100k rows; pass `--fit-rows 0`
   to disable.
 - `--text-policy sample|hash|fake|drop` — use `hash|fake|drop` for identifying strings.
+- `--where EXPR` on `gen` restricts output to rows satisfying a boolean predicate.
+  Operators: `== != < <= > >=` combined with `and` / `or`. Example:
+  `--where "plan == 'enterprise' and tenure_days > 365"`. Pair with
+  `--max-oversample FACTOR` (default 4×) when the condition is rare. See Limitations.
 - `doppel diff --sample-rows N --top-n 20` speeds up large diffs.
 - `--max-dcr-rows 50000` caps the nearest-neighbour search for the DCR percentile.
 - Soft repairs (missingness flags, count bounds) are applied after sampling; a
@@ -104,6 +110,9 @@ Exit codes: `0` pass, `2` threshold breach.
 - Multi-table preserves FK integrity and per-table marginals, not cross-table
   correlations. `inherit_parent_features` schema flag is parsed but not yet
   wired (v0.2).
+- `--where` is single-table-scoped on multi-table runs: cross-table predicates
+  (`users.plan == 'enterprise' and orders.amount > 100`) are rejected, and a
+  parent-table `--where` does **not** propagate to child distributions in v1.
 - Undetected free-text may copy verbatim from source; see Privacy above.
 - No differential privacy (v0.2).
 

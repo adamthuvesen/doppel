@@ -39,6 +39,7 @@ from doppel.constraints.dsl import (
     Constraint,
     DerivedConstraint,
     RangeConstraint,
+    WhereConstraint,
 )
 from doppel.dataset import Table
 from doppel.schema.datetime import CalendarFeature
@@ -218,7 +219,7 @@ def validate_against_table(inferred: Table, schema: SchemaToml) -> None:
 
 
 def _validate_constraints(constraints: list[Constraint], column_names: set[str]) -> None:
-    from doppel.constraints.derived import compile_expression
+    from doppel.constraints.expr import compile_expression
 
     derived_names = {c.column for c in constraints if isinstance(c, DerivedConstraint)}
     allowed_after_derived = set(column_names) | derived_names
@@ -227,13 +228,18 @@ def _validate_constraints(constraints: list[Constraint], column_names: set[str])
     for c in constraints:
         if isinstance(c, DerivedConstraint):
             try:
-                compile_expression(c.expression, allowed_for_derived)
+                compile_expression(c.expression, allowed_for_derived, mode="numeric")
             except ValueError as exc:
                 raise ValueError(f"constraint references unknown column: {exc}") from exc
             allowed_for_derived.add(c.column)
         elif isinstance(c, RangeConstraint):
             if c.column not in allowed_after_derived:
                 raise ValueError(f"constraint references unknown column {c.column!r}")
+        elif isinstance(c, WhereConstraint):
+            try:
+                compile_expression(c.expression, allowed_after_derived, mode="boolean")
+            except ValueError as exc:
+                raise ValueError(f"where constraint invalid: {exc}") from exc
         else:
             for name in (c.left, c.right):
                 if name not in allowed_after_derived:

@@ -50,6 +50,32 @@ doppel's privacy posture is **heuristic**, not formal:
 - No differential privacy in v0.1. If you need a formal privacy guarantee, doppel
   is not the right tool yet — `--epsilon` is v0.2 roadmap.
 
+### 3. Constraint expression evaluator
+
+`doppel` exposes a small Python-expression DSL in two places:
+
+- `[[constraints]]` of `kind = "derived"` in `schema.toml` (arithmetic only)
+- `--where EXPR` on `doppel gen` and `kind = "where"` constraints (boolean)
+
+Both are parsed with the stdlib `ast` module and walked under a strict allowlist.
+**No `eval`, `exec`, or `compile()` of user input.**
+
+**Numeric mode (`derived`).** Allowed nodes: `Name`, `Constant(int|float)`,
+`UnaryOp(USub)`, `BinOp(Add|Sub|Mult|Div)`.
+
+**Boolean mode (`where`).** Numeric subgrammar plus: `Compare` with one of
+`Eq|NotEq|Lt|LtE|Gt|GtE` (single op only — chained `0 < x < 10` is rejected),
+`BoolOp(And|Or)`, and `Constant(str|bool)` as comparands.
+
+**Explicitly rejected** (each by AST node type, with a clear error message):
+`Call`, `Attribute`, `Subscript`, `Lambda`, `IfExp`, list/set/dict/tuple
+literals, comprehensions, `is`, `is not`, `in`, `not in`, `**`, `%`, `//`,
+`<<`, `>>`, `&`, `|`, `^`, `not`, f-strings, walrus (`:=`). The `__import__`
+RCE pattern is rejected because `Call` itself is not allowed.
+
+Regression coverage: `tests/test_constraints.py` (numeric) +
+`tests/test_where_expr.py` (boolean, parametrised over every rejected node).
+
 ## Reproducibility
 
 `--seed` makes all fit + sample randomness deterministic: sklearn estimators,

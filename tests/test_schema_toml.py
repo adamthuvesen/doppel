@@ -11,6 +11,7 @@ from doppel.constraints.dsl import (
     DerivedConstraint,
     InequalityConstraint,
     RangeConstraint,
+    WhereConstraint,
 )
 from doppel.schema import toml as schema_toml
 from doppel.schema.infer import infer_table
@@ -80,6 +81,27 @@ expression = "amount * units"
     assert schema.constraints[0].min == 0
     assert schema.constraints[1].op == ">="
     assert schema.constraints[2].expression == "amount * units"
+
+
+def test_where_constraint_parses_from_toml(tmp_path: Path) -> None:
+    p = tmp_path / "schema.toml"
+    p.write_text(
+        """
+[table]
+name = "users"
+
+[columns.plan]
+type = "categorical"
+
+[[constraints]]
+kind = "where"
+expression = "plan == 'enterprise'"
+"""
+    )
+    schema = schema_toml.load(p)
+    assert len(schema.constraints) == 1
+    assert isinstance(schema.constraints[0], WhereConstraint)
+    assert schema.constraints[0].expression == "plan == 'enterprise'"
 
 
 def test_invalid_constraint_kind_rejected(tmp_path: Path) -> None:

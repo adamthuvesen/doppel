@@ -2,7 +2,7 @@
 
 Order of operations on a synthesized DataFrame:
   1. Apply all `derived` constraints (overwrites the column from the expression).
-  2. Compute the violation mask from `range` + `inequality` constraints.
+  2. Compute the violation mask from `range` + `inequality` + `where` constraints.
   3. Drop violating rows.
 
 The `synthesize_with_constraints` orchestrator handles reject-resample: if a single pass
@@ -12,20 +12,21 @@ up to `max_factor` total oversample. If still short, it raises — constraints a
 
 from __future__ import annotations
 
-from collections.abc import Sequence
-from dataclasses import dataclass
+from collections.abc import Callable, Sequence
+from dataclasses import dataclass, field
 
 import polars as pl
 
-from doppel.constraints import derived as derived_mod
+from doppel.constraints import expr as expr_mod
 from doppel.constraints import reject as reject_mod
 from doppel.constraints.dsl import (
     Constraint,
     DerivedConstraint,
     InequalityConstraint,
     RangeConstraint,
+    WhereConstraint,
 )
-from doppel.constraints.reject import ConstraintViolation
+from doppel.constraints.reject import CompiledWhere, ConstraintViolation
 from doppel.dataset import Dataset, Table
 from doppel.synth.cart import CartSynthesizer
 from doppel.synth.seed import Rng
@@ -40,13 +41,24 @@ class ConstraintReport:
     oversample_factor: float
 
 
+@dataclass(frozen=True)
+class Partitioned:
+    derived: list[DerivedConstraint] = field(default_factory=list)
+    ranges: list[RangeConstraint] = field(default_factory=list)
+    inequalities: list[InequalityConstraint] = field(default_factory=list)
+    wheres: list[WhereConstraint] = field(default_factory=list)
+
+
 def apply(
     df: pl.DataFrame, constraints: Sequence[Constraint]
 ) -> tuple[pl.DataFrame, list[ConstraintViolation]]:
     """Apply derived constraints, then return (filtered, per-constraint counts)."""
-    derived, ranges, inequalities = _partition(constraints)
-    df = derived_mod.apply(df, derived)
-    mask, counts = reject_mod.combined_violation_mask(df, ranges, inequalities)
+    parts = _partition(constraints)
+    df = expr_mod.apply(df, parts.derived)
+    compiled = _compile_wheres(parts.wheres, set(df.columns))
+    mask, counts = reject_mod.combined_violation_mask(
+        df, parts.ranges, parts.inequalities, compiled
+    )
     return df.filter(~mask), counts
 
 
@@ -58,9 +70,13 @@ def synthesize_with_constraints(
     *,
     initial_factor: float = 1.5,
     max_factor: float = 4.0,
+    on_iteration: Callable[[int, int, float], None] | None = None,
 ) -> tuple[Dataset, ConstraintReport]:
-    derived, ranges, inequalities = _partition(constraints)
-    derived_labels = [c.column for c in derived]
+    parts = _partition(constraints)
+    derived_labels = [c.column for c in parts.derived]
+    column_names = {c.name for c in synth.original_columns}
+    derived_names = {c.column for c in parts.derived}
+    compiled_wheres = _compile_wheres(parts.wheres, column_names | derived_names)
 
     kept = pl.DataFrame()
     factor = initial_factor
@@ -73,11 +89,15 @@ def synthesize_with_constraints(
         batch = synth.sample(batch_size, rng).only().data
         if batch is None:
             raise RuntimeError("synthesizer returned a table with no data")
-        batch = derived_mod.apply(batch, derived)
-        mask, counts = reject_mod.combined_violation_mask(batch, ranges, inequalities)
+        batch = expr_mod.apply(batch, parts.derived)
+        mask, counts = reject_mod.combined_violation_mask(
+            batch, parts.ranges, parts.inequalities, compiled_wheres
+        )
         last_counts = counts
         kept = pl.concat([kept, batch.filter(~mask)], how="vertical")
         attempted += batch_size
+        if on_iteration is not None:
+            on_iteration(batch_size, kept.height, factor)
         factor *= 1.5
 
     if kept.height < n:
@@ -103,17 +123,30 @@ def synthesize_with_constraints(
     )
 
 
-def _partition(
-    constraints: Sequence[Constraint],
-) -> tuple[list[DerivedConstraint], list[RangeConstraint], list[InequalityConstraint]]:
+def _partition(constraints: Sequence[Constraint]) -> Partitioned:
     derived: list[DerivedConstraint] = []
     ranges: list[RangeConstraint] = []
     inequalities: list[InequalityConstraint] = []
+    wheres: list[WhereConstraint] = []
     for c in constraints:
         if isinstance(c, DerivedConstraint):
             derived.append(c)
         elif isinstance(c, RangeConstraint):
             ranges.append(c)
+        elif isinstance(c, WhereConstraint):
+            wheres.append(c)
         else:
             inequalities.append(c)
-    return derived, ranges, inequalities
+    return Partitioned(derived=derived, ranges=ranges, inequalities=inequalities, wheres=wheres)
+
+
+def _compile_wheres(
+    wheres: list[WhereConstraint], allowed_columns: set[str]
+) -> list[CompiledWhere]:
+    return [
+        CompiledWhere(
+            constraint=w,
+            predicate=expr_mod.compile_expression(w.expression, allowed_columns, mode="boolean"),
+        )
+        for w in wheres
+    ]

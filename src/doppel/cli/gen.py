@@ -6,9 +6,11 @@ import json
 import sys
 import time
 import tomllib
+from collections.abc import Callable
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+import polars as pl
 import typer
 from rich.console import Console
 from rich.table import Table as _Table
@@ -20,6 +22,8 @@ from doppel.cli._common import (
     print_repair_summary,
     sample_frame,
 )
+from doppel.constraints import expr as expr_mod
+from doppel.constraints.dsl import Constraint, WhereConstraint
 from doppel.constraints.engine import ConstraintReport, synthesize_with_constraints
 from doppel.dataset import Dataset, Table
 from doppel.schema import multi as multi_schema
@@ -32,6 +36,8 @@ from doppel.synth.hierarchy import HierarchicalSynthesizer
 from doppel.synth.seed import Rng
 from doppel.text_policy import TextPolicy
 from doppel.text_policy import apply as apply_text_policy
+
+_THIN_SUPPORT_THRESHOLD = 100
 
 if TYPE_CHECKING:
     from doppel.pii.detect import PIIDetection
@@ -117,6 +123,26 @@ def run(
             "stderr after fit. Useful for debugging schema inference and synth quality."
         ),
     ),
+    where: str | None = typer.Option(
+        None,
+        "--where",
+        help=(
+            "Restrict output rows to those satisfying a boolean predicate over column names. "
+            "Operators: == != < <= > >= combined with `and` / `or`. "
+            "Example: --where \"plan == 'enterprise' and tenure_days > 365\". "
+            "For multi-table runs the expression must reference columns from one table only."
+        ),
+    ),
+    max_oversample: float = typer.Option(
+        4.0,
+        "--max-oversample",
+        min=1.0,
+        help=(
+            "Maximum oversample factor used by the reject-resample loop when constraints "
+            "(including --where) are tight. Raise it when a rare condition exhausts the "
+            "default 4x budget. Must be >= 1.0."
+        ),
+    ),
 ) -> None:
     if model != "cart":
         raise typer.BadParameter(f"model={model!r} is not supported by this build. Use 'cart'.")
@@ -132,7 +158,7 @@ def run(
             )
         if fit_rows is not None:
             raise typer.BadParameter("--fit-rows is currently only supported for single-table gen")
-        _run_multi(schema, output, rows, seed, text_policy, rows_per_table)
+        _run_multi(schema, output, rows, seed, text_policy, rows_per_table, where, max_oversample)
         return
 
     if input_path is None:
@@ -150,6 +176,8 @@ def run(
         no_quality,
         json_summary,
         explain,
+        where,
+        max_oversample,
     )
 
 
@@ -164,9 +192,18 @@ def _run_single(
     no_quality: bool,
     json_summary: Path | None,
     explain: bool,
+    where: str | None,
+    max_oversample: float,
 ) -> None:
     console.print(f"[dim]reading[/] {input_path}")
     real_df = source_file.read(input_path)
+
+    # Feasibility precheck runs against the unfiltered source DataFrame BEFORE any
+    # sampling or fit work. A 0-match where would otherwise burn through fit + the full
+    # oversample budget before erroring; better to fail in milliseconds.
+    if where is not None:
+        _precheck_where(where, real_df, input_path)
+
     effective_fit_rows = _auto_fit_rows(fit_rows, real_df.height, rows)
     fit_df = sample_frame(real_df, effective_fit_rows, seed=seed, console=console, label="fit")
     console.print(f"[dim]inferring schema for[/] {fit_df.height} rows x {fit_df.width} columns")
@@ -198,12 +235,21 @@ def _run_single(
     # each Rng.from_seed(None) pulls fresh OS entropy — that's a documented limitation:
     # outputs vary across runs unless --seed is set.
     sample_rng = Rng.from_seed(seed)
-    if schema_toml is not None and schema_toml.constraints:
+    constraints = _merge_where_into_constraints(
+        schema_toml.constraints if schema_toml is not None else [], where
+    )
+    if constraints:
         console.print(
-            f"[dim]applying[/] {len(schema_toml.constraints)} constraints via reject-resample"
+            f"[dim]applying[/] {len(constraints)} constraints via reject-resample "
+            f"(max-oversample={max_oversample:g}x)"
         )
         synth_ds, creport = synthesize_with_constraints(
-            synth, schema_toml.constraints, rows, sample_rng
+            synth,
+            constraints,
+            rows,
+            sample_rng,
+            max_factor=max_oversample,
+            on_iteration=_progress_callback(where),
         )
         _print_constraint_summary(creport)
     else:
@@ -299,6 +345,8 @@ def _run_multi(
     seed: int | None,
     text_policy: TextPolicy,
     rows_per_table: str | None,
+    where: str | None,
+    max_oversample: float,
 ) -> None:
     console.print(f"[dim]loading multi-table schema[/] {schema_path}")
     schema = multi_schema.load(schema_path)
@@ -308,6 +356,14 @@ def _run_multi(
         # Re-raise as a clean BadParameter so the user sees the message without a traceback.
         raise typer.BadParameter(str(exc)) from exc
     console.print(f"[dim]read[/] {len(dataset.tables)} tables, {len(dataset.edges)} FK edges")
+
+    where_table: str | None = None
+    if where is not None:
+        where_table = _resolve_multi_table_for_where(where, dataset)
+        console.print(
+            "[yellow]note[/]: --where applies to the named table only; "
+            "child distributions in other tables are unconditional in v1."
+        )
 
     console.print("[dim]fitting hierarchical synthesizer[/]")
     synth = HierarchicalSynthesizer()
@@ -319,6 +375,11 @@ def _run_multi(
     rows_per_root = {name: overrides.get(name, rows) for name in roots}
     console.print(f"[dim]sampling roots[/]: {rows_per_root}")
     out_dataset, _report = synth.sample(rows_per_root, Rng.from_seed(seed))
+
+    if where is not None and where_table is not None:
+        out_dataset = _filter_multi_table_where(
+            out_dataset, where_table, where, max_oversample, seed, synth, rows_per_root
+        )
 
     output_dir.mkdir(parents=True, exist_ok=True)
     for name, table in out_dataset.tables.items():
@@ -453,3 +514,161 @@ def _print_constraint_summary(report: ConstraintReport) -> None:
     for v in report.violations:
         if v.rate > 0:
             console.print(f"  - {v.constraint_label}: {v.rate * 100:.1f}% violations in last batch")
+
+
+def _precheck_where(expression: str, source_df: pl.DataFrame, input_path: Path) -> None:
+    """Run the where expression against the source DataFrame and react to the match count.
+
+    Three buckets per design D6:
+      0           → hard fail (BadParameter)
+      1..99       → warn but proceed (fidelity will be poor)
+      >=100       → silent
+    """
+    try:
+        predicate = expr_mod.compile_expression(expression, set(source_df.columns), mode="boolean")
+    except ValueError as exc:
+        raise typer.BadParameter(f"--where invalid: {exc}") from exc
+
+    matches = int(
+        source_df.select(predicate.alias("__doppel_where__"))["__doppel_where__"]
+        .fill_null(False)
+        .sum()
+    )
+    if matches == 0:
+        raise typer.BadParameter(
+            f"no rows in {input_path} satisfy --where {expression!r}; "
+            "synthesizer cannot learn from an empty conditioning slice."
+        )
+    if matches < _THIN_SUPPORT_THRESHOLD:
+        console.print(
+            f"[yellow]warn[/]: only {matches} source rows match --where {expression!r}; "
+            "fidelity in synthetic output will likely be poor. Consider a broader predicate."
+        )
+
+
+def _merge_where_into_constraints(
+    declared: list[Constraint], where: str | None
+) -> list[Constraint]:
+    """CLI `--where` is appended to any TOML-declared constraints as a WhereConstraint."""
+    if where is None:
+        return list(declared)
+    return [*declared, WhereConstraint(expression=where)]
+
+
+def _progress_callback(
+    where: str | None,
+) -> Callable[[int, int, float], None] | None:
+    """Per-iteration progress line, only when --where is in play (per design D6 Q4)."""
+    if where is None:
+        return None
+
+    def cb(batch: int, kept_total: int, factor: float) -> None:
+        console.print(
+            f"[dim]where[/] attempted={batch} kept_total={kept_total} factor={factor:.1f}x"
+        )
+
+    return cb
+
+
+def _resolve_multi_table_for_where(where: str, dataset: Dataset) -> str:
+    """Return the single table referenced by `where`; raise if it spans more than one.
+
+    Doesn't compile the expression — only inspects `Name` nodes. The expression is
+    compiled in boolean mode later, when the table's column set is known.
+    """
+    try:
+        names = expr_mod.collect_column_names(where)
+    except ValueError as exc:
+        raise typer.BadParameter(f"--where invalid: {exc}") from exc
+
+    column_to_tables: dict[str, list[str]] = {}
+    for tname, table in dataset.tables.items():
+        for col in table.columns:
+            column_to_tables.setdefault(col.name, []).append(tname)
+
+    tables_hit: dict[str, list[str]] = {}
+    unknown: list[str] = []
+    for name in names:
+        owners = column_to_tables.get(name)
+        if not owners:
+            unknown.append(name)
+            continue
+        for tname in owners:
+            tables_hit.setdefault(tname, []).append(name)
+
+    if unknown:
+        raise typer.BadParameter(
+            f"--where references columns not in any table: {sorted(unknown)}. "
+            f"Known columns: {sorted(column_to_tables)}"
+        )
+
+    # A column that appears in multiple tables (rare but legal: e.g. both have `created_at`)
+    # is ambiguous. Treat the where as cross-table to be safe — the user should rename or
+    # qualify before retrying.
+    if len(tables_hit) > 1:
+        detail = ", ".join(f"{t}={sorted(set(cols))}" for t, cols in sorted(tables_hit.items()))
+        raise typer.BadParameter(
+            f"--where references columns from multiple tables ({detail}); "
+            "v1 supports single-table predicates only. Run separate `gen` commands per table."
+        )
+    return next(iter(tables_hit))
+
+
+def _filter_multi_table_where(
+    out_dataset: Dataset,
+    where_table: str,
+    where: str,
+    max_oversample: float,
+    seed: int | None,
+    synth: HierarchicalSynthesizer,
+    rows_per_root: dict[str, int],
+) -> Dataset:
+    """Apply the where predicate to one table of an already-sampled multi-table output.
+
+    Strategy: filter the named table's rows in place; if the result is short, oversample
+    by re-running the hierarchical sample with bigger row counts until satisfied or the
+    oversample budget is exhausted.
+    """
+    table = out_dataset.tables[where_table]
+    assert table.data is not None
+    target = rows_per_root.get(where_table, table.data.height)
+    column_set = {c.name for c in table.columns}
+    try:
+        predicate = expr_mod.compile_expression(where, column_set, mode="boolean")
+    except ValueError as exc:
+        raise typer.BadParameter(f"--where invalid: {exc}") from exc
+
+    kept_df = _apply_predicate_mask(table.data, predicate)
+    if kept_df.height >= target:
+        kept_df = kept_df.head(target)
+    else:
+        # Re-sample the dataset with a larger root row count for the target table only.
+        factor = 1.5
+        while kept_df.height < target and factor <= max_oversample + 1e-9:
+            scaled = dict(rows_per_root)
+            scaled[where_table] = max(int(target * factor), target + 1)
+            extra_ds, _ = synth.sample(scaled, Rng.from_seed(seed).spawn())
+            extra_table = extra_ds.tables[where_table]
+            assert extra_table.data is not None
+            kept_df = _apply_predicate_mask(extra_table.data, predicate)
+            factor *= 1.5
+        if kept_df.height < target:
+            raise ValueError(
+                f"could not synthesize {target} rows for table {where_table!r} satisfying "
+                f"--where after oversample factor {factor:.1f}x. Constraint may be too rare."
+            )
+        kept_df = kept_df.head(target)
+
+    tables = dict(out_dataset.tables)
+    tables[where_table] = Table(
+        name=table.name,
+        columns=list(table.columns),
+        primary_key=table.primary_key,
+        data=kept_df,
+    )
+    return Dataset(tables=tables, edges=list(out_dataset.edges))
+
+
+def _apply_predicate_mask(df: pl.DataFrame, predicate: pl.Expr) -> pl.DataFrame:
+    holds = df.select(predicate.alias("__doppel_where__"))["__doppel_where__"].fill_null(False)
+    return df.filter(holds)

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import pytest
 from typer.testing import CliRunner
 
 from doppel.cli import app
@@ -19,8 +20,11 @@ def test_doctor_exits_zero_in_dev_env() -> None:
 
 
 def test_doctor_lists_pii_extras() -> None:
+    # Skip clearly when the optional [pii] extra is not installed, rather than producing
+    # a confusing assertion failure.
+    pytest.importorskip("presidio_analyzer")
+    pytest.importorskip("faker")
     result = runner.invoke(app, ["doctor"])
     assert result.exit_code == 0, result.stdout
-    # presidio + faker are part of the [pii] extra and installed via --all-extras in dev
     assert "presidio-analyzer" in result.stdout or "presidio" in result.stdout
     assert "faker" in result.stdout

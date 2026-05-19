@@ -22,7 +22,7 @@ import numpy as np
 import polars as pl
 from scipy.stats import chi2_contingency
 
-from doppel.schema.datetime import decompose
+from doppel.schema.datetime import to_float_array
 from doppel.schema.types import Column, ColumnType
 
 
@@ -39,10 +39,18 @@ def compute(real: pl.DataFrame, synth: pl.DataFrame, columns: list[Column]) -> C
     names = [c.name for c in eligible if c.name in real.columns and c.name in synth.columns]
     eligible = [c for c in eligible if c.name in names]
 
+    if len(eligible) < 2:
+        return CorrelationReport(
+            columns=names,
+            real_matrix=np.eye(len(eligible), dtype=np.float64).tolist(),
+            synth_matrix=np.eye(len(eligible), dtype=np.float64).tolist(),
+            frobenius_distance=0.0,
+        )
+
     real_m = _association_matrix(real, eligible)
     synth_m = _association_matrix(synth, eligible)
     diff = real_m - synth_m
-    n_pairs = max(eligible.__len__() * (eligible.__len__() - 1) // 2, 1)
+    n_pairs = len(eligible) * (len(eligible) - 1) // 2
     frob = float(np.linalg.norm(diff)) / np.sqrt(2.0 * n_pairs)
 
     return CorrelationReport(
@@ -64,7 +72,13 @@ def _association_matrix(df: pl.DataFrame, columns: list[Column]) -> np.ndarray:
 
 def _pair_association(df: pl.DataFrame, a: Column, b: Column) -> float:
     sa, sb = df[a.name], df[b.name]
+    # Drop rows where either side is NULL or float-NaN. Polars NaN is distinct from
+    # null and would otherwise propagate through scipy/numpy as NaN output.
     mask = sa.is_not_null() & sb.is_not_null()
+    if sa.dtype.is_float():
+        mask = mask & sa.is_finite().fill_null(False)
+    if sb.dtype.is_float():
+        mask = mask & sb.is_finite().fill_null(False)
     sa, sb = sa.filter(mask), sb.filter(mask)
     if sa.len() < 2:
         return 0.0
@@ -77,19 +91,13 @@ def _pair_association(df: pl.DataFrame, a: Column, b: Column) -> float:
     if not a_numeric and not b_numeric:
         return _cramers_v(sa, sb)
     if a_numeric:
-        return _correlation_ratio(_as_numeric(a, sa), sb)
-    return _correlation_ratio(_as_numeric(b, sb), sa)
-
-
-def _as_numeric(col: Column, series: pl.Series) -> np.ndarray:
-    if col.type is ColumnType.DATETIME:
-        return decompose(series).cast(pl.Float64).to_numpy().astype(np.float64)
-    return series.cast(pl.Float64).to_numpy().astype(np.float64)
+        return _correlation_ratio(to_float_array(a, sa), sb)
+    return _correlation_ratio(to_float_array(b, sb), sa)
 
 
 def _pearson(a: Column, sa: pl.Series, b: Column, sb: pl.Series) -> float:
-    x = _as_numeric(a, sa)
-    y = _as_numeric(b, sb)
+    x = to_float_array(a, sa)
+    y = to_float_array(b, sb)
     if x.std() == 0 or y.std() == 0:
         return 0.0
     return float(abs(np.corrcoef(x, y)[0, 1]))
@@ -117,16 +125,18 @@ def _cramers_v(a: pl.Series, b: pl.Series) -> float:
 
 
 def _correlation_ratio(numeric_values: np.ndarray, categories: pl.Series) -> float:
-    cats = categories.to_list()
     total = float(np.var(numeric_values))
     if total == 0:
         return 0.0
+    # Compute per-category mean and count in one Polars pass; avoids the O(n*k) Python
+    # comparison loop the previous implementation used.
+    grouped = (
+        pl.DataFrame({"v": numeric_values, "c": categories})
+        .group_by("c")
+        .agg(pl.col("v").mean().alias("mean"), pl.col("v").count().alias("n"))
+    )
     grand = float(np.mean(numeric_values))
-    between = 0.0
-    for cat in set(cats):
-        mask = np.array([c == cat for c in cats], dtype=bool)
-        n_k = int(mask.sum())
-        if n_k == 0:
-            continue
-        between += n_k * (float(np.mean(numeric_values[mask])) - grand) ** 2
+    counts = grouped["n"].to_numpy().astype(np.float64)
+    means = grouped["mean"].to_numpy().astype(np.float64)
+    between = float(np.sum(counts * (means - grand) ** 2))
     return float(np.sqrt((between / numeric_values.size) / total))

@@ -17,7 +17,7 @@ import numpy as np
 import polars as pl
 from sklearn.neighbors import NearestNeighbors
 
-from doppel.schema.datetime import decompose
+from doppel.schema.datetime import to_float_array
 from doppel.schema.nullable import encode_feature
 from doppel.schema.types import Column, ColumnType
 
@@ -104,20 +104,24 @@ def _kneighbors_batched(
     batch_size: int,
     progress: ProgressCallback | None,
 ) -> np.ndarray:
+    """Batch the kneighbors call so memory stays bounded regardless of whether the caller
+    passed a progress callback. sklearn's NearestNeighbors can allocate large intermediate
+    buffers per call (high-dim one-hot, brute fallback), so always batching is the safe
+    default; progress is only invoked when the callback is set.
+    """
     n = synth_x.shape[0]
-    if progress is None or n <= batch_size:
+    if n <= batch_size:
         distances, _ = nn.kneighbors(synth_x, return_distance=True)
         if progress is not None:
             progress(n, n)
         return distances[:, 0]
     out = np.empty(n, dtype=np.float64)
-    done = 0
     for start in range(0, n, batch_size):
         end = min(start + batch_size, n)
         distances, _ = nn.kneighbors(synth_x[start:end], return_distance=True)
         out[start:end] = distances[:, 0]
-        done = end
-        progress(done, n)
+        if progress is not None:
+            progress(end, n)
     return out
 
 
@@ -139,10 +143,12 @@ def _build_feature_matrices(
 
 
 def _scale_numeric(col: Column, real: pl.Series, synth: pl.Series) -> tuple[np.ndarray, np.ndarray]:
-    real_arr = _as_float(col, encode_feature(real, col.type))
-    synth_arr = _as_float(col, encode_feature(synth, col.type))
-    lo = float(real_arr.min()) if real_arr.size else 0.0
-    hi = float(real_arr.max()) if real_arr.size else 0.0
+    real_arr = to_float_array(col, encode_feature(real, col.type))
+    synth_arr = to_float_array(col, encode_feature(synth, col.type))
+    if real_arr.size == 0:
+        return real_arr.reshape(-1, 1), synth_arr.reshape(-1, 1)
+    lo = float(real_arr.min())
+    hi = float(real_arr.max())
     span = hi - lo
     if span == 0:
         return real_arr.reshape(-1, 1) * 0.0, synth_arr.reshape(-1, 1) * 0.0
@@ -152,28 +158,34 @@ def _scale_numeric(col: Column, real: pl.Series, synth: pl.Series) -> tuple[np.n
     )
 
 
-def _as_float(col: Column, series: pl.Series) -> np.ndarray:
-    if col.type is ColumnType.DATETIME:
-        return decompose(series).cast(pl.Float64).to_numpy().astype(np.float64)
-    return series.cast(pl.Float64).to_numpy().astype(np.float64)
-
-
 def _one_hot(real: pl.Series, synth: pl.Series) -> tuple[np.ndarray, np.ndarray]:
+    """Vectorised one-hot encoding for DCR's categorical feature blocks.
+
+    Builds the shared category code once, then scatters with numpy — no per-cell Python loop.
+    """
     real_filled = encode_feature(real, ColumnType.CATEGORICAL)
     synth_filled = encode_feature(synth, ColumnType.CATEGORICAL)
-    cats = sorted(set(real_filled.to_list()) | set(synth_filled.to_list()), key=str)
-    code = {c: i for i, c in enumerate(cats)}
+    cats = sorted(
+        set(real_filled.unique().to_list()) | set(synth_filled.unique().to_list()), key=str
+    )
+    if not cats:
+        return np.zeros((real_filled.len(), 0)), np.zeros((synth_filled.len(), 0))
+    width = len(cats)
+    indices = list(range(width))
     return (
-        _one_hot_block(real_filled, code, len(cats)),
-        _one_hot_block(synth_filled, code, len(cats)),
+        _one_hot_block(real_filled, cats, indices, width),
+        _one_hot_block(synth_filled, cats, indices, width),
     )
 
 
-def _one_hot_block(series: pl.Series, code: dict[object, int], width: int) -> np.ndarray:
+def _one_hot_block(
+    series: pl.Series, cats: list[object], indices: list[int], width: int
+) -> np.ndarray:
+    """Map each value to its index via Polars replace_strict, then scatter via numpy."""
     rows = series.len()
+    idx_arr = series.replace_strict(cats, indices, default=-1, return_dtype=pl.Int64).to_numpy()
     block = np.zeros((rows, width), dtype=np.float64)
-    for i, v in enumerate(series.to_list()):
-        idx = code.get(v)
-        if idx is not None:
-            block[i, idx] = 1.0
+    valid = idx_arr >= 0
+    if valid.any():
+        block[np.arange(rows)[valid], idx_arr[valid]] = 1.0
     return block

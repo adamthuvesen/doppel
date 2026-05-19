@@ -133,15 +133,16 @@ def sample(
         f"(table {manifest.table_name!r}, doppel {manifest.doppel_version})"
     )
 
-    rng = Rng.from_seed(seed)
     console.print(f"[dim]sampling[/] {rows} rows")
     if schema_toml is not None and schema_toml.constraints:
         console.print(
             f"[dim]applying[/] {len(schema_toml.constraints)} constraints from embedded schema"
         )
-        out_ds, _ = synthesize_with_constraints(synth, schema_toml.constraints, rows, rng)
+        out_ds, _ = synthesize_with_constraints(
+            synth, schema_toml.constraints, rows, Rng.from_seed(seed)
+        )
     else:
-        out_ds = synth.sample(rows, rng)
+        out_ds = synth.sample(rows, Rng.from_seed(seed))
     print_repair_summary(console, synth.last_repair_summary)
     out_df = out_ds.only().data
     assert out_df is not None
@@ -164,7 +165,4 @@ def _detect_pii_if_available(table: Table) -> list[PIIDetection]:
         return []
     if table.data is None:
         return []
-    try:
-        return detect_pii(table.data, table.columns)
-    except ImportError:
-        return []
+    return detect_pii(table.data, table.columns)

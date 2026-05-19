@@ -13,6 +13,7 @@ from doppel.quality import privacy as priv_mod
 from doppel.quality.correlations import CorrelationReport
 from doppel.quality.marginals import MarginalScore
 from doppel.quality.privacy import PrivacyReport
+from doppel.schema.heuristics import is_integer_dtype, looks_like_count_column
 from doppel.schema.types import Column, ColumnType
 
 
@@ -111,9 +112,8 @@ def _count_invariant_issues(
         if c.type is ColumnType.NUMERIC
         and c.name in real.columns
         and c.name in synth.columns
-        and str(real[c.name].dtype)
-        in {"Int8", "Int16", "Int32", "Int64", "UInt8", "UInt16", "UInt32", "UInt64"}
-        and _looks_like_count(c.name)
+        and is_integer_dtype(real[c.name].dtype)
+        and looks_like_count_column(c.name)
     ]
     issues: list[InvariantIssue] = []
     for left in candidates:
@@ -138,14 +138,3 @@ def _count_invariant_issues(
 def _violations_gt(left: pl.Series, right: pl.Series) -> int:
     mask = left.is_not_null() & right.is_not_null()
     return int(((left > right) & mask).sum())
-
-
-def _looks_like_count(name: str) -> bool:
-    upper = name.upper()
-    return (
-        upper.startswith("NUM_")
-        or upper.startswith("N_")
-        or upper.startswith("TOTAL_")
-        or upper.endswith("_COUNT")
-        or "_COUNT_" in upper
-    )

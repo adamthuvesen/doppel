@@ -82,11 +82,12 @@ def _probe(module: str) -> tuple[bool, str]:
         return False, "-"
     version = getattr(mod, "__version__", None)
     if version is None:
-        try:
-            from importlib.metadata import version as md_version
+        from importlib.metadata import PackageNotFoundError
+        from importlib.metadata import version as md_version
 
+        try:
             version = md_version(module.replace("_", "-"))
-        except Exception:
+        except PackageNotFoundError:
             version = "?"
     return True, str(version)
 

@@ -68,16 +68,7 @@ def load(path: Path) -> SchemaToml:
 
 def save(schema: SchemaToml, path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    payload: dict[str, Any] = {
-        "table": _drop_none(schema.table.model_dump()),
-    }
-    if schema.columns:
-        payload["columns"] = {
-            name: _drop_none(spec.model_dump()) for name, spec in schema.columns.items()
-        }
-    if schema.constraints:
-        payload["constraints"] = [_drop_none(c.model_dump()) for c in schema.constraints]
-    path.write_text(tomli_w.dumps(payload), encoding="utf-8")
+    path.write_text(tomli_w.dumps(to_payload(schema)), encoding="utf-8")
 
 
 def from_table(table: Table) -> SchemaToml:
@@ -105,11 +96,29 @@ def apply_overrides(inferred: Table, schema: SchemaToml) -> Table:
         synthesizer generates unique values for it rather than modelling the column.
     """
     validate_against_table(inferred, schema)
-
     declared_pk = schema.table.primary_key or inferred.primary_key
-    columns: list[Column] = []
-    for col in inferred.columns:
-        spec = schema.columns.get(col.name)
+    columns = merge_columns(inferred.columns, schema.columns, declared_pk)
+    return Table(
+        name=schema.table.name,
+        columns=columns,
+        primary_key=declared_pk,
+        data=inferred.data,
+    )
+
+
+def merge_columns(
+    inferred: list[Column],
+    overrides: dict[str, ColumnSpec],
+    declared_pk: str | None,
+) -> list[Column]:
+    """Merge per-column TOML overrides onto inferred columns; promote declared PK to KEY.
+
+    Shared between single-table `apply_overrides` and multi-table `to_dataset` — having
+    one implementation prevents the synth's PK behavior from drifting between the two paths.
+    """
+    out: list[Column] = []
+    for col in inferred:
+        spec = overrides.get(col.name)
         if spec is None:
             merged = col
         else:
@@ -134,13 +143,8 @@ def apply_overrides(inferred: Table, schema: SchemaToml) -> Table:
                 ordered=merged.ordered,
                 categories=None,
             )
-        columns.append(merged)
-    return Table(
-        name=schema.table.name or inferred.name,
-        columns=columns,
-        primary_key=declared_pk,
-        data=inferred.data,
-    )
+        out.append(merged)
+    return out
 
 
 def validate_against_table(inferred: Table, schema: SchemaToml) -> None:
@@ -197,6 +201,18 @@ def _drop_none(d: dict[str, Any]) -> dict[str, Any]:
     return {k: v for k, v in d.items() if v is not None}
 
 
+def to_payload(schema: SchemaToml) -> dict[str, Any]:
+    """Render a SchemaToml as the nested-dict shape used by tomli_w + artifact metadata."""
+    payload: dict[str, Any] = {"table": _drop_none(schema.table.model_dump())}
+    if schema.columns:
+        payload["columns"] = {
+            name: _drop_none(spec.model_dump()) for name, spec in schema.columns.items()
+        }
+    if schema.constraints:
+        payload["constraints"] = [_drop_none(c.model_dump()) for c in schema.constraints]
+    return payload
+
+
 __all__ = [
     "ColumnSpec",
     "SchemaToml",
@@ -204,6 +220,8 @@ __all__ = [
     "apply_overrides",
     "from_table",
     "load",
+    "merge_columns",
     "save",
+    "to_payload",
     "validate_against_table",
 ]

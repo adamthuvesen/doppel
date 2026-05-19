@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import sys
 import time
 import tomllib
 from pathlib import Path
@@ -165,11 +166,11 @@ def _run_single(
     explain: bool,
 ) -> None:
     console.print(f"[dim]reading[/] {input_path}")
-    df = source_file.read(input_path)
-    effective_fit_rows = _auto_fit_rows(fit_rows, df.height, rows)
-    df = sample_frame(df, effective_fit_rows, seed=seed, console=console, label="fit")
-    console.print(f"[dim]inferring schema for[/] {df.height} rows x {df.width} columns")
-    table = infer_table(input_path.stem, df)
+    real_df = source_file.read(input_path)
+    effective_fit_rows = _auto_fit_rows(fit_rows, real_df.height, rows)
+    fit_df = sample_frame(real_df, effective_fit_rows, seed=seed, console=console, label="fit")
+    console.print(f"[dim]inferring schema for[/] {fit_df.height} rows x {fit_df.width} columns")
+    table = infer_table(input_path.stem, fit_df)
 
     schema_toml = None
     if schema is not None:
@@ -192,6 +193,10 @@ def _run_single(
 
     console.print(f"[dim]sampling[/] {rows} rows")
     sample_started = time.perf_counter()
+    # Re-seed each subsystem from the same root seed so `doppel gen` and `doppel fit && sample`
+    # produce byte-identical output (the cross-tool determinism contract). When seed is None,
+    # each Rng.from_seed(None) pulls fresh OS entropy — that's a documented limitation:
+    # outputs vary across runs unless --seed is set.
     sample_rng = Rng.from_seed(seed)
     if schema_toml is not None and schema_toml.constraints:
         console.print(
@@ -228,7 +233,10 @@ def _run_single(
 
     quality_dict: dict[str, object] | None = None
     if not no_quality:
-        summary = compute_quality_summary(df, out_df, table.columns, sample_seed=seed or 0)
+        # Use the original real_df (not fit_df) so DCR / marginals compare synth against
+        # the full source — not just the subset the model was fit on, which would make
+        # privacy numbers artificially optimistic.
+        summary = compute_quality_summary(real_df, out_df, table.columns, sample_seed=seed or 0)
         print_quality_summary(console, summary)
         quality_dict = {
             "avg_marginal": summary.avg_marginal,
@@ -275,10 +283,7 @@ def _strip_pii_if_available(
         return unchanged
     if table.data is None:
         return unchanged
-    try:
-        detections = detect_pii(table.data, table.columns)
-    except ImportError:
-        return unchanged
+    detections = detect_pii(table.data, table.columns)
     if not detections:
         return unchanged
     labels = ", ".join(f"{d.name}={d.entity_type}({d.confidence:.0%})" for d in detections)
@@ -318,7 +323,7 @@ def _run_multi(
     output_dir.mkdir(parents=True, exist_ok=True)
     for name, table in out_dataset.tables.items():
         spec = schema.tables.get(name)
-        suffix = Path(spec.file).suffix if spec and spec.file else ".csv"
+        suffix = Path(spec.file).suffix if spec and spec.file and spec.file.strip() else ".csv"
         dest = output_dir / f"{name}{suffix}"
         assert table.data is not None
         out_df = apply_text_policy(
@@ -399,8 +404,6 @@ def _print_explain(synth: CartSynthesizer, table: Table) -> None:
 
     Goes to stderr so it doesn't pollute pipes consuming the synth output.
     """
-    import sys
-
     err = Console(file=sys.stderr)
     err.print("[bold]explain[/] per-column modelling choices")
     table_view = _Table(title=None, show_header=True, header_style="bold")

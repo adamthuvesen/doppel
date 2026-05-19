@@ -35,8 +35,7 @@ from pydantic import BaseModel, Field
 
 from doppel.dataset import Dataset, ForeignKey, Table
 from doppel.schema.infer import infer_table
-from doppel.schema.toml import ColumnSpec
-from doppel.schema.types import Column, ColumnType
+from doppel.schema.toml import ColumnSpec, merge_columns
 from doppel.sources import file as source_file
 
 
@@ -132,37 +131,9 @@ def to_dataset(schema: MultiSchemaToml, base_dir: Path) -> Dataset:
                     "and non-null"
                 )
         declared_pk = spec.primary_key or inferred.primary_key
-        merged_columns: list[Column] = []
-        for col in inferred.columns:
-            override = spec.columns.get(col.name)
-            if override is None:
-                merged = col
-            else:
-                merged = Column(
-                    name=col.name,
-                    type=override.type,
-                    nullable=override.nullable,
-                    ordered=override.ordered,
-                    categories=tuple(override.categories)
-                    if override.categories is not None
-                    else col.categories,
-                )
-            if (
-                declared_pk is not None
-                and merged.name == declared_pk
-                and merged.type is not ColumnType.KEY
-            ):
-                merged = Column(
-                    name=merged.name,
-                    type=ColumnType.KEY,
-                    nullable=False,
-                    ordered=merged.ordered,
-                    categories=None,
-                )
-            merged_columns.append(merged)
         tables[name] = Table(
             name=name,
-            columns=merged_columns,
+            columns=merge_columns(inferred.columns, spec.columns, declared_pk),
             primary_key=declared_pk,
             data=inferred.data,
         )
@@ -218,13 +189,30 @@ def _validate_fks(tables: dict[str, Table], edges: list[ForeignKey]) -> None:
             raise ValueError(f"FK references unknown parent table {e.parent_table!r}")
         if e.child_table not in tables:
             raise ValueError(f"FK references unknown child table {e.child_table!r}")
-        if e.parent_column not in tables[e.parent_table].column_names:
+        parent = tables[e.parent_table]
+        child = tables[e.child_table]
+        if e.parent_column not in parent.column_names:
             raise ValueError(
                 f"FK references unknown parent column {e.parent_table}.{e.parent_column!r}"
             )
-        if e.child_column not in tables[e.child_table].column_names:
+        if e.child_column not in child.column_names:
             raise ValueError(
                 f"FK references unknown child column {e.child_table}.{e.child_column!r}"
+            )
+        if parent.data is None or child.data is None:
+            continue
+        # Referential integrity: every non-null child FK value must exist in the parent PK.
+        # Without this check, fitting on broken data succeeds silently and the synthesizer
+        # learns garbage relationships.
+        child_fk = child.data[e.child_column].drop_nulls()
+        parent_pk_set = set(parent.data[e.parent_column].to_list())
+        orphans = child_fk.filter(~child_fk.is_in(parent_pk_set))
+        if orphans.len() > 0:
+            sample = orphans.unique().head(5).to_list()
+            raise ValueError(
+                f"FK violation: {orphans.len()} rows in {e.child_table}.{e.child_column} "
+                f"reference values absent from {e.parent_table}.{e.parent_column}. "
+                f"Example orphan values: {sample}"
             )
 
 

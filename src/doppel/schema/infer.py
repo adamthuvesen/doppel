@@ -5,12 +5,12 @@ from __future__ import annotations
 import polars as pl
 
 from doppel.dataset import Table
+from doppel.schema.heuristics import INTEGER_DTYPE_NAMES, is_binary_flag
 from doppel.schema.types import Column, ColumnType
 
 # Heuristics for distinguishing CATEGORICAL from TEXT on string-typed columns.
 CAT_MAX_UNIQUE = 50
 CAT_MAX_RATIO = 0.05
-_INTEGER_DTYPE_NAMES = {"Int8", "Int16", "Int32", "Int64", "UInt8", "UInt16", "UInt32", "UInt64"}
 
 
 def infer_table(name: str, df: pl.DataFrame) -> Table:
@@ -43,7 +43,7 @@ def _classify(
     if dtype.is_numeric():
         if _is_unique_key(series, n_rows) and _looks_like_key_name(name):
             return ColumnType.KEY, None
-        if str(dtype) in _INTEGER_DTYPE_NAMES and _is_binary_flag(series):
+        if str(dtype) in INTEGER_DTYPE_NAMES and is_binary_flag(series):
             return ColumnType.CATEGORICAL, tuple(sorted(series.drop_nulls().unique().to_list()))
         return ColumnType.NUMERIC, None
     if dtype == pl.String:
@@ -65,11 +65,6 @@ def _classify(
 
 def _is_unique_key(series: pl.Series, n_rows: int) -> bool:
     return n_rows > 0 and series.n_unique() == series.len() == n_rows
-
-
-def _is_binary_flag(series: pl.Series) -> bool:
-    values = set(series.drop_nulls().unique().to_list())
-    return bool(values) and values <= {0, 1}
 
 
 def _looks_like_key_name(name: str) -> bool:

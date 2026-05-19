@@ -10,13 +10,20 @@ from rich.console import Console
 
 from doppel.artifact import load as load_artifact
 from doppel.artifact import save as save_artifact
-from doppel.cli._common import fit_progress, print_repair_summary, sample_frame
+from doppel.cli._common import (
+    fit_progress,
+    print_repair_summary,
+    resolve_sink,
+    resolve_source,
+    sample_frame,
+)
 from doppel.constraints.engine import synthesize_with_constraints
 from doppel.dataset import Dataset
 from doppel.schema import toml as schema_toml_mod
 from doppel.schema.infer import infer_table
-from doppel.sinks import file as sink_file
-from doppel.sources import file as source_file
+from doppel.sinks import write as sink_write
+from doppel.sources import read as source_read
+from doppel.sources.spec import DatabaseUri, FilePath
 from doppel.synth.cart import CartSynthesizer
 from doppel.synth.seed import Rng
 from doppel.text_policy import TextPolicy
@@ -30,11 +37,12 @@ console = Console()
 
 
 def fit(
-    input_path: Path = typer.Argument(
+    input_path: str = typer.Argument(
         ...,
-        exists=True,
-        readable=True,
-        help="Source dataset to fit on.",
+        help=(
+            "Source dataset to fit on — file path or database URI "
+            "(duckdb:///path.db, snowflake://..., postgres://...)."
+        ),
     ),
     output: Path = typer.Option(
         ...,
@@ -59,17 +67,53 @@ def fit(
         None,
         "--fit-rows",
         min=1,
-        help="Randomly sample this many source rows before fitting (useful for large files).",
+        help=(
+            "Randomly sample this many source rows before fitting. "
+            "For SQL sources, pushes the sample into the warehouse."
+        ),
+    ),
+    sql_table: str | None = typer.Option(
+        None,
+        "--table",
+        help="SQL sources only: table to read from. Mutually exclusive with --query.",
+    ),
+    sql_query: str | None = typer.Option(
+        None,
+        "--query",
+        help="SQL sources only: read the result of this query. Mutually exclusive with --table.",
+    ),
+    password_cmd: str | None = typer.Option(
+        None,
+        "--password-cmd",
+        help='Shell command whose stdout is the SQL password (e.g. "op read op://vault/db/pw").',
+    ),
+    connection_timeout: int = typer.Option(
+        300,
+        "--connection-timeout",
+        min=1,
+        help="SQL sources only: connection/query timeout in seconds.",
     ),
 ) -> None:
     if model != "cart":
         raise typer.BadParameter(f"model={model!r} is not supported by this build. Use 'cart'.")
 
-    console.print(f"[dim]reading[/] {input_path}")
-    df = source_file.read(input_path)
-    df = sample_frame(df, fit_rows, seed=seed, console=console, label="fit")
+    source_spec = resolve_source(
+        input_path,
+        table=sql_table,
+        query=sql_query,
+        password_cmd=password_cmd,
+        connection_timeout=connection_timeout,
+    )
+    source_label = _source_label(source_spec)
+    console.print(f"[dim]reading[/] {source_label}")
+    sql_fit_rows = fit_rows if isinstance(source_spec, DatabaseUri) else None
+    df = source_read(source_spec, fit_rows=sql_fit_rows, seed=seed, timeout=connection_timeout)
+    # File sources still client-sample; SQL was already capped at the warehouse.
+    if not isinstance(source_spec, DatabaseUri):
+        df = sample_frame(df, fit_rows, seed=seed, console=console, label="fit")
     console.print(f"[dim]inferring schema for[/] {df.height} rows x {df.width} columns")
-    table = infer_table(input_path.stem, df)
+    table_name = _source_table_name(source_spec)
+    table = infer_table(table_name, df)
 
     schema_toml = None
     if schema is not None:
@@ -105,11 +149,14 @@ def sample(
         readable=True,
         help="Path to a fitted artifact produced by `doppel fit`.",
     ),
-    output: Path = typer.Option(
+    output: str = typer.Option(
         ...,
         "--output",
         "-o",
-        help="Destination path for the synthetic dataset.",
+        help=(
+            "Destination — file path or DuckDB URI (duckdb:///path.db?table=NAME). "
+            "Warehouse writes (Snowflake/Postgres) are not supported."
+        ),
     ),
     rows: int = typer.Option(
         ...,
@@ -125,6 +172,7 @@ def sample(
         help="How to handle free-text columns in output: sample, hash, fake, or drop.",
     ),
 ) -> None:
+    sink_spec = resolve_sink(output)
     console.print(f"[dim]loading[/] {artifact}")
     synth, manifest, schema_toml = load_artifact(artifact)
     console.print(
@@ -152,9 +200,35 @@ def sample(
     if text_policy is not TextPolicy.SAMPLE:
         console.print(f"[dim]text policy[/] {text_policy.value}")
 
-    console.print(f"[dim]writing[/] {output}")
-    sink_file.write(out_df, output)
-    console.print(f"[green]ok[/] wrote {out_df.height} rows x {out_df.width} cols -> {output}")
+    sink_label = _sink_label(sink_spec)
+    console.print(f"[dim]writing[/] {sink_label}")
+    sink_write(out_df, sink_spec)
+    console.print(f"[green]ok[/] wrote {out_df.height} rows x {out_df.width} cols -> {sink_label}")
+
+
+def _source_label(spec: FilePath | DatabaseUri) -> str:
+    """Human-readable identifier — file path or redacted URI."""
+    if isinstance(spec, FilePath):
+        return str(spec.path)
+    return spec.uri
+
+
+def _sink_label(spec: object) -> str:
+    """Human-readable identifier for a SinkSpec."""
+    from doppel.sources.spec import DuckDbSink
+
+    if isinstance(spec, FilePath):
+        return str(spec.path)
+    if isinstance(spec, DuckDbSink):
+        return f"duckdb:///{spec.path}?table={spec.table}"
+    return str(spec)
+
+
+def _source_table_name(spec: FilePath | DatabaseUri) -> str:
+    """Pick a table-name for schema inference."""
+    if isinstance(spec, FilePath):
+        return spec.path.stem
+    return spec.table or "query"
 
 
 def _detect_pii_if_available(table: Table) -> list[PIIDetection]:

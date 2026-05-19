@@ -20,14 +20,15 @@ from rich.progress import (
     TimeElapsedColumn,
 )
 
-from doppel.cli._common import sample_frame
+from doppel.cli._common import resolve_source, sample_frame
 from doppel.quality.aggregate import QualityReport
 from doppel.quality.aggregate import compute as compute_quality
 from doppel.report.html import to_html
 from doppel.report.json import to_json
 from doppel.report.terminal import render as render_terminal
 from doppel.schema.infer import infer_table
-from doppel.sources import file as source_file
+from doppel.sources import read as source_read
+from doppel.sources.spec import DatabaseUri, FilePath
 
 console = Console()
 
@@ -97,17 +98,13 @@ def check_thresholds(report: QualityReport, spec: ThresholdSpec) -> list[Thresho
 
 
 def run(
-    real: Path = typer.Argument(
+    real: str = typer.Argument(
         ...,
-        exists=True,
-        readable=True,
-        help="Path to the real (source) dataset.",
+        help="Real (source) dataset — file path or database URI.",
     ),
-    synth: Path = typer.Argument(
+    synth: str = typer.Argument(
         ...,
-        exists=True,
-        readable=True,
-        help="Path to the synthetic dataset.",
+        help="Synthetic dataset — file path or database URI.",
     ),
     html: Path | None = typer.Option(
         None,
@@ -168,17 +165,57 @@ def run(
             "responsive."
         ),
     ),
+    sql_table: str | None = typer.Option(
+        None,
+        "--table",
+        help=(
+            "SQL sources only: table to read from. Applies to ALL URI arguments in this "
+            "invocation (asymmetric per-arg selection not supported in v1)."
+        ),
+    ),
+    sql_query: str | None = typer.Option(
+        None,
+        "--query",
+        help="SQL sources only: read the result of this query. Applies to ALL URI arguments.",
+    ),
+    password_cmd: str | None = typer.Option(
+        None,
+        "--password-cmd",
+        help='Shell command whose stdout is the SQL password (e.g. "op read op://vault/db/pw").',
+    ),
+    connection_timeout: int = typer.Option(
+        300,
+        "--connection-timeout",
+        min=1,
+        help="SQL sources only: connection/query timeout in seconds.",
+    ),
 ) -> None:
-    console.print(f"[dim]reading[/] {real}")
-    real_df = source_file.read(real)
-    console.print(f"[dim]reading[/] {synth}")
-    synth_df = source_file.read(synth)
+    real_spec = _resolve_diff_arg(
+        real,
+        sql_table=sql_table,
+        sql_query=sql_query,
+        password_cmd=password_cmd,
+        connection_timeout=connection_timeout,
+    )
+    synth_spec = _resolve_diff_arg(
+        synth,
+        sql_table=sql_table,
+        sql_query=sql_query,
+        password_cmd=password_cmd,
+        connection_timeout=connection_timeout,
+    )
+    real_label = _diff_label(real_spec)
+    synth_label = _diff_label(synth_spec)
+    console.print(f"[dim]reading[/] {real_label}")
+    real_df = source_read(real_spec, timeout=connection_timeout)
+    console.print(f"[dim]reading[/] {synth_label}")
+    synth_df = source_read(synth_spec, timeout=connection_timeout)
     real_df = sample_frame(real_df, sample_rows, seed=sample_seed, console=console, label="real")
     synth_df = sample_frame(
         synth_df, sample_rows, seed=sample_seed + 1, console=console, label="synth"
     )
 
-    columns = infer_table(real.stem, real_df).columns
+    columns = infer_table(_diff_table_name(real_spec), real_df).columns
     console.print(
         f"[dim]computing report for[/] {len(columns)} columns "
         f"({real_df.height} real vs {synth_df.height} synth rows)"
@@ -188,8 +225,8 @@ def run(
             real_df,
             synth_df,
             columns,
-            real_label=real.name,
-            synth_label=synth.name,
+            real_label=real_label,
+            synth_label=synth_label,
             max_dcr_rows=max_dcr_rows,
             privacy_progress=progress_cb,
             privacy_sample_seed=sample_seed,
@@ -254,6 +291,46 @@ def _dcr_progress(
 
     with progress:
         yield _cb
+
+
+def _resolve_diff_arg(
+    value: str,
+    *,
+    sql_table: str | None,
+    sql_query: str | None,
+    password_cmd: str | None,
+    connection_timeout: int,
+) -> FilePath | DatabaseUri:
+    """Resolve a diff positional argument.
+
+    The `--table` / `--query` flags only apply to URI arguments. A file path
+    argument with `--table` set is allowed only when at least one side is a
+    URI (the flag applies to the URI side, file side is untouched)."""
+    # Try a file path first; only require --table/--query if we end up with
+    # a URI. We achieve this by routing through the regular parser but with
+    # `--table` / `--query` only when the value looks like a URI.
+    looks_like_uri = "://" in value
+    table_for_parse = sql_table if looks_like_uri else None
+    query_for_parse = sql_query if looks_like_uri else None
+    return resolve_source(
+        value,
+        table=table_for_parse,
+        query=query_for_parse,
+        password_cmd=password_cmd,
+        connection_timeout=connection_timeout,
+    )
+
+
+def _diff_label(spec: FilePath | DatabaseUri) -> str:
+    if isinstance(spec, FilePath):
+        return spec.path.name
+    return spec.uri
+
+
+def _diff_table_name(spec: FilePath | DatabaseUri) -> str:
+    if isinstance(spec, FilePath):
+        return spec.path.stem
+    return spec.table or "query"
 
 
 def _threshold_payload(

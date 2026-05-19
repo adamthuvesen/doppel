@@ -45,9 +45,15 @@ dependencies = [
 
 [project.optional-dependencies]
 pii = ["presidio-analyzer>=2.2", "faker>=26"]
+sql = [
+    "connectorx>=0.3",
+    "pyarrow>=14",
+]
 all = [
     "presidio-analyzer>=2.2",
     "faker>=26",
+    "connectorx>=0.3",
+    "pyarrow>=14",
 ]
 
 [project.scripts]

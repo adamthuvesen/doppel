@@ -70,6 +70,25 @@ the same `Rng` whether or not a where is in play; rejected rows just shift which
 draws survive into the output. Same `(--seed, --where, -n, --max-oversample)` →
 byte-identical output. Tested in `tests/test_where_cli.py::test_gen_where_is_deterministic_given_seed`.
 
+## SQL sources
+
+When the input is a database URI, `--seed` propagates into the warehouse's
+sample clause:
+
+- Snowflake: `SAMPLE (N ROWS) SEED (S)` — fully seedable; same seed and
+  same source row order yields the same sample.
+- Postgres: `TABLESAMPLE BERNOULLI(p) REPEATABLE(S)` — seedable; the
+  client-side `LIMIT N` keeps the exact-row-count contract.
+- DuckDB: `USING SAMPLE N ROWS (REPEATABLE S)` — seedable.
+- ANSI fallback (`ORDER BY RANDOM() LIMIT N`) for any other vendor:
+  determinism is vendor-dependent. Doppel emits a one-line stderr
+  warning when this branch fires.
+
+The pushdown SQL builders in `src/doppel/sources/sql.py::build_pushdown_sql`
+are pure functions; the unit tests in `tests/test_sql_pushdown.py` cover
+every branch.
+
+
 ## Scope
 
 - **Cross-process**: same seed → identical output across two CLI runs. Tested.

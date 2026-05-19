@@ -6,7 +6,8 @@
 
 Generates synthetic tabular data that matches the statistical fingerprint of a real
 dataset — distributions, correlations, null patterns, cardinality, and relational
-structure. Reads CSV, TSV, Parquet, JSON/NDJSON, Arrow/IPC. Deterministic given a `--seed`.
+structure. Reads CSV, TSV, Parquet, JSON/NDJSON, Arrow/IPC, **and SQL warehouses
+(DuckDB / Snowflake / Postgres) via database URIs**. Deterministic given a `--seed`.
 
 ## Privacy
 
@@ -77,6 +78,39 @@ Useful flags:
 - Soft repairs (missingness flags, count bounds) are applied after sampling; a
   summary prints if any fired.
 
+## SQL warehouses
+
+Install the optional `[sql]` extra and pass a database URI as the input
+(or output, for DuckDB only):
+
+```bash
+pip install "doppeldata[sql]"
+
+# DuckDB — works without [sql] (uses the top-level duckdb dep):
+doppel gen "duckdb:///data.db" --table users -n 1000 -o synth.csv --seed 1
+
+# Snowflake — requires [sql]:
+doppel gen "snowflake://adam@account/db/schema?warehouse=WH" \
+  --table USERS \
+  --password-cmd "op read op://vault/snowflake/password" \
+  --fit-rows 25000 -n 1000 -o synth.csv --seed 1
+
+# Postgres — requires [sql]:
+doppel gen "postgres://adam@host/dbname" \
+  --query "SELECT * FROM users WHERE plan = 'enterprise'" \
+  --password-cmd "op read op://vault/postgres/password" \
+  -n 1000 -o synth.parquet --seed 1
+
+# DuckDB output sink (file path with table inside):
+doppel gen sales.csv -n 10000 -o "duckdb:///output.db?table=synth_sales" --seed 1
+```
+
+Auth precedence: `--password-cmd` > `${ENV_VAR}` interpolation > URI-embedded
+(warned, appears in shell history). Snowflake/Postgres sinks are **not**
+supported — writes go to files or DuckDB. See
+[docs/sql-connectors.md](docs/sql-connectors.md) for URI format, sample
+pushdown semantics, the row-count probe, and per-vendor caveats.
+
 ## CI gate
 
 `doppel diff` exits non-zero on threshold breach:
@@ -115,6 +149,10 @@ Exit codes: `0` pass, `2` threshold breach.
   parent-table `--where` does **not** propagate to child distributions in v1.
 - Undetected free-text may copy verbatim from source; see Privacy above.
 - No differential privacy (v0.2).
+- **Warehouse writes are out of scope.** SQL sinks are DuckDB only;
+  Snowflake/Postgres `-o snowflake://...` is rejected at parse time. Write
+  to a file or DuckDB, then load into your warehouse with your normal ELT
+  tooling.
 
 ## Development
 

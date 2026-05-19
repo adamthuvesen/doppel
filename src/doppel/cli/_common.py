@@ -21,6 +21,12 @@ from rich.progress import (
 
 from doppel.quality.aggregate import compute as compute_quality
 from doppel.schema.types import Column
+from doppel.sources.spec import (
+    SinkSpec,
+    SourceSpec,
+    parse_sink_spec,
+    parse_source_spec,
+)
 from doppel.synth.cart import RepairSummary
 
 _QUALITY_SAMPLE_ROWS = 5_000
@@ -150,6 +156,45 @@ def print_quality_summary(console: Console, summary: QualitySummary) -> None:
             f"[yellow]tip[/]: column {leak.column!r} is {pct}% verbatim from source; "
             "rerun with --text-policy hash to mitigate"
         )
+
+
+def resolve_source(
+    value: str,
+    *,
+    table: str | None,
+    query: str | None,
+    password_cmd: str | None,
+    connection_timeout: int,
+) -> SourceSpec:
+    """Resolve a CLI source argument into a `SourceSpec`.
+
+    The CLI accepts the positional as a raw `str` (path or URI) so click does
+    not need to inspect sibling options during param conversion. We parse here,
+    at the start of every command, so error messages route through the same
+    `typer.BadParameter` path."""
+    return parse_source_spec(
+        value,
+        table=_normalise_optional_str(table),
+        query=_normalise_optional_str(query),
+        password_cmd=_normalise_optional_str(password_cmd),
+        password_cmd_timeout=min(connection_timeout, 60),
+    )
+
+
+def resolve_sink(value: str) -> SinkSpec:
+    """Resolve a CLI `-o` value into a `SinkSpec`. Centralised so the rejection
+    messages for warehouse sinks come from one place."""
+    return parse_sink_spec(value)
+
+
+def _normalise_optional_str(value: object) -> str | None:
+    """Treat None / empty / whitespace as 'not provided'."""
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        return None
+    stripped = value.strip()
+    return stripped or None
 
 
 def print_repair_summary(console: Console, summary: RepairSummary) -> None:

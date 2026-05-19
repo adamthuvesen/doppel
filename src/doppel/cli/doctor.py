@@ -36,6 +36,8 @@ _CORE_DEPS = (
 _EXTRAS = (
     _Probe("pii / presidio-analyzer", "presidio_analyzer", required=False),
     _Probe("pii / faker", "faker", required=False),
+    _Probe("sql / connectorx", "connectorx", required=False),
+    _Probe("sql / pyarrow", "pyarrow", required=False),
 )
 
 

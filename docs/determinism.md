@@ -32,6 +32,16 @@ diverge.
 
 Regression test: `tests/test_seed.py`.
 
+## Pure functions don't need an RNG
+
+Calendar-feature extraction
+([src/doppel/schema/datetime.py](../src/doppel/schema/datetime.py)) is a pure function
+of the source datetime — no RNG involved. `hour`, `dow`, `month`, etc. are deterministic
+Polars `dt.*` accessor outputs. Toggling `calendar_features` in `schema.toml` MAY
+change the synth output (the CART feature matrix shape changes, which can change
+which leaves rows land in), but each configuration is itself fully deterministic
+under `--seed`.
+
 ## Why `gen` re-seeds three times
 
 [src/doppel/cli/gen.py](../src/doppel/cli/gen.py) calls `Rng.from_seed(seed)` three

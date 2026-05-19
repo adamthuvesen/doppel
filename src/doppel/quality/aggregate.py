@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import polars as pl
 
@@ -11,7 +11,7 @@ from doppel.quality import correlations as corr_mod
 from doppel.quality import marginals as marg_mod
 from doppel.quality import privacy as priv_mod
 from doppel.quality.correlations import CorrelationReport
-from doppel.quality.marginals import MarginalScore
+from doppel.quality.marginals import CalendarFidelity, MarginalScore
 from doppel.quality.privacy import PrivacyReport
 from doppel.schema.heuristics import is_integer_dtype, looks_like_count_column
 from doppel.schema.types import Column, ColumnType
@@ -43,6 +43,9 @@ class QualityReport:
     privacy: PrivacyReport
     dtype_mismatches: list[DtypeMismatch]
     invariant_issues: list[InvariantIssue]
+    # Per-datetime-column calendar-feature KS marginals. Keyed by column name;
+    # value is a list of CalendarFidelity, one per resolved feature (e.g. hour/dow/month).
+    calendar_fidelity: dict[str, list[CalendarFidelity]] = field(default_factory=dict)
 
     @property
     def avg_marginal(self) -> float:
@@ -82,6 +85,7 @@ def compute(
         ),
         dtype_mismatches=_dtype_mismatches(real, synth),
         invariant_issues=_count_invariant_issues(real, synth, columns),
+        calendar_fidelity=marg_mod.compute_calendar_marginals(real, synth, columns),
     )
 
 

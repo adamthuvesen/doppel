@@ -82,6 +82,8 @@ def render(report: QualityReport, console: Console, *, top_n: int | None = None)
         )
         console.print(issue_table)
 
+    _render_calendar_fidelity(report, console)
+
     console.print()
 
     corr_table = Table(title="Correlation structure", show_header=False)
@@ -111,3 +113,23 @@ def render(report: QualityReport, console: Console, *, top_n: int | None = None)
     priv_table.add_row("DCR p50 (median)", f"{report.privacy.percentile_50:.4f}")
     priv_table.add_row("DCR mean", f"{report.privacy.mean_distance:.4f}")
     console.print(priv_table)
+
+
+def _render_calendar_fidelity(report: QualityReport, console: Console) -> None:
+    """Compact per-column calendar fidelity table.
+
+    Shown whenever any datetime column has resolvable calendar features (regardless of
+    whether they were enabled at synthesis time — informative either way).
+    """
+    if not report.calendar_fidelity:
+        return
+    console.print()
+    cal_table = Table(title="Calendar fidelity (KS, lower = closer)", show_header=True)
+    cal_table.add_column("Column")
+    cal_table.add_column("Feature")
+    cal_table.add_column("KS", justify="right")
+    for column_name, scores in report.calendar_fidelity.items():
+        for score in scores:
+            value = f"{score.value:.4f}" if math.isfinite(score.value) else "n/a"
+            cal_table.add_row(escape(column_name), score.feature, value)
+    console.print(cal_table)

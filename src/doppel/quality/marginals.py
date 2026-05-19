@@ -2,6 +2,8 @@
 
 - Numeric / Datetime: 2-sample Kolmogorov-Smirnov statistic (lower is better, 0 = identical CDFs).
 - Categorical / Text: Total Variation Distance over the union of observed categories.
+- Datetime columns also get per-calendar-feature KS scores under the "calendar fidelity"
+  signal — captures hour/dow/month patterns the whole-epoch KS can miss.
 
 KEY columns are skipped — uniqueness is a structural property, not a marginal one.
 """
@@ -15,7 +17,14 @@ import numpy as np
 import polars as pl
 from scipy.stats import ks_2samp
 
-from doppel.schema.datetime import to_float_array
+from doppel.schema.datetime import (
+    CalendarFeature,
+    default_features_for,
+    to_float_array,
+)
+from doppel.schema.datetime import (
+    calendar_features as extract_calendar_features,
+)
 from doppel.schema.nullable import null_rate
 from doppel.schema.types import Column, ColumnType
 
@@ -35,6 +44,22 @@ class MarginalScore:
     verbatim_rate: float | None = None
 
 
+@dataclass(frozen=True)
+class CalendarFidelity:
+    """Per-feature KS score for one datetime column's calendar marginals.
+
+    Computed regardless of whether calendar features are enabled in the synthesizer
+    schema — the signal is informative either way ("you have a weekly pattern your
+    model isn't capturing").
+    """
+
+    column: str
+    feature: str  # CalendarFeature value, e.g. "hour", "dow", "month"
+    value: float  # KS distance between real and synth distributions
+    n_real: int
+    n_synth: int
+
+
 def compute(real: pl.DataFrame, synth: pl.DataFrame, columns: list[Column]) -> list[MarginalScore]:
     scores: list[MarginalScore] = []
     for col in columns:
@@ -44,6 +69,70 @@ def compute(real: pl.DataFrame, synth: pl.DataFrame, columns: list[Column]) -> l
             continue
         scores.append(_score_column(col, real[col.name], synth[col.name]))
     return scores
+
+
+def compute_calendar_marginals(
+    real: pl.DataFrame, synth: pl.DataFrame, columns: list[Column]
+) -> dict[str, list[CalendarFidelity]]:
+    """Per-feature KS distances for every datetime/date column on both frames.
+
+    For each DATETIME column, the resolved calendar feature set is extracted from both
+    real and synth, then KS-tested feature-by-feature. The result is a mapping of column
+    name → list of one `CalendarFidelity` per feature. Columns whose source dtype is not
+    temporal, or whose default feature set is empty (Time, Duration), are skipped.
+
+    Calendar fidelity is computed regardless of the column's `calendar_features` schema
+    setting — the metric is informative either way and the spec mandates it.
+    """
+    out: dict[str, list[CalendarFidelity]] = {}
+    for col in columns:
+        if col.type is not ColumnType.DATETIME:
+            continue
+        if col.name not in real.columns or col.name not in synth.columns:
+            continue
+        real_series = real[col.name]
+        synth_series = synth[col.name]
+        if not real_series.dtype.is_temporal() or not synth_series.dtype.is_temporal():
+            continue
+        # Compute on the configured set when non-empty, otherwise fall back to the
+        # dtype default so disabled columns still surface a calendar signal.
+        configured = col.calendar_features
+        features: tuple[CalendarFeature, ...]
+        if configured is None or len(configured) == 0:
+            features = default_features_for(real_series.dtype)
+        else:
+            features = configured
+        if not features:
+            continue
+        real_cal = extract_calendar_features(real_series, features)
+        synth_cal = extract_calendar_features(synth_series, features)
+        per_feature: list[CalendarFidelity] = []
+        for feature in features:
+            r = real_cal[feature.value].drop_nulls()
+            s = synth_cal[feature.value].drop_nulls()
+            ks = _ks_int_series(r, s)
+            per_feature.append(
+                CalendarFidelity(
+                    column=col.name,
+                    feature=feature.value,
+                    value=ks,
+                    n_real=int(r.len()),
+                    n_synth=int(s.len()),
+                )
+            )
+        if per_feature:
+            out[col.name] = per_feature
+    return out
+
+
+def _ks_int_series(real: pl.Series, synth: pl.Series) -> float:
+    """KS distance for two small-integer series (calendar features)."""
+    if real.len() == 0 or synth.len() == 0:
+        return float("nan")
+    real_arr = real.cast(pl.Float64).to_numpy()
+    synth_arr = synth.cast(pl.Float64).to_numpy()
+    statistic: float = ks_2samp(real_arr, synth_arr, method="asymp")[0]  # type: ignore[assignment]
+    return float(statistic)
 
 
 def _score_column(col: Column, real: pl.Series, synth: pl.Series) -> MarginalScore:

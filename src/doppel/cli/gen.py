@@ -426,6 +426,13 @@ def _print_explain(synth: CartSynthesizer, table: Table) -> None:
             notes_bits.append(f"pool={info.nonnull_pool_size}")
         if info.leaf_count:
             notes_bits.append(f"leaves={info.leaf_count}")
+        if info.calendar_features is not None:
+            cal = (
+                f"calendar=[{', '.join(info.calendar_features)}]"
+                if info.calendar_features
+                else "calendar=[disabled]"
+            )
+            notes_bits.append(cal)
         table_view.add_row(col.name, str(col.type.value), info.strategy, ", ".join(notes_bits))
 
     err.print(table_view)

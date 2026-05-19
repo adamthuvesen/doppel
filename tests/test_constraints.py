@@ -5,7 +5,7 @@ from __future__ import annotations
 import polars as pl
 import pytest
 
-from doppel.constraints import derived as derived_mod
+from doppel.constraints import expr as derived_mod
 from doppel.constraints import reject as reject_mod
 from doppel.constraints.dsl import (
     DerivedConstraint,

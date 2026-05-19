@@ -39,4 +39,4 @@ htmlcov/
 *.doppel
 report.html
 report.json
-openspec/
+openspec/custom/

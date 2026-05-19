@@ -74,7 +74,9 @@ def synthesize_with_constraints(
 ) -> tuple[Dataset, ConstraintReport]:
     parts = _partition(constraints)
     derived_labels = [c.column for c in parts.derived]
-    compiled_wheres = _compile_wheres(parts.wheres, set(synth.original_columns))
+    column_names = {c.name for c in synth.original_columns}
+    derived_names = {c.column for c in parts.derived}
+    compiled_wheres = _compile_wheres(parts.wheres, column_names | derived_names)
 
     kept = pl.DataFrame()
     factor = initial_factor

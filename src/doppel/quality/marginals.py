@@ -19,9 +19,11 @@ from scipy.stats import ks_2samp
 
 from doppel.schema.datetime import (
     CalendarFeature,
-    calendar_features as extract_calendar_features,
     default_features_for,
     to_float_array,
+)
+from doppel.schema.datetime import (
+    calendar_features as extract_calendar_features,
 )
 from doppel.schema.nullable import null_rate
 from doppel.schema.types import Column, ColumnType

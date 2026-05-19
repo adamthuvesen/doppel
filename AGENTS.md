@@ -94,8 +94,11 @@ src/doppel/
 
 Design choices, not bugs:
 
-- **Datetime decomposition is epoch-seconds only.** Business-hours / weekday patterns
-  are lost. Adding `hour`/`dow`/`is_weekend` derived features is a future refinement.
+- **Datetime modelling: epoch-seconds + calendar features.** The datetime itself is
+  modeled as Int64 epoch_s; `hour`/`dow`/`month` (or `dow`/`month` for `pl.Date`) are
+  injected into the CART feature matrix as predictors for downstream columns. Override
+  per-column in `schema.toml` (`calendar_features = false`, or a list of allowlisted
+  feature names). Sub-second precision is still dropped.
 - **Multi-table cross-correlations are not preserved.** Per-table CART is fit
   independently; FK integrity holds, but "gold users place bigger orders" does not.
   `inherit_parent_features` schema flag is parsed (raises `NotImplementedError` until

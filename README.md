@@ -96,8 +96,11 @@ Exit codes: `0` pass, `2` threshold breach.
 
 ## Limitations (v0.1)
 
-- Datetime modelling is epoch-seconds only — hour-of-day, day-of-week, and
-  business-hours patterns aren't preserved.
+- Datetime modelling uses epoch-seconds plus a small set of calendar features
+  (`hour`, `dow`, `month` by default — `dow`, `month` for `pl.Date`) as
+  predictors for downstream columns. Override per-column in `schema.toml` via
+  `calendar_features = false` or `calendar_features = ["hour", "dow"]`.
+  Sub-second precision is still dropped.
 - Multi-table preserves FK integrity and per-table marginals, not cross-table
   correlations. `inherit_parent_features` schema flag is parsed but not yet
   wired (v0.2).

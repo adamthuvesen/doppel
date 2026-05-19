@@ -10,7 +10,6 @@ import pytest
 
 from doppel.sources.sql import build_count_sql, build_pushdown_sql
 
-
 # ---------- build_pushdown_sql ----------
 
 
@@ -114,14 +113,12 @@ def test_count_sql_duckdb_table() -> None:
 
 
 def test_count_sql_with_query_wraps() -> None:
-    sql = build_count_sql(
-        "snowflake", table=None, query="SELECT * FROM users WHERE active = TRUE"
-    )
+    sql = build_count_sql("snowflake", table=None, query="SELECT * FROM users WHERE active = TRUE")
     assert "COUNT(*)" in sql
     assert "_doppel_probe" in sql
     assert "WHERE active = TRUE" in sql
 
 
 def test_count_sql_requires_table_or_query() -> None:
-    with pytest.raises(ValueError, match="table.*query"):
+    with pytest.raises(ValueError, match=r"table.*query"):
         build_count_sql("snowflake", table=None, query=None)

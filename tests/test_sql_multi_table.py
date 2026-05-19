@@ -24,9 +24,7 @@ def two_table_duckdb(tmp_path: Path) -> Path:
     db = tmp_path / "source.db"
     con = duckdb.connect(str(db))
     con.execute("CREATE TABLE users (user_id INTEGER, name VARCHAR, plan VARCHAR)")
-    con.execute(
-        "CREATE TABLE orders (order_id INTEGER, user_id INTEGER, amount DOUBLE)"
-    )
+    con.execute("CREATE TABLE orders (order_id INTEGER, user_id INTEGER, amount DOUBLE)")
     users = [(i, f"u{i}", "gold" if i % 3 == 0 else "free") for i in range(1, 51)]
     orders = [(i, ((i - 1) % 50) + 1, round(10 + (i % 100), 2)) for i in range(1, 201)]
     con.executemany("INSERT INTO users VALUES (?, ?, ?)", users)
@@ -63,9 +61,7 @@ parent_column = "user_id"
     assert len(dataset.edges) == 1
 
 
-def test_multi_table_mixed_path_and_uri(
-    two_table_duckdb: Path, tmp_path: Path
-) -> None:
+def test_multi_table_mixed_path_and_uri(two_table_duckdb: Path, tmp_path: Path) -> None:
     # Materialise users as parquet; orders stays in DuckDB.
     users_parquet = tmp_path / "users.parquet"
     con = duckdb.connect(str(two_table_duckdb))

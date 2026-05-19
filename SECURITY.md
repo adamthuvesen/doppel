@@ -35,7 +35,52 @@ fitted synthesizer. A crafted pickle payload can execute arbitrary code on load.
   `tar -xzOf model.doppel manifest.json | jq`. Or use `doppel artifact info <file>`,
   which never invokes the unpickler.
 
-### 2. Synthetic-output privacy
+### 2. SQL connectors and credentials
+
+When the `[sql]` extra is installed, doppel can read from DuckDB, Snowflake,
+and Postgres via database URIs. The threat surface and mitigations:
+
+**Password handling.** The CLI accepts three orthogonal auth mechanisms:
+
+1. `--password-cmd "<shell>"` (recommended): stdout becomes the password.
+   Doppel never sees the plaintext on argv or in shell history.
+2. `${VAR}` interpolation in the URI: expanded from the environment before
+   parsing. Missing variables raise a clear error naming the variable.
+3. URI-embedded passwords (`scheme://user:pass@host/...`): supported because
+   Polars accepts this form natively, but **doppel emits a one-line stderr
+   warning** that the password appears in shell history. Prefer (1) or (2).
+
+The parser substitutes `:***@` into a redacted form of the URI at the
+parser boundary; **only** the redacted form appears in logs, error
+messages, or `--explain` output. The raw form is held in a separate field
+and passed straight to the driver. We have a regression test that drives a
+connection failure and asserts the raw password is absent from the message.
+
+**`--query` is developer-trust input.** Doppel does **not** sanitise the
+`--query` argument against SQL injection. The user owns the credentials and
+the warehouse, so a malicious query is an own-goal, not a doppel
+vulnerability. We document this in CLI help and treat the query string the
+same way `bash -c` treats its argument.
+
+**Vendor driver vulnerabilities.** ConnectorX is the v1 read driver and
+ships its own native code. A vulnerability in ConnectorX or its underlying
+libraries (Arrow, libpq, etc.) is out of scope for the doppel threat
+model — keep your `[sql]` extra current with `pip install -U
+"doppeldata[sql]"`.
+
+**ADBC migration plan.** ConnectorX has a moderate bus factor. The
+per-vendor SQL generators (`sources/sql.py`) are driver-agnostic and the
+URI dispatch happens entirely in `sources/spec.py`, so swapping ConnectorX
+for ADBC (`adbc-driver-snowflake`, `adbc-driver-postgresql`) when the
+ecosystem matures is a one-line change in `_read_via_connectorx`. v2
+roadmap.
+
+**Warehouse writes are explicitly out of scope.** Snowflake and Postgres
+sinks raise at parse time. DuckDB writes are file writes — same blast
+radius as Parquet. This keeps the v1 surface area honest: doppel is a
+synth tool, not an ELT tool.
+
+### 3. Synthetic-output privacy
 
 doppel's privacy posture is **heuristic**, not formal:
 

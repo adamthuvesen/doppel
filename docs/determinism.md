@@ -53,6 +53,24 @@ Sharing one `Rng` across all three would mean any fit-time change (e.g. adding a
 column) shifts the sample output even when no sampling logic changed. Three roots
 keep each phase stable under refactors.
 
+## SQL sources
+
+When the input is a database URI, `--seed` propagates into the warehouse's
+sample clause:
+
+- Snowflake: `SAMPLE (N ROWS) SEED (S)` — fully seedable; same seed and
+  same source row order yields the same sample.
+- Postgres: `TABLESAMPLE BERNOULLI(p) REPEATABLE(S)` — seedable; the
+  client-side `LIMIT N` keeps the exact-row-count contract.
+- DuckDB: `USING SAMPLE N ROWS (REPEATABLE S)` — seedable.
+- ANSI fallback (`ORDER BY RANDOM() LIMIT N`) for any other vendor:
+  determinism is vendor-dependent. Doppel emits a one-line stderr
+  warning when this branch fires.
+
+The pushdown SQL builders in `src/doppel/sources/sql.py::build_pushdown_sql`
+are pure functions; the unit tests in `tests/test_sql_pushdown.py` cover
+every branch.
+
 ## Scope
 
 - **Cross-process**: same seed → identical output across two CLI runs. Tested.

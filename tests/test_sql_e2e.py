@@ -309,19 +309,21 @@ def test_connection_error_redacts_password(mock_df: pl.DataFrame) -> None:
     def raise_with_pw(**kwargs: Any) -> pl.DataFrame:
         raise RuntimeError("connection refused")
 
-    with patch("doppel.sources.sql.pl.read_database_uri", side_effect=raise_with_pw):
-        with patch("doppel.sources.sql._probe_row_count", return_value=100):
-            spec = parse_source_spec(
-                "snowflake://user:hunter2@account/db/s?warehouse=WH",
-                table="USERS",
-                query=None,
-                password_cmd=None,
-            )
-            assert isinstance(spec, DatabaseUri)
-            with pytest.raises(WarehouseConnectionError) as exc_info:
-                source_sql.read(spec, fit_rows=None, seed=1, timeout=300)
-            assert "hunter2" not in str(exc_info.value)
-            assert ":***@" in str(exc_info.value)
+    with (
+        patch("doppel.sources.sql.pl.read_database_uri", side_effect=raise_with_pw),
+        patch("doppel.sources.sql._probe_row_count", return_value=100),
+    ):
+        spec = parse_source_spec(
+            "snowflake://user:hunter2@account/db/s?warehouse=WH",
+            table="USERS",
+            query=None,
+            password_cmd=None,
+        )
+        assert isinstance(spec, DatabaseUri)
+        with pytest.raises(WarehouseConnectionError) as exc_info:
+            source_sql.read(spec, fit_rows=None, seed=1, timeout=300)
+        assert "hunter2" not in str(exc_info.value)
+        assert ":***@" in str(exc_info.value)
 
 
 # ---------- Missing [sql] extra (simulated) ----------
@@ -338,11 +340,13 @@ def test_missing_sql_extra_raises_install_hint(mock_df: pl.DataFrame) -> None:
     )
     assert isinstance(spec, DatabaseUri)
 
-    with patch("doppel.sources.sql._probe_row_count", return_value=100):
-        with patch("importlib.import_module") as importer:
-            importer.side_effect = ImportError("No module named 'connectorx'")
-            with pytest.raises(typer.BadParameter, match=r"\[sql\] extra"):
-                source_sql.read(spec, fit_rows=None, seed=1, timeout=300)
+    with (
+        patch("doppel.sources.sql._probe_row_count", return_value=100),
+        patch("importlib.import_module") as importer,
+    ):
+        importer.side_effect = ImportError("No module named 'connectorx'")
+        with pytest.raises(typer.BadParameter, match=r"\[sql\] extra"):
+            source_sql.read(spec, fit_rows=None, seed=1, timeout=300)
 
 
 # ---------- DuckDB does not need [sql] extra ----------

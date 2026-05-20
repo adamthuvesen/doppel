@@ -2,52 +2,47 @@
 
 [![Python](https://img.shields.io/badge/python-3.11%20%7C%203.12%20%7C%203.13-blue)](https://www.python.org/)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
-[![PyPI](https://img.shields.io/badge/pypi-doppeldata-orange)](https://pypi.org/project/doppeldata/)
 
 Generates synthetic tabular data that matches the statistical fingerprint of a real
-dataset — distributions, correlations, null patterns, cardinality, and relational
-structure. Reads CSV, TSV, Parquet, JSON/NDJSON, Arrow/IPC, **and SQL warehouses
-(DuckDB / Snowflake / Postgres) via database URIs**. Deterministic given a `--seed`.
+dataset — marginal distributions, correlations, null patterns, cardinality, and
+referential integrity. Deterministic given a `--seed`.
 
-## Privacy
+**Sources**: CSV, TSV, Parquet, JSON/NDJSON, Arrow/IPC, DuckDB, Snowflake, Postgres.  
+**Output**: any of the same file formats, or DuckDB.
 
-doppel is not a formal privacy system. The posture:
+> PyPI distribution: `doppeldata`. CLI binary and import name: `doppel`.
 
-- No differential privacy in v0.1 (no `--epsilon`).
-- Detected PII (emails, phones, names) is regenerated via Faker when the optional
-  `[pii]` extra is installed.
-- Undetected free-text is sampled with replacement and **may copy verbatim from
-  the source**. Use `--text-policy hash|fake|drop` for any identifying column.
-- Always run `doppel diff` before sharing — it reports a distance-to-closest-record
-  (DCR) percentile and a per-column verbatim-text fraction.
+## Install
 
-`doppel fit` refuses any source where Presidio detects PII (the artifact format
-doesn't yet carry detection metadata for round-trip regeneration; v0.2 roadmap).
-Use `doppel gen` for one-shot PII regeneration.
+```bash
+uv tool install doppeldata          # file sources (CSV, Parquet, etc.)
+uv tool install "doppeldata[sql]"   # + Snowflake and Postgres connectors
+uv tool install "doppeldata[pii]"   # + PII detection and Faker regeneration
+uv tool install "doppeldata[all]"   # everything
+```
 
-See [SECURITY.md](SECURITY.md) for the threat model.
+DuckDB reads and writes work without the `[sql]` extra.
 
 ## Quickstart
 
 ```bash
-uv tool install doppeldata
-
+# One-shot: fit + sample in a single command
 doppel gen examples/saas_accounts.csv -n 1000 -o synth.csv --seed 1
 # ok wrote 1000 rows x 15 cols -> synth.csv
 # quality | marginal=0.0338 | corr=0.1062 | dcr_p5=0.0507 | text_leaks=1
 # tip: column 'company_domain' is 100% verbatim from source;
 #      rerun with --text-policy hash to mitigate
 
+# Check quality and gate on thresholds
 doppel diff examples/saas_accounts.csv synth.csv \
   --max-marginal 0.10 --min-dcr-p5 0.05 --fail-on-verbatim-text
 # exit 2 on threshold breach
 
-doppel doctor   # environment + dep versions
+# Verify your environment
+doppel doctor
 ```
 
-> PyPI distribution: `doppeldata`. CLI binary and import name: `doppel`.
-
-## Usage
+## One-shot generation
 
 ```bash
 doppel gen sales.csv -n 100000 -o synth.csv
@@ -55,75 +50,150 @@ doppel gen big.parquet -n 100000 -o synth.parquet --fit-rows 25000
 doppel gen customers.csv -n 10000 -o synth.csv --text-policy hash
 doppel gen sales.csv -n 5000 -o synth.csv \
   --where "plan == 'enterprise' and tenure_days > 365" --seed 1
-doppel fit sales.parquet -o sales.doppel
-doppel sample sales.doppel -n 1_000_000 -o synth.parquet
-doppel diff sales.csv synth.csv -o report.html --sample-rows 50000
-doppel schema infer sales.csv -o schema.toml
 ```
 
-Run `doppel --help` for the full surface.
+### Key flags
 
-Useful flags:
+**`--seed N`** — same seed + same source → byte-identical result. See [docs/determinism.md](docs/determinism.md).
 
-- `--fit-rows N` on `gen`/`fit` samples large source files before fitting.
-  `gen` auto-caps to `min(rows*5, 100k)` when source > 100k rows; pass `--fit-rows 0`
-  to disable.
-- `--text-policy sample|hash|fake|drop` — use `hash|fake|drop` for identifying strings.
-- `--where EXPR` on `gen` restricts output to rows satisfying a boolean predicate.
-  Operators: `== != < <= > >=` combined with `and` / `or`. Example:
-  `--where "plan == 'enterprise' and tenure_days > 365"`. Pair with
-  `--max-oversample FACTOR` (default 4×) when the condition is rare. See Limitations.
-- `doppel diff --sample-rows N --top-n 20` speeds up large diffs.
-- `--max-dcr-rows 50000` caps the nearest-neighbour search for the DCR percentile.
-- Soft repairs (missingness flags, count bounds) are applied after sampling; a
-  summary prints if any fired.
+**`--fit-rows N`** — sample source rows before fitting. `gen` auto-caps to `min(rows × 5, 100k)` when source > 100k rows; pass `--fit-rows 0` to disable. For SQL sources, pushes the sample into the warehouse (see [SQL warehouses](#sql-warehouses)).
+
+**`--where EXPR`** — restrict output rows to a boolean predicate. Operators: `== != < <= > >=` with `and` / `or`. Uses reject-resampling; pair with `--max-oversample FACTOR` (default 4×) when the condition is rare. Single-table only in v1.
+
+**`--text-policy sample|hash|fake|drop`** — `hash` replaces free-text with a deterministic hex digest (removes verbatim risk). `fake` requires `[pii]`. `drop` removes the column.
+
+**`--explain`** — prints per-column modelling choices to stderr. Good first stop when output quality is surprising.
+
+**`--schema PATH`** — override inferred types, declare keys, and add constraints. See [Schema customization](#schema-customization).
+
+## Fit + sample (reusable artifact)
+
+Fit once, sample many times — useful when the source is large or expensive to read
+(e.g. a Snowflake query).
+
+```bash
+# Fit on source data; save a portable artifact
+doppel fit sales.parquet -o sales.doppel --seed 1
+
+# Sample from the artifact later — no source needed
+doppel sample sales.doppel -n 1_000_000 -o synth.parquet --seed 1
+
+# Inspect the artifact without loading the model
+doppel artifact info sales.doppel
+```
+
+`doppel fit` refuses sources where Presidio detects PII — the artifact format doesn't
+yet carry detection metadata for round-trip PII regeneration. Use `doppel gen` for
+one-shot PII regeneration (v0.2 roadmap).
 
 ## SQL warehouses
 
-Install the optional `[sql]` extra and pass a database URI as the input
-(or output, for DuckDB only):
+Install the `[sql]` extra and pass a database URI in place of a file path:
 
 ```bash
 pip install "doppeldata[sql]"
 
-# DuckDB — works without [sql] (uses the top-level duckdb dep):
+# DuckDB — works without [sql]:
 doppel gen "duckdb:///data.db" --table users -n 1000 -o synth.csv --seed 1
 
-# Snowflake — requires [sql]:
+# Snowflake:
 doppel gen "snowflake://adam@account/db/schema?warehouse=WH" \
   --table USERS \
   --password-cmd "op read op://vault/snowflake/password" \
   --fit-rows 25000 -n 1000 -o synth.csv --seed 1
 
-# Postgres — requires [sql]:
+# Postgres:
 doppel gen "postgres://adam@host/dbname" \
   --query "SELECT * FROM users WHERE plan = 'enterprise'" \
   --password-cmd "op read op://vault/postgres/password" \
   -n 1000 -o synth.parquet --seed 1
 
-# DuckDB output sink (file path with table inside):
+# DuckDB as output sink:
 doppel gen sales.csv -n 10000 -o "duckdb:///output.db?table=synth_sales" --seed 1
 ```
 
-Auth precedence: `--password-cmd` > `${ENV_VAR}` interpolation > URI-embedded
-(warned, appears in shell history). Snowflake/Postgres sinks are **not**
-supported — writes go to files or DuckDB. See
-[docs/sql-connectors.md](docs/sql-connectors.md) for URI format, sample
-pushdown semantics, the row-count probe, and per-vendor caveats.
+**Auth precedence**: `--password-cmd` › `${ENV_VAR}` interpolation in the URI › URI-embedded password (warns, since it appears in shell history).
 
-## CI gate
+**Sample pushdown**: `--fit-rows N` pushes sampling into the warehouse via vendor-native syntax (`SAMPLE … SEED` on Snowflake, `TABLESAMPLE BERNOULLI … REPEATABLE` on Postgres, `USING SAMPLE … REPEATABLE` on DuckDB). The seed propagates.
 
-`doppel diff` exits non-zero on threshold breach:
+**Row-count probe**: if a Snowflake or Postgres table exceeds 1,000,000 rows and `--fit-rows` is not set, doppel hard-fails and suggests `--fit-rows N`.
+
+**Sinks**: DuckDB and file formats only. Write to a file, then load into your warehouse with normal ELT tooling.
+
+See [docs/sql-connectors.md](docs/sql-connectors.md) for URI formats, per-vendor
+caveats, multi-table SQL, connection lifecycle, and the driver story.
+
+## Multi-table (relational) data
+
+For datasets with foreign-key relationships, supply a `schema.toml` that declares the
+tables and FK edges. Doppel fits each table independently and wires child rows to
+generated parent PKs — FK integrity is guaranteed.
+
+```toml
+# schema.toml
+[tables.users]
+path = "data/users.parquet"
+primary_key = "user_id"
+
+[tables.orders]
+path = "data/orders.parquet"
+primary_key = "order_id"
+
+[[foreign_keys]]
+child_table  = "orders"
+child_column = "user_id"
+parent_table = "users"
+parent_column = "user_id"
+```
+
+```bash
+# Infer a starting schema from your files
+doppel schema infer data/users.parquet data/orders.parquet -o schema.toml
+
+# Generate; -n is rows per root table
+doppel gen --schema schema.toml -n 1000 -o synth/ --seed 1
+
+# Override rows per table individually
+doppel gen --schema schema.toml -n 1000 \
+  --rows-per-table users=1000,products=50 \
+  -o synth/ --seed 1
+```
+
+SQL-backed tables are supported — replace `path` with `uri` + `table` or `query` in each `[[tables]]` block (see [docs/sql-connectors.md](docs/sql-connectors.md)).
+
+## Schema customization
+
+`schema.toml` (generated by `doppel schema infer`, validated by `doppel schema check`) lets you:
+
+- Override column types (`KEY`, `NUMERIC`, `CATEGORICAL`, `TEXT`, `BOOLEAN`, `DATETIME`, `DATE`)
+- Declare primary and foreign keys
+- Add range, inequality, and derived constraints (satisfied via reject-resampling)
+- Toggle datetime calendar features per column (`calendar_features = false` or `calendar_features = ["hour", "dow"]`)
+
+## Quality gate (`doppel diff`)
 
 ```bash
 doppel diff real.parquet synth.parquet \
   --max-marginal 0.10 \
   --min-dcr-p5 0.05 \
   --fail-on-verbatim-text \
-  --json doppel-report.json
+  --json doppel-report.json \
+  -o report.html
 ```
 
-Exit codes: `0` pass, `2` threshold breach.
+Metrics reported:
+
+| Metric | What it measures |
+|--------|-----------------|
+| `marginal` | Average KS / TVD per column (lower = better distributions) |
+| `corr_frobenius` | Frobenius distance of correlation matrix (lower = better relationships) |
+| `dcr_p5` | 5th-percentile distance-to-closest-record (higher = more privacy headroom) |
+| `verbatim_rate` | Fraction of TEXT values copied verbatim from source |
+
+**Exit codes**: `0` pass, `2` threshold breach.
+
+**`--sample-rows N`** and **`--max-dcr-rows N`** speed up large diffs by sampling
+before metric computation.
 
 ## Recipes
 
@@ -134,25 +204,25 @@ Exit codes: `0` pass, `2` threshold breach.
 - [examples/github-action/](examples/github-action/) — PR-gate GitHub Actions
   workflow.
 
+## Privacy and security
+
+doppel is not a formal privacy system. No differential privacy in v0.1. Detected PII
+(emails, phones, names) is regenerated via Faker when `[pii]` is installed. Undetected
+free-text **may copy verbatim from the source** — use `--text-policy hash|fake|drop`
+for identifying columns and always run `doppel diff` before sharing.
+
+`.doppel` artifacts contain pickled models loaded through a restricted unpickler with
+an explicit allowlist. **Only load `.doppel` files from sources you trust.**
+
+See [SECURITY.md](SECURITY.md) for the full threat model.
+
 ## Limitations (v0.1)
 
-- Datetime modelling uses epoch-seconds plus a small set of calendar features
-  (`hour`, `dow`, `month` by default — `dow`, `month` for `pl.Date`) as
-  predictors for downstream columns. Override per-column in `schema.toml` via
-  `calendar_features = false` or `calendar_features = ["hour", "dow"]`.
-  Sub-second precision is still dropped.
-- Multi-table preserves FK integrity and per-table marginals, not cross-table
-  correlations. `inherit_parent_features` schema flag is parsed but not yet
-  wired (v0.2).
-- `--where` is single-table-scoped on multi-table runs: cross-table predicates
-  (`users.plan == 'enterprise' and orders.amount > 100`) are rejected, and a
-  parent-table `--where` does **not** propagate to child distributions in v1.
-- Undetected free-text may copy verbatim from source; see Privacy above.
-- No differential privacy (v0.2).
-- **Warehouse writes are out of scope.** SQL sinks are DuckDB only;
-  Snowflake/Postgres `-o snowflake://...` is rejected at parse time. Write
-  to a file or DuckDB, then load into your warehouse with your normal ELT
-  tooling.
+- **Multi-table correlations** not preserved — tables are fit independently. `inherit_parent_features` is parsed but not wired (v0.2).
+- **`--where`** is single-table-scoped; cross-table predicates are rejected.
+- **Datetime** is modelled as epoch-seconds plus calendar features; sub-second precision is dropped.
+- **Warehouse writes** are DuckDB only.
+- **`fit` refuses PII** — use `gen` for one-shot PII regeneration.
 
 ## Development
 
@@ -160,14 +230,9 @@ Exit codes: `0` pass, `2` threshold breach.
 uv sync --all-extras
 uv run pytest
 uv run ruff check src tests
+uv run ruff format --check src tests
 uv run pyright
 ```
-
-## Security
-
-`.doppel` artifacts contain pickled fitted models. Loading goes through a restricted
-unpickler with an explicit allowlist (see [SECURITY.md](SECURITY.md)). Still: **only
-load `.doppel` files from sources you trust.**
 
 ## License
 

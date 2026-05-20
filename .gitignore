@@ -40,3 +40,6 @@ htmlcov/
 report.html
 report.json
 openspec/custom/
+
+# Local-only demo recording (regenerate with `vhs demo.tape`)
+assets/

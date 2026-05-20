@@ -1,6 +1,6 @@
 # doppel demo
 
-A small customer-health CSV to try doppel against without using real data.
+A small SaaS-accounts CSV to try doppel against without using real data.
 
 ```bash
 mkdir -p /tmp/doppel-demo
@@ -23,10 +23,10 @@ uv run doppel schema infer examples/saas_accounts.csv \
 
 Exercised features:
 
-- Unique `org_id` key.
+- Unique `account_id` key.
 - High-cardinality text (`company_domain`) — defaults will leak; use `--text-policy
   hash|fake|drop` for safer output.
-- Categorical columns (`region`, `plan`).
+- Categorical columns (`region`, `tier`).
 - Integer count invariants (`num_active_seats_l90d <= num_seats`).
 - Nullable feature + paired missingness flag.
 - Binary target flag.

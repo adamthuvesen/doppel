@@ -1,7 +1,5 @@
 # doppel
 
-[![Python](https://img.shields.io/badge/python-3.11%20%7C%203.12%20%7C%203.13-blue)](https://www.python.org/)
-[![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
 Generates synthetic tabular data that matches the statistical fingerprint of a real
 dataset — marginal distributions, correlations, null patterns, cardinality, and

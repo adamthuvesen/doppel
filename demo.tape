@@ -10,7 +10,7 @@ Set TypingSpeed 35ms
 Set PlaybackSpeed 1
 
 Hide
-Type "cd /path/to/doppel && export PS1='$ ' && clear"
+Type "export PS1='$ ' && clear"
 Enter
 Sleep 500ms
 Show

@@ -8,6 +8,13 @@ referential integrity. Deterministic given a `--seed`.
 **Sources**: CSV, TSV, Parquet, JSON/NDJSON, Arrow/IPC, DuckDB, Snowflake, Postgres.  
 **Output**: any of the same file formats, or DuckDB.
 
+**Why doppel?** A CLI-first tool that reads straight from your warehouse, gates
+synth quality with CI-friendly exit codes, and is fully deterministic — built for
+test data and CI pipelines, where libraries like [SDV](https://github.com/sdv-dev/SDV)
+(notebook-oriented, broader model menu) or [Gretel](https://gretel.ai/) (hosted,
+formal privacy) are heavier than you need. For purely-fake-without-structure data,
+reach for [Faker](https://github.com/joke2k/faker).
+
 > PyPI distribution: `doppeldata`. CLI binary and import name: `doppel`.
 
 ## Install

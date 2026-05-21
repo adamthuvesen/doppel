@@ -67,8 +67,8 @@ def compute(
     real_x, synth_x = _build_feature_matrices(real_sampled, synth_sampled, eligible)
     if real_x.shape[0] == 0 or synth_x.shape[0] == 0 or real_x.shape[1] == 0:
         return PrivacyReport(
-            n_real=real.height,
-            n_synth=synth.height,
+            n_real=real_sampled.height,
+            n_synth=synth_sampled.height,
             n_features=real_x.shape[1],
             min_distance=float("nan"),
             percentile_5=float("nan"),
@@ -80,8 +80,8 @@ def compute(
     nn.fit(real_x)
     dcr = _kneighbors_batched(nn, synth_x, batch_size=batch_size, progress=progress)
     return PrivacyReport(
-        n_real=real.height,
-        n_synth=synth.height,
+        n_real=real_sampled.height,
+        n_synth=synth_sampled.height,
         n_features=real_x.shape[1],
         min_distance=float(np.min(dcr)),
         percentile_5=float(np.percentile(dcr, 5)),

@@ -80,6 +80,24 @@ def test_dcr_batches_when_progress_is_none() -> None:
     assert calls["n"] >= 4  # ceil(10/3) = 4 batches
 
 
+def test_dcr_reports_sampled_row_counts_when_capped() -> None:
+    """`PrivacyReport.n_real/n_synth` describes the rows actually compared.
+
+    The full source sizes still live on QualityReport.real_rows/synth_rows; the
+    privacy table should not claim it compared more rows than `--max-dcr-rows` allowed.
+    """
+    from doppel.quality import privacy as priv
+
+    real = pl.DataFrame({"x": [float(i) for i in range(100)]})
+    synth = pl.DataFrame({"x": [float(i) for i in range(200)]})
+    columns = infer_table("t", real).columns
+
+    report = priv.compute(real, synth, columns, max_real_rows=10, max_synth_rows=12)
+
+    assert report.n_real == 10
+    assert report.n_synth == 12
+
+
 # -----------------------------------------------------------------------------
 # H3 / H4 — Float NaN must not contaminate quality scores.
 # -----------------------------------------------------------------------------

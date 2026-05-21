@@ -163,8 +163,11 @@ def _score_column(col: Column, real: pl.Series, synth: pl.Series) -> MarginalSco
 def _ks(col: Column, real: pl.Series, synth: pl.Series) -> float:
     # Polars distinguishes float NaN from null; drop_nulls keeps NaN, but scipy.stats
     # doesn't handle NaN and would return NaN for the statistic. Filter both here.
-    real_arr = _finite(to_float_array(col, real.drop_nulls()))
-    synth_arr = _finite(to_float_array(col, synth.drop_nulls()))
+    try:
+        real_arr = _finite(to_float_array(col, real.drop_nulls()))
+        synth_arr = _finite(to_float_array(col, synth.drop_nulls()))
+    except (TypeError, ValueError, pl.exceptions.PolarsError):
+        return float("nan")
     if real_arr.size == 0 or synth_arr.size == 0:
         return float("nan")
     # Use asymptotic method — exact is prohibitively slow for large samples and

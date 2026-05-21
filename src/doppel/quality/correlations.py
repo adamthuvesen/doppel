@@ -15,6 +15,7 @@ the two correlation structures are identical.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from itertools import combinations
 
@@ -87,12 +88,19 @@ def _pair_association(df: pl.DataFrame, a: Column, b: Column) -> float:
     b_numeric = b.type in (ColumnType.NUMERIC, ColumnType.DATETIME)
 
     if a_numeric and b_numeric:
-        return _pearson(a, sa, b, sb)
+        return _safe_association(lambda: _pearson(a, sa, b, sb))
     if not a_numeric and not b_numeric:
         return _cramers_v(sa, sb)
     if a_numeric:
-        return _correlation_ratio(to_float_array(a, sa), sb)
-    return _correlation_ratio(to_float_array(b, sb), sa)
+        return _safe_association(lambda: _correlation_ratio(to_float_array(a, sa), sb))
+    return _safe_association(lambda: _correlation_ratio(to_float_array(b, sb), sa))
+
+
+def _safe_association(compute: Callable[[], float]) -> float:
+    try:
+        return compute()
+    except (TypeError, ValueError, pl.exceptions.PolarsError):
+        return 0.0
 
 
 def _pearson(a: Column, sa: pl.Series, b: Column, sb: pl.Series) -> float:

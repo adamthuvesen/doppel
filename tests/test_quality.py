@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import math
+from datetime import datetime
 
 import polars as pl
 
@@ -120,6 +121,30 @@ def test_quality_average_ignores_non_finite_marginals() -> None:
     payload = json.loads(to_json(rep))
     all_null = next(m for m in payload["marginals"] if m["column"] == "all_null")
     assert all_null["value"] is None
+
+
+def test_quality_report_survives_synth_dtype_mismatch() -> None:
+    real = pl.DataFrame(
+        {
+            "created_at": [datetime(2024, 1, 1), datetime(2024, 1, 2)],
+            "value": [1.0, 2.0],
+        }
+    )
+    synth = pl.DataFrame(
+        {
+            "created_at": ["not-a-date", "still-not-a-date"],
+            "value": [1.0, 2.0],
+        }
+    )
+
+    report = compute_quality(real, synth, _columns(real))
+
+    assert report.dtype_mismatches[0].column == "created_at"
+    created_at = next(m for m in report.marginals if m.column == "created_at")
+    assert math.isnan(created_at.value)
+    payload = json.loads(to_json(report))
+    rendered = next(m for m in payload["marginals"] if m["column"] == "created_at")
+    assert rendered["value"] is None
 
 
 def test_key_and_text_columns_are_skipped_in_marginals() -> None:

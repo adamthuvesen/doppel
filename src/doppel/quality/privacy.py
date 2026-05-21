@@ -131,10 +131,13 @@ def _build_feature_matrices(
     real_blocks: list[np.ndarray] = []
     synth_blocks: list[np.ndarray] = []
     for col in columns:
-        if col.type in (ColumnType.NUMERIC, ColumnType.DATETIME):
-            r, s = _scale_numeric(col, real[col.name], synth[col.name])
-        else:
-            r, s = _one_hot(real[col.name], synth[col.name])
+        try:
+            if col.type in (ColumnType.NUMERIC, ColumnType.DATETIME):
+                r, s = _scale_numeric(col, real[col.name], synth[col.name])
+            else:
+                r, s = _one_hot(real[col.name], synth[col.name])
+        except (TypeError, ValueError, pl.exceptions.PolarsError):
+            continue
         real_blocks.append(r)
         synth_blocks.append(s)
     if not real_blocks:

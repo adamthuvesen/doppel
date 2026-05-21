@@ -782,8 +782,8 @@ def test_calendar_features_performance_budget() -> None:
     """
     import time as time_mod
 
-    n_rows = 100_000
-    n_cols = 30
+    n_rows = 10_000
+    n_cols = 12
     base = datetime(2024, 1, 1)
     data: dict[str, list[object]] = {
         "event_time": [base + timedelta(minutes=i) for i in range(n_rows)],

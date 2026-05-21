@@ -1,141 +1,125 @@
 # doppel
 
+Synthetic tabular data from real datasets.
 
-Generates synthetic tabular data that matches the statistical fingerprint of a real
-dataset — marginal distributions, correlations, null patterns, cardinality, and
-referential integrity. Deterministic given a `--seed`.
-
-**Sources**: CSV, TSV, Parquet, JSON/NDJSON, Arrow/IPC, DuckDB, Snowflake, Postgres.  
-**Output**: any of the same file formats, or DuckDB.
-
-**Why doppel?** A CLI-first tool that reads straight from your warehouse, gates
-synth quality with CI-friendly exit codes, and is fully deterministic — built for
-test data and CI pipelines, where libraries like [SDV](https://github.com/sdv-dev/SDV)
-(notebook-oriented, broader model menu) or [Gretel](https://gretel.ai/) (hosted,
-formal privacy) are heavier than you need. For purely-fake-without-structure data,
-reach for [Faker](https://github.com/joke2k/faker).
-
-> PyPI distribution: `doppeldata`. CLI binary and import name: `doppel`.
+doppel fits a source table and generates rows with similar distributions,
+correlations, null patterns, unique-value counts, and foreign-key structure. Given
+the same source and `--seed`, output is deterministic.
 
 ## Install
 
 ```bash
-uv tool install doppeldata          # file sources (CSV, Parquet, etc.)
-uv tool install "doppeldata[sql]"   # + Snowflake and Postgres connectors
-uv tool install "doppeldata[pii]"   # + PII detection and Faker regeneration
-uv tool install "doppeldata[all]"   # everything
+uv sync
+uv run doppel --help
 ```
 
-DuckDB reads and writes work without the `[sql]` extra.
+For optional connectors and PII handling:
+
+```bash
+uv sync --extra sql
+uv sync --extra pii
+uv sync --all-extras
+```
+
+CLI and import name: `doppel`.
+
+## Supported Formats
+
+Inputs: CSV, TSV, Parquet, JSON/NDJSON, Arrow/IPC, DuckDB, Snowflake, Postgres.
+
+Outputs: CSV, TSV, Parquet, JSON/NDJSON, Arrow/IPC, DuckDB.
 
 ## Quickstart
 
 ```bash
-# One-shot: fit + sample in a single command
 doppel gen examples/saas_accounts.csv -n 1000 -o synth.csv --seed 1
-# ok wrote 1000 rows x 15 cols -> synth.csv
-# quality | marginal=0.0338 | corr=0.1062 | dcr_p5=0.0507 | text_leaks=1
-# tip: column 'company_domain' is 100% verbatim from source;
-#      rerun with --text-policy hash to mitigate
 
-# Check quality and gate on thresholds
 doppel diff examples/saas_accounts.csv synth.csv \
-  --max-marginal 0.10 --min-dcr-p5 0.05 --fail-on-verbatim-text
-# exit 2 on threshold breach
+  --max-marginal 0.10 \
+  --min-dcr-p5 0.05 \
+  --fail-on-verbatim-text
 
-# Verify your environment
 doppel doctor
 ```
 
-## One-shot generation
+`doppel diff` exits `2` when a threshold is breached.
+
+## Generate Rows
 
 ```bash
-doppel gen sales.csv -n 100000 -o synth.csv
-doppel gen big.parquet -n 100000 -o synth.parquet --fit-rows 25000
-doppel gen customers.csv -n 10000 -o synth.csv --text-policy hash
+doppel gen sales.csv -n 100000 -o synth.csv --seed 1
+doppel gen big.parquet -n 100000 -o synth.parquet --fit-rows 25000 --seed 1
+doppel gen customers.csv -n 10000 -o synth.csv --text-policy hash --seed 1
 doppel gen sales.csv -n 5000 -o synth.csv \
-  --where "plan == 'enterprise' and tenure_days > 365" --seed 1
+  --where "plan == 'enterprise' and tenure_days > 365" \
+  --seed 1
 ```
 
-### Key flags
+Common flags:
 
-**`--seed N`** — same seed + same source → byte-identical result. See [docs/determinism.md](docs/determinism.md).
+| Flag | Meaning |
+|------|---------|
+| `--seed N` | Controls every random choice. Same seed and source should produce the same output. |
+| `--fit-rows N` | Sample source rows before fitting. `0` disables the automatic cap. SQL sources sample in the warehouse. |
+| `--where EXPR` | Keep generated rows matching a boolean expression. Supports `== != < <= > >=` plus `and` / `or`. |
+| `--max-oversample N` | Raise this when `--where` or constraints are rare. Default: `4`. |
+| `--text-policy sample|hash|fake|drop` | Handle free-text columns. `fake` requires `[pii]`. |
+| `--schema PATH` | Override types, declare keys, and add constraints. |
+| `--explain` | Print per-column modeling choices after fit. |
 
-**`--fit-rows N`** — sample source rows before fitting. `gen` auto-caps to `min(rows × 5, 100k)` when source > 100k rows; pass `--fit-rows 0` to disable. For SQL sources, pushes the sample into the warehouse (see [SQL warehouses](#sql-warehouses)).
+See [docs/determinism.md](docs/determinism.md) for the seed contract.
 
-**`--where EXPR`** — restrict output rows to a boolean predicate. Operators: `== != < <= > >=` with `and` / `or`. Uses reject-resampling; pair with `--max-oversample FACTOR` (default 4×) when the condition is rare. Single-table only in v1.
-
-**`--text-policy sample|hash|fake|drop`** — `hash` replaces free-text with a deterministic hex digest (removes verbatim risk). `fake` requires `[pii]`. `drop` removes the column.
-
-**`--explain`** — prints per-column modelling choices to stderr. Good first stop when output quality is surprising.
-
-**`--schema PATH`** — override inferred types, declare keys, and add constraints. See [Schema customization](#schema-customization).
-
-## Fit + sample (reusable artifact)
-
-Fit once, sample many times — useful when the source is large or expensive to read
-(e.g. a Snowflake query).
+## Fit Once, Sample Later
 
 ```bash
-# Fit on source data; save a portable artifact
 doppel fit sales.parquet -o sales.doppel --seed 1
-
-# Sample from the artifact later — no source needed
-doppel sample sales.doppel -n 1_000_000 -o synth.parquet --seed 1
-
-# Inspect the artifact without loading the model
+doppel sample sales.doppel -n 1000000 -o synth.parquet --seed 1
 doppel artifact info sales.doppel
 ```
 
-`doppel fit` refuses sources where Presidio detects PII — the artifact format doesn't
-yet carry detection metadata for round-trip PII regeneration. Use `doppel gen` for
-one-shot PII regeneration (v0.2 roadmap).
+`doppel fit` refuses sources with detected PII. Use `doppel gen` for one-shot PII
+regeneration. `.doppel` artifacts contain pickled models; only load artifacts from
+sources you trust.
 
-## SQL warehouses
-
-Install the `[sql]` extra and pass a database URI in place of a file path:
+## SQL Sources
 
 ```bash
-pip install "doppeldata[sql]"
-
-# DuckDB — works without [sql]:
+# DuckDB
 doppel gen "duckdb:///data.db" --table users -n 1000 -o synth.csv --seed 1
 
-# Snowflake:
+# Snowflake
 doppel gen "snowflake://adam@account/db/schema?warehouse=WH" \
   --table USERS \
   --password-cmd "op read op://vault/snowflake/password" \
-  --fit-rows 25000 -n 1000 -o synth.csv --seed 1
+  --fit-rows 25000 \
+  -n 1000 \
+  -o synth.csv \
+  --seed 1
 
-# Postgres:
+# Postgres
 doppel gen "postgres://adam@host/dbname" \
   --query "SELECT * FROM users WHERE plan = 'enterprise'" \
   --password-cmd "op read op://vault/postgres/password" \
-  -n 1000 -o synth.parquet --seed 1
-
-# DuckDB as output sink:
-doppel gen sales.csv -n 10000 -o "duckdb:///output.db?table=synth_sales" --seed 1
+  -n 1000 \
+  -o synth.parquet \
+  --seed 1
 ```
 
-**Auth precedence**: `--password-cmd` › `${ENV_VAR}` interpolation in the URI › URI-embedded password (warns, since it appears in shell history).
+Password lookup order: `--password-cmd`, then `${ENV_VAR}` interpolation in the URI,
+then a URI-embedded password. URI passwords warn because they can appear in shell history.
 
-**Sample pushdown**: `--fit-rows N` pushes sampling into the warehouse via vendor-native syntax (`SAMPLE … SEED` on Snowflake, `TABLESAMPLE BERNOULLI … REPEATABLE` on Postgres, `USING SAMPLE … REPEATABLE` on DuckDB). The seed propagates.
+Snowflake and Postgres tables above 1,000,000 rows require `--fit-rows N` or
+`--fit-rows 0`. SQL sinks are DuckDB only; write files for other warehouses and load
+them with your normal data load process.
 
-**Row-count probe**: if a Snowflake or Postgres table exceeds 1,000,000 rows and `--fit-rows` is not set, doppel hard-fails and suggests `--fit-rows N`.
+See [docs/sql-connectors.md](docs/sql-connectors.md) for URI formats, schema files,
+and vendor-specific sampling.
 
-**Sinks**: DuckDB and file formats only. Write to a file, then load into your warehouse with normal ELT tooling.
+## Multi-table Data
 
-See [docs/sql-connectors.md](docs/sql-connectors.md) for URI formats, per-vendor
-caveats, multi-table SQL, connection lifecycle, and the driver story.
-
-## Multi-table (relational) data
-
-For datasets with foreign-key relationships, supply a `schema.toml` that declares the
-tables and FK edges. Doppel fits each table independently and wires child rows to
-generated parent PKs — FK integrity is guaranteed.
+Declare tables and foreign keys in `schema.toml`:
 
 ```toml
-# schema.toml
 [tables.users]
 path = "data/users.parquet"
 primary_key = "user_id"
@@ -145,37 +129,41 @@ path = "data/orders.parquet"
 primary_key = "order_id"
 
 [[foreign_keys]]
-child_table  = "orders"
+child_table = "orders"
 child_column = "user_id"
 parent_table = "users"
 parent_column = "user_id"
 ```
 
 ```bash
-# Infer a starting schema from your files
-doppel schema infer data/users.parquet data/orders.parquet -o schema.toml
-
-# Generate; -n is rows per root table
 doppel gen --schema schema.toml -n 1000 -o synth/ --seed 1
-
-# Override rows per table individually
 doppel gen --schema schema.toml -n 1000 \
   --rows-per-table users=1000,products=50 \
-  -o synth/ --seed 1
+  -o synth/ \
+  --seed 1
 ```
 
-SQL-backed tables are supported — replace `path` with `uri` + `table` or `query` in each `[[tables]]` block (see [docs/sql-connectors.md](docs/sql-connectors.md)).
+`-n` is rows per root table. Child rows are attached to generated parent keys. doppel
+preserves foreign-key integrity, but it does not preserve cross-table correlations
+such as "larger customers place larger orders."
 
-## Schema customization
+## Schema Files
 
-`schema.toml` (generated by `doppel schema infer`, validated by `doppel schema check`) lets you:
+`schema.toml` can:
 
-- Override column types (`KEY`, `NUMERIC`, `CATEGORICAL`, `TEXT`, `BOOLEAN`, `DATETIME`, `DATE`)
-- Declare primary and foreign keys
-- Add range, inequality, and derived constraints (satisfied via reject-resampling)
-- Toggle datetime calendar features per column (`calendar_features = false` or `calendar_features = ["hour", "dow"]`)
+- override column types: `KEY`, `NUMERIC`, `CATEGORICAL`, `TEXT`, `BOOLEAN`,
+  `DATETIME`, `DATE`
+- declare primary and foreign keys
+- add range, inequality, and derived constraints
+- toggle datetime calendar features
 
-## Quality gate (`doppel diff`)
+Check a schema with:
+
+```bash
+doppel schema check sales.csv --schema schema.toml
+```
+
+## Quality Reports
 
 ```bash
 doppel diff real.parquet synth.parquet \
@@ -186,57 +174,51 @@ doppel diff real.parquet synth.parquet \
   -o report.html
 ```
 
-Metrics reported:
+Metrics:
 
-| Metric | What it measures |
-|--------|-----------------|
-| `marginal` | Average KS / TVD per column (lower = better distributions) |
-| `corr_frobenius` | Frobenius distance of correlation matrix (lower = better relationships) |
-| `dcr_p5` | 5th-percentile distance-to-closest-record (higher = more privacy headroom) |
-| `verbatim_rate` | Fraction of TEXT values copied verbatim from source |
+| Metric | Meaning |
+|--------|---------|
+| `marginal` | Average per-column KS / TVD distance. Lower is closer. |
+| `corr_frobenius` | Correlation-matrix distance. Lower is closer. |
+| `dcr_p5` | 5th-percentile distance to closest real record. Higher means less near-copying. |
+| `verbatim_rate` | Fraction of text values copied from the source. |
 
-**Exit codes**: `0` pass, `2` threshold breach.
+Use `--sample-rows N` and `--max-dcr-rows N` for large comparisons.
 
-**`--sample-rows N`** and **`--max-dcr-rows N`** speed up large diffs by sampling
-before metric computation.
+## Privacy and Security
 
-## Recipes
+doppel is not differential privacy.
 
-- [examples/pytest_fixture/](examples/pytest_fixture/) — fitted `.doppel` as a
-  session-scoped pytest fixture.
-- [examples/dbt_seed/](examples/dbt_seed/) — synth CSV for dbt seeds, gated by
-  `doppel diff`.
-- [examples/github-action/](examples/github-action/) — PR-gate GitHub Actions
-  workflow.
+Detected PII can be regenerated with `[pii]`. Undetected free text may be copied
+verbatim from the source. For identifying text columns, use
+`--text-policy hash|fake|drop` and check output with `doppel diff`.
 
-## Privacy and security
+`.doppel` files use a restricted unpickler with an allowlist, but they are still model
+artifacts from code. Only load files you trust. See [SECURITY.md](SECURITY.md).
 
-doppel is not a formal privacy system. No differential privacy in v0.1. Detected PII
-(emails, phones, names) is regenerated via Faker when `[pii]` is installed. Undetected
-free-text **may copy verbatim from the source** — use `--text-policy hash|fake|drop`
-for identifying columns and always run `doppel diff` before sharing.
+## Limitations
 
-`.doppel` artifacts contain pickled models loaded through a restricted unpickler with
-an explicit allowlist. **Only load `.doppel` files from sources you trust.**
+- Multi-table correlations are not preserved.
+- `--where` is scoped to one table.
+- Datetime values are modeled as epoch seconds plus calendar features; sub-second
+  precision is dropped.
+- Warehouse writes are DuckDB only.
+- `fit` refuses detected PII; use `gen` for one-shot PII handling.
 
-See [SECURITY.md](SECURITY.md) for the full threat model.
+## Examples
 
-## Limitations (v0.1)
-
-- **Multi-table correlations** not preserved — tables are fit independently. `inherit_parent_features` is parsed but not wired (v0.2).
-- **`--where`** is single-table-scoped; cross-table predicates are rejected.
-- **Datetime** is modelled as epoch-seconds plus calendar features; sub-second precision is dropped.
-- **Warehouse writes** are DuckDB only.
-- **`fit` refuses PII** — use `gen` for one-shot PII regeneration.
+- [examples/pytest_fixture/](examples/pytest_fixture/)
+- [examples/dbt_seed/](examples/dbt_seed/)
+- [examples/github-action/](examples/github-action/)
 
 ## Development
 
 ```bash
 uv sync --all-extras
-uv run pytest
 uv run ruff check src tests
 uv run ruff format --check src tests
 uv run pyright
+uv run pytest
 ```
 
 ## License

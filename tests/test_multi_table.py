@@ -7,6 +7,7 @@ from pathlib import Path
 
 import polars as pl
 import pytest
+from pydantic import ValidationError
 from typer.testing import CliRunner
 
 from doppel.cli import app
@@ -148,6 +149,42 @@ parent_column = "user_id"
     dataset = multi_schema.to_dataset(schema, tmp_path)
     assert set(dataset.tables) == {"users", "orders"}
     assert len(dataset.edges) == 1
+
+
+def test_multi_schema_accepts_path_alias(tmp_path: Path) -> None:
+    users, orders = _make_relational_fixture()
+    (tmp_path / "users.csv").write_text(users.write_csv())
+    (tmp_path / "orders.csv").write_text(orders.write_csv())
+
+    schema_path = tmp_path / "schema.toml"
+    schema_path.write_text(
+        """
+[tables.users]
+path = "users.csv"
+primary_key = "user_id"
+
+[tables.orders]
+path = "orders.csv"
+primary_key = "order_id"
+
+[[foreign_keys]]
+child_table = "orders"
+child_column = "user_id"
+parent_table = "users"
+parent_column = "user_id"
+""",
+        encoding="utf-8",
+    )
+
+    schema = multi_schema.load(schema_path)
+    assert schema.tables["users"].file == "users.csv"
+    dataset = multi_schema.to_dataset(schema, tmp_path)
+    assert set(dataset.tables) == {"users", "orders"}
+
+
+def test_multi_schema_rejects_conflicting_file_and_path() -> None:
+    with pytest.raises(ValidationError, match="both `file` and `path`"):
+        multi_schema.TableSpec.model_validate({"file": "users.csv", "path": "people.csv"})
 
 
 def test_gen_multi_table_e2e_creates_directory(tmp_path: Path) -> None:

@@ -121,11 +121,11 @@ Declare tables and foreign keys in `schema.toml`:
 
 ```toml
 [tables.users]
-path = "data/users.parquet"
+file = "data/users.parquet"
 primary_key = "user_id"
 
 [tables.orders]
-path = "data/orders.parquet"
+file = "data/orders.parquet"
 primary_key = "order_id"
 
 [[foreign_keys]]

@@ -1,6 +1,6 @@
-"""Multi-table SQL: `[[tables]]` blocks accept `uri` alongside `path`.
+"""Multi-table SQL: `[[tables]]` blocks accept `uri` alongside file-backed tables.
 
-Covers Section 14 of the SQL-connectors change. Mixed `path` + `uri` runs
+Covers Section 14 of the SQL-connectors change. Mixed `file` + `uri` runs
 go end-to-end against a DuckDB fixture; the TOML validator rejects malformed
 blocks at load time."""
 
@@ -61,7 +61,7 @@ parent_column = "user_id"
     assert len(dataset.edges) == 1
 
 
-def test_multi_table_mixed_path_and_uri(two_table_duckdb: Path, tmp_path: Path) -> None:
+def test_multi_table_mixed_file_and_uri(two_table_duckdb: Path, tmp_path: Path) -> None:
     # Materialise users as parquet; orders stays in DuckDB.
     users_parquet = tmp_path / "users.parquet"
     con = duckdb.connect(str(two_table_duckdb))
@@ -96,7 +96,7 @@ parent_column = "user_id"
     assert dataset.tables["orders"].data is not None
 
 
-def test_multi_table_path_and_uri_in_same_block_rejected() -> None:
+def test_multi_table_file_and_uri_in_same_block_rejected() -> None:
     with pytest.raises(ValidationError, match="not declare both"):
         multi_schema.TableSpec(file="users.csv", uri="duckdb:///x.db", table="users")
 
@@ -106,12 +106,12 @@ def test_multi_table_uri_without_table_or_query_rejected() -> None:
         multi_schema.TableSpec(uri="duckdb:///x.db")
 
 
-def test_multi_table_neither_path_nor_uri_rejected() -> None:
+def test_multi_table_neither_file_nor_uri_rejected() -> None:
     with pytest.raises(ValidationError, match="either `file` or `uri`"):
         multi_schema.TableSpec(primary_key="id")
 
 
-def test_multi_table_path_with_sql_keys_rejected() -> None:
+def test_multi_table_file_with_sql_keys_rejected() -> None:
     with pytest.raises(ValidationError, match="apply only to URI"):
         multi_schema.TableSpec(file="users.csv", table="users")
 

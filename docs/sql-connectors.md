@@ -96,11 +96,11 @@ applies for files, and DuckDB is local).
 
 ## Multi-table SQL
 
-`schema.toml` `[[tables]]` blocks accept either `path` or `uri`:
+`schema.toml` `[[tables]]` blocks accept either `file` or `uri`:
 
 ```toml
 [tables.users]
-path = "data/users.parquet"
+file = "data/users.parquet"
 primary_key = "user_id"
 
 [tables.orders]
@@ -118,10 +118,11 @@ parent_table = "users"
 parent_column = "user_id"
 ```
 
-Each `[[tables]]` block must declare exactly one of `path` / `uri`, and
+Each `[[tables]]` block must declare exactly one of `file` / `uri`, and
 URI-backed tables must additionally declare exactly one of `table` /
-`query`. The CLI's `--password-cmd` and `--connection-timeout` apply
-globally to every SQL table in the run.
+`query`. `path` is still accepted as an alias for older schemas, but newly
+written schemas use `file`. The CLI's `--password-cmd` and
+`--connection-timeout` apply globally to every SQL table in the run.
 
 ## Sinks: file and DuckDB only
 

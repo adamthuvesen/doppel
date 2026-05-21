@@ -3,7 +3,7 @@
 File shape (v1 Phase 5):
 
     [tables.users]
-    file = "users.csv"
+    file = "users.csv"  # `path = ...` is accepted as a legacy/documented alias.
     primary_key = "user_id"
 
     [tables.orders]
@@ -19,9 +19,10 @@ File shape (v1 Phase 5):
     parent_table = "users"
     parent_column = "user_id"
 
-`file` is resolved relative to the schema.toml's directory. Column overrides are optional —
-omitted columns fall back to inferred types. Constraints land in a later phase as a
-table-scoped section; v1 multi-table ships with FKs only.
+`file` is resolved relative to the schema.toml's directory. `path` is accepted as an
+input alias for older docs/specs, but `save()` emits the canonical `file` key. Column
+overrides are optional — omitted columns fall back to inferred types. Constraints land
+in a later phase as a table-scoped section; v1 multi-table ships with FKs only.
 """
 
 from __future__ import annotations
@@ -56,13 +57,34 @@ class TableSpec(BaseModel):
     not yet wired into HierarchicalSynthesizer — setting it raises a clear error so users
     aren't silently misled about which behaviour they got."""
 
+    @model_validator(mode="before")
+    @classmethod
+    def _coerce_path_alias(cls, raw: object) -> object:
+        if not isinstance(raw, dict):
+            return raw
+        has_file = raw.get("file") is not None
+        has_path = raw.get("path") is not None
+        if not has_path:
+            return raw
+        if has_file and raw["file"] != raw["path"]:
+            raise ValueError("table entry may not declare both `file` and `path`; use `file`")
+        data = dict(raw)
+        data["file"] = data["path"]
+        data.pop("path", None)
+        return data
+
     @model_validator(mode="after")
     def _validate_source(self) -> TableSpec:
         # Exactly one of `file` / `uri` must be set.
         if self.file is None and self.uri is None:
-            raise ValueError("each [[tables]] entry must declare either `file` or `uri`")
+            raise ValueError(
+                "each [[tables]] entry must declare either `file` or `uri` "
+                "(`path` is accepted as an alias for `file`)"
+            )
         if self.file is not None and self.uri is not None:
-            raise ValueError("table entry may not declare both `file` and `uri`; pick one")
+            raise ValueError(
+                "table entry may not declare both `file` (or `path`) and `uri`; pick one"
+            )
         if self.uri is not None:
             if self.table is None and self.query is None:
                 raise ValueError(

@@ -10,10 +10,10 @@ The allowlist covers:
   - `builtins.{dict,list,tuple,set,frozenset,bool,int,float,str,bytes,bytearray,
               complex,type,object,NoneType,slice}`
   - `collections.{OrderedDict,defaultdict,deque,Counter}`
+  - the narrow set of `doppel` classes that make up a fitted artifact
   - any class under `numpy.*` (needed for ndarrays, dtypes, scalar types)
   - any class under `sklearn.*` (needed for DecisionTree* and their internal Tree class)
   - any class under `polars.*` (needed for datetime dtype round-trip)
-  - any class under `doppel.*` (our own dataclasses)
   - `scipy.*` (sklearn pulls in scipy.sparse and related types via dependency)
 
 If you load a `.doppel` file produced by an older/newer doppel version and it pulls in a
@@ -50,11 +50,25 @@ _ALLOWED_BUILTINS: frozenset[str] = frozenset(
 
 _ALLOWED_COLLECTIONS: frozenset[str] = frozenset({"OrderedDict", "defaultdict", "deque", "Counter"})
 
+_ALLOWED_DOPPEL_GLOBALS: frozenset[tuple[str, str]] = frozenset(
+    {
+        ("doppel.schema.datetime", "CalendarFeature"),
+        ("doppel.schema.types", "Column"),
+        ("doppel.schema.types", "ColumnType"),
+        ("doppel.synth.cart", "CartSynthesizer"),
+        ("doppel.synth.cart", "ColumnFitInfo"),
+        ("doppel.synth.cart", "RepairSummary"),
+        ("doppel.synth.cart", "_ColumnSynth"),
+        ("doppel.synth.cart", "_CountBound"),
+        ("doppel.synth.cart", "_Encoder"),
+        ("doppel.synth.cart", "_MissingFlag"),
+    }
+)
+
 _ALLOWED_MODULE_PREFIXES: tuple[str, ...] = (
     "numpy",
     "sklearn",
     "polars",
-    "doppel",
     "scipy",
 )
 
@@ -71,6 +85,8 @@ class RestrictedUnpickler(pickle.Unpickler):
             return super().find_class(module, name)
         if module == "_codecs" and name == "encode":
             # numpy uses _codecs.encode to pickle dtype names; required for ndarray roundtrip.
+            return super().find_class(module, name)
+        if (module, name) in _ALLOWED_DOPPEL_GLOBALS:
             return super().find_class(module, name)
         for prefix in _ALLOWED_MODULE_PREFIXES:
             if module == prefix or module.startswith(prefix + "."):

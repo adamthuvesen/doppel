@@ -72,6 +72,14 @@ def test_safe_pickle_refuses_disallowed_stdlib_classes(obj: bytes) -> None:
         safe_loads(obj)
 
 
+def test_safe_pickle_refuses_non_artifact_doppel_globals() -> None:
+    from doppel.sources.spec import _resolve_password_cmd  # type: ignore[reportPrivateUsage]
+
+    payload = pickle.dumps(_resolve_password_cmd)
+    with pytest.raises(UnsafeArtifactError, match="not in doppel artifact allowlist"):
+        safe_loads(payload)
+
+
 def test_artifact_load_rejects_malicious_pickle(tmp_path: Path) -> None:
     """A tampered `.doppel` artifact carrying an exploit payload must fail before exec."""
     # First produce a legitimate artifact so we have a valid manifest.

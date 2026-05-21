@@ -56,9 +56,9 @@ src/doppel/
   a new modeling path, route datetime through `schema.datetime.decompose` /
   `recompose`.
 - **Pickle safety.** `.doppel` artifact loading goes through `artifact.safe_pickle.safe_loads`
-  with an allowlist (`sklearn`, `numpy`, `polars`, `scipy`, `doppel`, narrow stdlib).
-  Never bypass this. If you need a new class in the allowlist, add it explicitly and
-  document why.
+  with an allowlist (`sklearn`, `numpy`, `polars`, `scipy`, narrow stdlib, and exact
+  doppel model classes). Never bypass this. If you need a new class in the allowlist,
+  add it explicitly and document why.
 - **PK columns.** A column declared as `primary_key` in schema.toml is auto-promoted to
   `ColumnType.KEY` so the synthesizer generates unique values rather than modelling it.
   If you touch `apply_overrides` or `multi.to_dataset`, preserve this.

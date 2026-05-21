@@ -20,8 +20,9 @@ fitted synthesizer. A crafted pickle payload can execute arbitrary code on load.
 - Pickle is deserialised through a **restricted unpickler**
   ([src/doppel/artifact/safe_pickle.py](src/doppel/artifact/safe_pickle.py)) that
   refuses any class outside an explicit allowlist (sklearn, numpy, polars, scipy,
-  doppel's own classes, narrow stdlib). Standard `os.system` / `subprocess.Popen` /
-  `builtins.eval` pickle-RCE payloads are blocked before any code runs.
+  the narrow doppel model classes needed by the artifact format, narrow stdlib).
+  Standard `os.system` / `subprocess.Popen` / `builtins.eval` pickle-RCE payloads
+  are blocked before any code runs.
 - Manifest is Pydantic-validated and version-checked **before** the pickle is read.
 - Tar extraction uses `getmember` + `extractfile` only — no `tarfile.extractall`, so
   tarbomb / `..` path traversal is closed.

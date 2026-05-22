@@ -7,11 +7,11 @@ from pathlib import Path
 import typer
 from rich.console import Console
 
+from doppel.cli import labels as cli_labels
 from doppel.cli._common import resolve_source
 from doppel.schema import toml as schema_toml
 from doppel.schema.infer import infer_table
 from doppel.sources import read as source_read
-from doppel.sources.spec import DatabaseUri, FilePath
 
 app = typer.Typer(
     name="schema",
@@ -63,10 +63,10 @@ def infer(
         password_cmd=password_cmd,
         connection_timeout=connection_timeout,
     )
-    source_label = _label(source_spec)
+    source_label = cli_labels.source_label(source_spec)
     console.print(f"[dim]reading[/] {source_label}")
     df = source_read(source_spec, timeout=connection_timeout)
-    table = infer_table(_table_name(source_spec), df)
+    table = infer_table(cli_labels.table_name_for_source(source_spec), df)
     schema = schema_toml.from_table(table)
 
     if output is None:
@@ -121,10 +121,10 @@ def check(
         password_cmd=password_cmd,
         connection_timeout=connection_timeout,
     )
-    source_label = _label(source_spec)
+    source_label = cli_labels.source_label(source_spec)
     console.print(f"[dim]reading[/] {source_label}")
     df = source_read(source_spec, timeout=connection_timeout)
-    inferred = infer_table(_table_name(source_spec), df)
+    inferred = infer_table(cli_labels.table_name_for_source(source_spec), df)
     schema = schema_toml.load(schema_file)
 
     errors: list[str] = []
@@ -142,18 +142,6 @@ def check(
         f"[green]ok[/] schema is consistent with {source_label}: "
         f"{len(schema.columns)} column overrides, {len(schema.constraints)} constraints"
     )
-
-
-def _label(spec: FilePath | DatabaseUri) -> str:
-    if isinstance(spec, FilePath):
-        return str(spec.path)
-    return spec.uri
-
-
-def _table_name(spec: FilePath | DatabaseUri) -> str:
-    if isinstance(spec, FilePath):
-        return spec.path.stem
-    return spec.table or "query"
 
 
 def _dump(schema: schema_toml.SchemaToml) -> dict[str, object]:

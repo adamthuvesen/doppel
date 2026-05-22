@@ -4,17 +4,16 @@ from __future__ import annotations
 
 import json
 import sys
-import time
 import tomllib
 from collections.abc import Callable
 from pathlib import Path
-from typing import TYPE_CHECKING
 
 import polars as pl
 import typer
 from rich.console import Console
 from rich.table import Table as _Table
 
+from doppel.cli import labels as cli_labels
 from doppel.cli._common import (
     compute_quality_summary,
     fit_progress,
@@ -24,26 +23,28 @@ from doppel.cli._common import (
     resolve_source,
     sample_frame,
 )
-from doppel.constraints import expr as expr_mod
-from doppel.constraints.dsl import Constraint, WhereConstraint
-from doppel.constraints.engine import ConstraintReport, synthesize_with_constraints
-from doppel.dataset import Dataset, ForeignKey, Table
+from doppel.constraints.engine import ConstraintReport
+from doppel.dataset import Table
+from doppel.pii.detect import PIIDetection
+from doppel.pipeline.single_table import generate_single_table
+from doppel.pipeline.types import SingleTableGenerateConfig
+from doppel.pipeline.where import (
+    merge_where_into_constraints,
+    precheck_where,
+    thin_support_warning,
+)
 from doppel.schema import multi as multi_schema
-from doppel.schema import toml as schema_toml_mod
-from doppel.schema.infer import infer_table
-from doppel.sinks import write as sink_write
 from doppel.sources import read as source_read
 from doppel.sources.spec import DatabaseUri, FilePath, SinkSpec
 from doppel.synth.cart import CartSynthesizer
 from doppel.synth.hierarchy import HierarchicalSynthesizer
+from doppel.synth.multi_where import (
+    apply_where_to_sampled_dataset,
+    resolve_where_table,
+)
 from doppel.synth.seed import Rng
 from doppel.text_policy import TextPolicy
 from doppel.text_policy import apply as apply_text_policy
-
-_THIN_SUPPORT_THRESHOLD = 100
-
-if TYPE_CHECKING:
-    from doppel.pii.detect import PIIDetection
 
 console = Console()
 
@@ -259,112 +260,106 @@ def _run_single(
     *,
     connection_timeout: int = 300,
 ) -> None:
-    source_label = _source_label(source_spec)
+    from doppel.schema import toml as schema_toml_mod
+    from doppel.sinks import write as sink_write
+
+    source_label = cli_labels.source_label(source_spec)
     console.print(f"[dim]reading[/] {source_label}")
-    # SQL sources push the sample into the warehouse; file sources still
-    # client-sample (matches historical behaviour and the spec).
+
     sql_fit_rows = fit_rows if isinstance(source_spec, DatabaseUri) else None
-    real_df = source_read(
-        source_spec,
-        fit_rows=sql_fit_rows,
-        seed=seed,
-        timeout=connection_timeout,
-    )
-
-    # Feasibility precheck runs against the (possibly warehouse-sampled) source DataFrame
-    # BEFORE any fit work. A 0-match where would otherwise burn through fit + the full
-    # oversample budget before erroring; better to fail in milliseconds.
     if where is not None:
-        _precheck_where(where, real_df, source_label)
+        precheck_df = source_read(
+            source_spec,
+            fit_rows=sql_fit_rows,
+            seed=seed,
+            timeout=connection_timeout,
+        )
+        try:
+            matches = precheck_where(where, precheck_df)
+        except ValueError as exc:
+            raise typer.BadParameter(str(exc)) from exc
+        warn = thin_support_warning(matches, where)
+        if warn is not None:
+            console.print(f"[yellow]warn[/]: {warn}")
 
-    if isinstance(source_spec, DatabaseUri):
-        # The pushdown already capped rows at the warehouse — don't re-sample.
-        effective_fit_rows: int | None = None
-    else:
-        effective_fit_rows = _auto_fit_rows(fit_rows, real_df.height, rows)
-    fit_df = sample_frame(real_df, effective_fit_rows, seed=seed, console=console, label="fit")
-    console.print(f"[dim]inferring schema for[/] {fit_df.height} rows x {fit_df.width} columns")
-    table_name = _table_name_for_spec(source_spec)
-    table = infer_table(table_name, fit_df)
-
-    schema_toml = None
     if schema is not None:
         console.print(f"[dim]applying schema[/] {schema}")
         schema_toml = schema_toml_mod.load(schema)
-        table = schema_toml_mod.apply_overrides(table, schema_toml)
+        n_constraints = len(merge_where_into_constraints(schema_toml.constraints, where))
+    else:
+        n_constraints = len(merge_where_into_constraints([], where))
 
-    pii_detected, table_for_fit, original_columns = _strip_pii_if_available(table)
-
-    dataset = Dataset.single(table_for_fit)
-    console.print(f"[dim]fitting CART synthesizer on[/] {table.name!r}")
-    synth = CartSynthesizer()
-    fit_started = time.perf_counter()
-    with fit_progress(console) as cb:
-        synth.fit(dataset, Rng.from_seed(seed), progress=cb)
-    fit_seconds = time.perf_counter() - fit_started
-
-    if explain:
-        _print_explain(synth, table)
-
-    console.print(f"[dim]sampling[/] {rows} rows")
-    sample_started = time.perf_counter()
-    # Re-seed each subsystem from the same root seed so `doppel gen` and `doppel fit && sample`
-    # produce byte-identical output (the cross-tool determinism contract). When seed is None,
-    # each Rng.from_seed(None) pulls fresh OS entropy — that's a documented limitation:
-    # outputs vary across runs unless --seed is set.
-    sample_rng = Rng.from_seed(seed)
-    constraints = _merge_where_into_constraints(
-        schema_toml.constraints if schema_toml is not None else [], where
-    )
-    if constraints:
+    if n_constraints:
         console.print(
-            f"[dim]applying[/] {len(constraints)} constraints via reject-resample "
+            f"[dim]applying[/] {n_constraints} constraints via reject-resample "
             f"(max-oversample={max_oversample:g}x)"
         )
-        try:
-            synth_ds, creport = synthesize_with_constraints(
-                synth,
-                constraints,
-                rows,
-                sample_rng,
-                max_factor=max_oversample,
-                on_iteration=_progress_callback(where),
-            )
-        except ValueError as exc:
-            raise typer.BadParameter(str(exc)) from exc
-        _print_constraint_summary(creport)
-    else:
-        synth_ds = synth.sample(rows, sample_rng)
-    sample_seconds = time.perf_counter() - sample_started
-    print_repair_summary(console, synth.last_repair_summary)
 
-    out_df = synth_ds.only().data
-    assert out_df is not None
-
-    if pii_detected:
-        from doppel.pii.text import restore as restore_pii
-
-        labels = ", ".join(f"{d.name}={d.entity_type}" for d in pii_detected)
-        console.print(f"[dim]regenerating PII[/]: {labels}")
-        out_df = restore_pii(
-            out_df, pii_detected, original_columns, Rng.from_seed(seed), row_count=rows
+    def _sample_fit(df: pl.DataFrame, n: int | None) -> pl.DataFrame:
+        sampled = sample_frame(df, n, seed=seed, console=console, label="fit")
+        console.print(
+            f"[dim]inferring schema for[/] {sampled.height} rows x {sampled.width} columns"
         )
+        return sampled
 
-    out_df = apply_text_policy(out_df, table.columns, text_policy, Rng.from_seed(seed).spawn())
+    def _on_pii_detected(detections: list[PIIDetection]) -> None:
+        labels = ", ".join(f"{d.name}={d.entity_type}({d.confidence:.0%})" for d in detections)
+        console.print(f"[yellow]pii[/]: detected {labels}")
+
+    try:
+        with fit_progress(console) as cb:
+            console.print(
+                f"[dim]fitting CART synthesizer on[/] {cli_labels.table_name_for_source(source_spec)!r}"
+            )
+            result = generate_single_table(
+                SingleTableGenerateConfig(
+                    source_spec=source_spec,
+                    rows=rows,
+                    seed=seed,
+                    fit_rows=fit_rows,
+                    schema_path=schema,
+                    where=where,
+                    max_oversample=max_oversample,
+                    text_policy=text_policy,
+                    connection_timeout=connection_timeout,
+                ),
+                sample_fit=_sample_fit,
+                fit_progress=cb,
+                on_constraint_iteration=_progress_callback(where),
+                notify_fit_cap=lambda msg: console.print(f"[dim]fit-rows:[/] {msg}"),
+                on_pii_detected=_on_pii_detected,
+            )
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+
+    if result.pii_detected:
+        pii_labels = ", ".join(
+            f"{d.name}={d.entity_type}({d.confidence:.0%})" for d in result.pii_detected
+        )
+        console.print(f"[dim]regenerating PII[/]: {pii_labels}")
+
+    if explain:
+        _print_explain(result.synth, result.table)
+
+    if result.constraint_report is not None:
+        _print_constraint_summary(result.constraint_report)
+
+    print_repair_summary(console, result.synth.last_repair_summary)
+
     if text_policy is not TextPolicy.SAMPLE:
         console.print(f"[dim]text policy[/] {text_policy.value}")
 
-    sink_label = _sink_label(sink_spec)
+    out_df = result.out_df
+    sink_label = cli_labels.sink_label(sink_spec)
     console.print(f"[dim]writing[/] {sink_label}")
     sink_write(out_df, sink_spec)
     console.print(f"[green]ok[/] wrote {out_df.height} rows x {out_df.width} cols -> {sink_label}")
 
     quality_dict: dict[str, object] | None = None
     if not no_quality:
-        # Use the original real_df (not fit_df) so DCR / marginals compare synth against
-        # the full source — not just the subset the model was fit on, which would make
-        # privacy numbers artificially optimistic.
-        summary = compute_quality_summary(real_df, out_df, table.columns, sample_seed=seed or 0)
+        summary = compute_quality_summary(
+            result.real_df, out_df, result.table.columns, sample_seed=seed or 0
+        )
         print_quality_summary(console, summary)
         quality_dict = {
             "avg_marginal": summary.avg_marginal,
@@ -383,41 +378,16 @@ def _run_single(
             "rows_requested": rows,
             "rows_written": out_df.height,
             "cols_written": out_df.width,
-            "fit_seconds": round(fit_seconds, 3),
-            "sample_seconds": round(sample_seconds, 3),
+            "fit_seconds": round(result.fit_seconds, 3),
+            "sample_seconds": round(result.sample_seconds, 3),
             "seed": seed,
             "text_policy": text_policy.value,
-            "pii_columns_regenerated": [d.name for d in pii_detected],
+            "pii_columns_regenerated": [d.name for d in result.pii_detected],
             "quality": quality_dict,
         }
         json_summary.parent.mkdir(parents=True, exist_ok=True)
         json_summary.write_text(json.dumps(payload, indent=2, default=str), encoding="utf-8")
         console.print(f"[green]ok[/] wrote JSON summary -> {json_summary}")
-
-
-def _strip_pii_if_available(
-    table: Table,
-) -> tuple[list[PIIDetection], Table, list[str]]:
-    """Detect + strip PII columns if Presidio is installed. Otherwise return the table unchanged."""
-    unchanged: tuple[list[PIIDetection], Table, list[str]] = (
-        [],
-        table,
-        [c.name for c in table.columns],
-    )
-    try:
-        from doppel.pii.detect import detect as detect_pii
-        from doppel.pii.text import strip as strip_pii
-    except ImportError:
-        return unchanged
-    if table.data is None:
-        return unchanged
-    detections = detect_pii(table.data, table.columns)
-    if not detections:
-        return unchanged
-    labels = ", ".join(f"{d.name}={d.entity_type}({d.confidence:.0%})" for d in detections)
-    console.print(f"[yellow]pii[/]: detected {labels}")
-    stripped, original_order = strip_pii(table, detections)
-    return detections, stripped, original_order
 
 
 def _run_multi(
@@ -449,7 +419,10 @@ def _run_multi(
 
     where_table: str | None = None
     if where is not None:
-        where_table = _resolve_multi_table_for_where(where, dataset)
+        try:
+            where_table = resolve_where_table(where, dataset)
+        except ValueError as exc:
+            raise typer.BadParameter(str(exc)) from exc
         console.print(
             "[yellow]note[/]: --where applies to the named table only; "
             "child distributions in other tables are unconditional in v1."
@@ -468,11 +441,19 @@ def _run_multi(
 
     if where is not None and where_table is not None:
         try:
-            out_dataset = _filter_multi_table_where(
-                out_dataset, where_table, where, max_oversample, seed, synth, rows_per_root
+            out_dataset = apply_where_to_sampled_dataset(
+                out_dataset,
+                where_table,
+                where,
+                rows_per_root,
+                synth,
+                Rng.from_seed(seed),
+                max_factor=max_oversample,
             )
         except ValueError as exc:
             raise typer.BadParameter(str(exc)) from exc
+
+    from doppel.sinks import write as sink_write
 
     output_dir.mkdir(parents=True, exist_ok=True)
     for name, out_table in out_dataset.tables.items():
@@ -489,59 +470,6 @@ def _run_multi(
         )
         sink_write(out_df, FilePath(path=dest))
         console.print(f"[green]ok[/] {name}: {out_df.height} rows -> {dest}")
-
-
-def _source_label(spec: FilePath | DatabaseUri) -> str:
-    """Human-readable identifier for the source — file path or redacted URI."""
-    if isinstance(spec, FilePath):
-        return str(spec.path)
-    return spec.uri
-
-
-def _sink_label(spec: SinkSpec) -> str:
-    """Human-readable identifier for the sink."""
-    if isinstance(spec, FilePath):
-        return str(spec.path)
-    # DuckDbSink
-    return f"duckdb:///{spec.path}?table={spec.table}"
-
-
-def _table_name_for_spec(spec: FilePath | DatabaseUri) -> str:
-    """Pick a sensible table-name for schema inference. For URIs we prefer
-    the user's --table or a synthetic name from --query; for files we use
-    the stem like before."""
-    if isinstance(spec, FilePath):
-        return spec.path.stem
-    return spec.table or "query"
-
-
-_AUTO_FIT_TRIGGER_ROWS = 100_000
-_AUTO_FIT_CAP = 100_000
-_AUTO_FIT_MULTIPLIER = 5
-
-
-def _auto_fit_rows(user_value: int | None, source_rows: int, requested_rows: int) -> int | None:
-    """Pick an effective `--fit-rows` value.
-
-    - User passed `--fit-rows 0`: opt out of capping; fit on the full source.
-    - User explicitly passed `--fit-rows N` (N >= 1): honour it verbatim.
-    - User omitted the flag AND source ≤ trigger (100k rows): no sampling.
-    - User omitted the flag AND source > trigger: cap at `min(rows*5, 100k)`
-      and print a one-liner so the user understands what was sampled.
-    """
-    if user_value == 0:
-        return None
-    if user_value is not None:
-        return user_value
-    if source_rows <= _AUTO_FIT_TRIGGER_ROWS:
-        return None
-    cap = min(requested_rows * _AUTO_FIT_MULTIPLIER, _AUTO_FIT_CAP)
-    console.print(
-        f"[dim]fit-rows:[/] source has {source_rows:,} rows; "
-        f"sampling {cap:,} (deterministic) for fit. "
-        "pass `--fit-rows 0` to disable, or `--fit-rows N` to set explicitly."
-    )
-    return cap
 
 
 def _parse_rows_per_table(raw: str | None, root_names: set[str]) -> dict[str, int]:
@@ -639,45 +567,6 @@ def _print_constraint_summary(report: ConstraintReport) -> None:
             )
 
 
-def _precheck_where(expression: str, source_df: pl.DataFrame, source_label: str) -> None:
-    """Run the where expression against the source DataFrame and react to the match count.
-
-    Three buckets per design D6:
-      0           → hard fail (BadParameter)
-      1..99       → warn but proceed (fidelity will be poor)
-      >=100       → silent
-    """
-    try:
-        predicate = expr_mod.compile_expression(expression, set(source_df.columns), mode="boolean")
-    except ValueError as exc:
-        raise typer.BadParameter(f"--where invalid: {exc}") from exc
-
-    matches = int(
-        source_df.select(predicate.alias("__doppel_where__"))["__doppel_where__"]
-        .fill_null(False)
-        .sum()
-    )
-    if matches == 0:
-        raise typer.BadParameter(
-            f"no rows in {source_label} satisfy --where {expression!r}; "
-            "synthesizer cannot learn from an empty conditioning slice."
-        )
-    if matches < _THIN_SUPPORT_THRESHOLD:
-        console.print(
-            f"[yellow]warn[/]: only {matches} source rows match --where {expression!r}; "
-            "fidelity in synthetic output will likely be poor. Consider a broader predicate."
-        )
-
-
-def _merge_where_into_constraints(
-    declared: list[Constraint], where: str | None
-) -> list[Constraint]:
-    """CLI `--where` is appended to any TOML-declared constraints as a WhereConstraint."""
-    if where is None:
-        return list(declared)
-    return [*declared, WhereConstraint(expression=where)]
-
-
 def _progress_callback(
     where: str | None,
 ) -> Callable[[int, int, float], None] | None:
@@ -691,149 +580,3 @@ def _progress_callback(
         )
 
     return cb
-
-
-def _resolve_multi_table_for_where(where: str, dataset: Dataset) -> str:
-    """Return the single table referenced by `where`; raise if it spans more than one.
-
-    Doesn't compile the expression — only inspects `Name` nodes. The expression is
-    compiled in boolean mode later, when the table's column set is known.
-    """
-    try:
-        names = expr_mod.collect_column_names(where)
-    except ValueError as exc:
-        raise typer.BadParameter(f"--where invalid: {exc}") from exc
-
-    column_to_tables: dict[str, list[str]] = {}
-    for tname, table in dataset.tables.items():
-        for col in table.columns:
-            column_to_tables.setdefault(col.name, []).append(tname)
-
-    tables_hit: dict[str, list[str]] = {}
-    unknown: list[str] = []
-    for name in names:
-        owners = column_to_tables.get(name)
-        if not owners:
-            unknown.append(name)
-            continue
-        for tname in owners:
-            tables_hit.setdefault(tname, []).append(name)
-
-    if unknown:
-        raise typer.BadParameter(
-            f"--where references columns not in any table: {sorted(unknown)}. "
-            f"Known columns: {sorted(column_to_tables)}"
-        )
-
-    # A column that appears in multiple tables (rare but legal: e.g. both have `created_at`)
-    # is ambiguous. Treat the where as cross-table to be safe — the user should rename or
-    # qualify before retrying.
-    if len(tables_hit) > 1:
-        detail = ", ".join(f"{t}={sorted(set(cols))}" for t, cols in sorted(tables_hit.items()))
-        raise typer.BadParameter(
-            f"--where references columns from multiple tables ({detail}); "
-            "v1 supports single-table predicates only. Run separate `gen` commands per table."
-        )
-    return next(iter(tables_hit))
-
-
-def _filter_multi_table_where(
-    out_dataset: Dataset,
-    where_table: str,
-    where: str,
-    max_oversample: float,
-    seed: int | None,
-    synth: HierarchicalSynthesizer,
-    rows_per_root: dict[str, int],
-) -> Dataset:
-    """Apply the where predicate to one table of an already-sampled multi-table output.
-
-    Strategy: filter the named table's rows in place. Root-table predicates preserve the
-    requested root row count via oversampling; child-table predicates simply narrow that
-    child table, because `--rows` is defined per root table in the hierarchical flow.
-    """
-    table = out_dataset.tables[where_table]
-    assert table.data is not None
-    column_set = {c.name for c in table.columns}
-    try:
-        predicate = expr_mod.compile_expression(where, column_set, mode="boolean")
-    except ValueError as exc:
-        raise typer.BadParameter(f"--where invalid: {exc}") from exc
-
-    root_target = rows_per_root.get(where_table)
-    kept_df = _apply_predicate_mask(table.data, predicate)
-    if root_target is None:
-        return _replace_table_and_prune(out_dataset, table, kept_df)
-
-    if kept_df.height >= root_target:
-        return _replace_table_and_prune(out_dataset, table, kept_df.head(root_target))
-
-    target = root_target
-    if kept_df.height < target:
-        # Re-sample the dataset with a larger root row count for the target table only.
-        factor = 1.5
-        while kept_df.height < target and factor <= max_oversample + 1e-9:
-            scaled = dict(rows_per_root)
-            scaled[where_table] = max(int(target * factor), target + 1)
-            extra_ds, _ = synth.sample(scaled, Rng.from_seed(seed).spawn())
-            extra_table = extra_ds.tables[where_table]
-            assert extra_table.data is not None
-            kept_df = _apply_predicate_mask(extra_table.data, predicate)
-            out_dataset = extra_ds
-            table = extra_table
-            factor *= 1.5
-        if kept_df.height < target:
-            raise ValueError(
-                f"could not synthesize {target} rows for table {where_table!r} satisfying "
-                f"--where after oversample factor {factor:.1f}x. Constraint may be too rare."
-            )
-    return _replace_table_and_prune(out_dataset, table, kept_df.head(target))
-
-
-def _replace_table_and_prune(dataset: Dataset, table: Table, data: pl.DataFrame) -> Dataset:
-    tables = dict(dataset.tables)
-    tables[table.name] = Table(
-        name=table.name,
-        columns=list(table.columns),
-        primary_key=table.primary_key,
-        data=data,
-    )
-    return _prune_descendants_for_fk_integrity(Dataset(tables=tables, edges=list(dataset.edges)))
-
-
-def _prune_descendants_for_fk_integrity(dataset: Dataset) -> Dataset:
-    """Drop child rows whose parent row was removed by a multi-table `--where` filter."""
-    tables = dict(dataset.tables)
-    children_by_parent: dict[str, list[ForeignKey]] = {}
-    for edge in dataset.edges:
-        children_by_parent.setdefault(edge.parent_table, []).append(edge)
-
-    for parent_name in dataset.topological_order():
-        parent_table = tables[parent_name]
-        parent_df = parent_table.data
-        if parent_df is None:
-            continue
-        for edge in children_by_parent.get(parent_name, []):
-            child_table = tables[edge.child_table]
-            child_df = child_table.data
-            if child_df is None:
-                continue
-            parent_values = parent_df[edge.parent_column].drop_nulls().unique()
-            filtered = child_df.filter(
-                pl.col(edge.child_column).is_null()
-                | pl.col(edge.child_column).is_in(parent_values.implode())
-            )
-            if filtered.height == child_df.height:
-                continue
-            tables[edge.child_table] = Table(
-                name=child_table.name,
-                columns=list(child_table.columns),
-                primary_key=child_table.primary_key,
-                data=filtered,
-            )
-    return Dataset(tables=tables, edges=list(dataset.edges))
-
-
-def _apply_predicate_mask(df: pl.DataFrame, predicate: pl.Expr) -> pl.DataFrame:
-    holds = df.select(predicate.alias("__doppel_where__"))["__doppel_where__"].fill_null(False)
-    return df.filter(holds)

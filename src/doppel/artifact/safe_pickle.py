@@ -62,6 +62,9 @@ _ALLOWED_DOPPEL_GLOBALS: frozenset[tuple[str, str]] = frozenset(
         ("doppel.synth.cart", "_CountBound"),
         ("doppel.synth.cart", "_Encoder"),
         ("doppel.synth.cart", "_MissingFlag"),
+        ("doppel.synth.cart_repair", "RepairSummary"),
+        ("doppel.synth.cart_repair", "CountBound"),
+        ("doppel.synth.cart_repair", "MissingFlag"),
     }
 )
 

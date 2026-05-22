@@ -36,17 +36,32 @@ from doppel.schema.datetime import (
 from doppel.schema.datetime import (
     calendar_features as extract_calendar_features,
 )
-from doppel.schema.heuristics import (
-    FLOAT_DTYPE_NAMES,
-    INTEGER_DTYPE_NAMES,
-    is_binary_flag,
-    is_integer_dtype,
-    looks_like_count_column,
-)
+from doppel.schema.heuristics import FLOAT_DTYPE_NAMES, INTEGER_DTYPE_NAMES
 from doppel.schema.nullable import encode_feature
 from doppel.schema.nullable import null_rate as _null_rate
 from doppel.schema.types import Column, ColumnType
+from doppel.synth.cart_repair import (
+    CountBound,
+    MissingFlag,
+    RepairSummary,
+)
+from doppel.synth.cart_repair import (
+    detect_count_bounds as _detect_count_bounds,
+)
+from doppel.synth.cart_repair import (
+    detect_missing_flags as _detect_missing_flags,
+)
+from doppel.synth.cart_repair import (
+    detect_ordered_pairs as _detect_ordered_pairs,
+)
+from doppel.synth.cart_repair import (
+    repair_output as _repair_output,
+)
 from doppel.synth.seed import Rng
+
+# Pickle allowlist entries reference these names on ``doppel.synth.cart``.
+_MissingFlag = MissingFlag
+_CountBound = CountBound
 
 _MIN_SAMPLES_LEAF = 5
 # Reserved prefix for calendar features inside the CART feature matrix. Double-underscore
@@ -61,7 +76,7 @@ class ColumnFitInfo:
     """Public, read-only summary of how one column was modeled. Used by --explain."""
 
     column: Column
-    is_first: bool
+    unconditional_resample: bool
     has_value_model: bool
     has_null_model: bool
     has_constant: bool
@@ -80,29 +95,6 @@ class ColumnFitInfo:
         if self.has_value_model:
             return "cart+leaf-sample" if self.has_null_model else "cart-no-nulls"
         return "empirical-resample"
-
-
-@dataclass(frozen=True)
-class RepairSummary:
-    missing_flags: dict[str, int] = field(default_factory=dict)
-    count_bounds: dict[str, int] = field(default_factory=dict)
-
-    @property
-    def total(self) -> int:
-        return sum(self.missing_flags.values()) + sum(self.count_bounds.values())
-
-
-@dataclass(frozen=True)
-class _MissingFlag:
-    flag_column: str
-    source_column: str
-    flag_dtype: pl.DataType
-
-
-@dataclass(frozen=True)
-class _CountBound:
-    low_column: str
-    high_column: str
 
 
 @dataclass
@@ -135,7 +127,7 @@ class _ColumnSynth:
     column: Column
     encoder: _Encoder
     source_dtype: pl.DataType
-    is_first: bool
+    unconditional_resample: bool
     empirical_null_rate: float
     # First-column path: pool of observed non-null values to resample.
     nonnull_pool: list[object] = field(default_factory=list)
@@ -161,12 +153,12 @@ def _fit_column(
     null_rate = _null_rate(target)
     nonnull = target.drop_nulls()
     nonnull_list = nonnull.to_list()
-    is_first = features.width == 0
+    unconditional = features.width == 0
 
     # Free text is always sampled-with-replacement in Phase 1 — fitting a classifier
     # on a high-cardinality string target leaks raw values into a noisy model and
     # buys us nothing over empirical resampling. PII handling lands in Phase 6.
-    if is_first or len(nonnull_list) <= 1 or col.type is ColumnType.TEXT:
+    if unconditional or len(nonnull_list) <= 1 or col.type is ColumnType.TEXT:
         const_value, has_const = (
             (nonnull_list[0], True)
             if len(set(nonnull_list)) == 1 and nonnull_list
@@ -176,7 +168,7 @@ def _fit_column(
             column=col,
             encoder=encoder,
             source_dtype=source_dtype,
-            is_first=True,
+            unconditional_resample=True,
             empirical_null_rate=null_rate,
             nonnull_pool=nonnull_list,
             constant_value=const_value,
@@ -203,7 +195,7 @@ def _fit_column(
                 column=col,
                 encoder=encoder,
                 source_dtype=source_dtype,
-                is_first=False,
+                unconditional_resample=False,
                 empirical_null_rate=null_rate,
                 null_model=null_model,
                 constant_value=float(y_arr[0]) if y_arr.size else None,
@@ -222,7 +214,7 @@ def _fit_column(
             column=col,
             encoder=encoder,
             source_dtype=source_dtype,
-            is_first=False,
+            unconditional_resample=False,
             empirical_null_rate=null_rate,
             null_model=null_model,
             value_model=value_model,
@@ -238,7 +230,7 @@ def _fit_column(
             column=col,
             encoder=encoder,
             source_dtype=source_dtype,
-            is_first=False,
+            unconditional_resample=False,
             empirical_null_rate=null_rate,
             null_model=null_model,
             constant_value=nonnull_list[0] if nonnull_list else None,
@@ -257,7 +249,7 @@ def _fit_column(
         column=col,
         encoder=encoder,
         source_dtype=source_dtype,
-        is_first=False,
+        unconditional_resample=False,
         empirical_null_rate=null_rate,
         null_model=null_model,
         value_model=value_model,
@@ -269,7 +261,7 @@ def _fit_column(
 def _sample_null_mask(cs: _ColumnSynth, x: np.ndarray | None, n: int, rng: Rng) -> np.ndarray:
     if cs.empirical_null_rate <= 0.0:
         return np.zeros(n, dtype=bool)
-    if cs.is_first or cs.null_model is None or x is None:
+    if cs.unconditional_resample or cs.null_model is None or x is None:
         return rng.numpy.random(size=n) < cs.empirical_null_rate
     proba = np.asarray(cs.null_model.predict_proba(x))
     classes = np.asarray(cs.null_model.classes_)
@@ -292,7 +284,7 @@ def _sample_values(
         return []
     if cs.has_constant:
         return [cs.constant_value] * n_needed
-    if cs.is_first or cs.value_model is None or x is None:
+    if cs.unconditional_resample or cs.value_model is None or x is None:
         idx = rng.numpy.integers(0, len(cs.nonnull_pool), size=n_needed)
         return [cs.nonnull_pool[i] for i in idx]
     leaves = cs.value_model.apply(x)
@@ -354,28 +346,6 @@ def _random_uuid_hex(rng: Rng) -> str:
     return uuid.UUID(bytes=bytes(raw)).hex
 
 
-def _detect_ordered_pairs(cols: list[Column], df: pl.DataFrame) -> list[tuple[str, str]]:
-    """Return temporal (low_col, high_col) pairs where low_col <= high_col held for every row.
-
-    Used to enforce impossible orderings that CART leaf-sampling can violate (e.g. a pickup
-    datetime synthesised later than its corresponding dropoff datetime).
-    """
-    ordered: list[tuple[str, str]] = []
-    candidates = [c for c in cols if c.type is ColumnType.DATETIME]
-    for i, col_a in enumerate(candidates):
-        for col_b in candidates[i + 1 :]:
-            both_nn = df.filter(pl.col(col_a.name).is_not_null() & pl.col(col_b.name).is_not_null())
-            if both_nn.height == 0:
-                continue
-            a = both_nn[col_a.name].cast(pl.Float64)
-            b = both_nn[col_b.name].cast(pl.Float64)
-            if (a <= b).all():
-                ordered.append((col_a.name, col_b.name))
-            elif (b <= a).all():
-                ordered.append((col_b.name, col_a.name))
-    return ordered
-
-
 class CartSynthesizer:
     def __init__(self) -> None:
         self._table_name: str = ""
@@ -387,10 +357,10 @@ class CartSynthesizer:
         self._datetime_dtypes: dict[str, pl.DataType] = {}
         # Resolved calendar features per datetime column name. Set at fit time, replayed
         # at sample time so source and synth feature matrices have the same shape.
-        self._calendar_features: dict[str, tuple[CalendarFeature, ...]] = {}
+        self._calendar_features: dict[str, tuple[CalendarFeature, ...]] = {}  # pickle compat
         self._column_synths: list[_ColumnSynth] = []
-        self._missing_flags: list[_MissingFlag] = []
-        self._count_bounds: list[_CountBound] = []
+        self._missing_flags: list[MissingFlag] = []
+        self._count_bounds: list[CountBound] = []
         self._last_repair_summary = RepairSummary()
         # Pairs (col_a, col_b) where col_a <= col_b held for all training rows.
         # Enforced post-sampling to prevent impossible orderings (e.g. pickup > dropoff).
@@ -433,7 +403,7 @@ class CartSynthesizer:
             out.append(
                 ColumnFitInfo(
                     column=cs.column,
-                    is_first=cs.is_first,
+                    unconditional_resample=cs.unconditional_resample,
                     has_value_model=cs.value_model is not None,
                     has_null_model=cs.null_model is not None,
                     has_constant=cs.has_constant,
@@ -658,109 +628,3 @@ def _build_series(
         except pl.exceptions.PolarsError:
             return series
     return series
-
-
-def _repair_output(
-    df: pl.DataFrame,
-    missing_flags: list[_MissingFlag],
-    count_bounds: list[_CountBound],
-) -> tuple[pl.DataFrame, RepairSummary]:
-    out = df
-    missing_repairs: dict[str, int] = {}
-    for flag in missing_flags:
-        if flag.source_column not in out.columns or flag.flag_column not in out.columns:
-            continue
-        desired = out[flag.source_column].is_null()
-        current = _flag_truth(out[flag.flag_column])
-        changes = int((current != desired).sum())
-        if changes == 0:
-            continue
-        missing_repairs[flag.flag_column] = changes
-        values = desired.cast(flag.flag_dtype).alias(flag.flag_column)
-        out = out.with_columns(values)
-
-    bound_repairs: dict[str, int] = {}
-    for _ in range(3):
-        changed = False
-        for bound in count_bounds:
-            if bound.low_column not in out.columns or bound.high_column not in out.columns:
-                continue
-            low = out[bound.low_column]
-            high = out[bound.high_column]
-            mask = low.is_not_null() & high.is_not_null() & (low > high)
-            changes = int(mask.sum())
-            if changes == 0:
-                continue
-            changed = True
-            label = f"{bound.low_column} <= {bound.high_column}"
-            bound_repairs[label] = bound_repairs.get(label, 0) + changes
-            out = out.with_columns(
-                pl.when(mask)
-                .then(pl.col(bound.high_column))
-                .otherwise(pl.col(bound.low_column))
-                .cast(low.dtype)
-                .alias(bound.low_column)
-            )
-        if not changed:
-            break
-
-    return out, RepairSummary(missing_flags=missing_repairs, count_bounds=bound_repairs)
-
-
-def _detect_missing_flags(columns: list[Column], df: pl.DataFrame) -> list[_MissingFlag]:
-    by_name = {c.name: c for c in columns}
-    flags: list[_MissingFlag] = []
-    for col in columns:
-        source = _missing_flag_source(col.name, by_name)
-        if source is None or source not in df.columns or col.name not in df.columns:
-            continue
-        flag_series = df[col.name]
-        if not is_binary_flag(flag_series):
-            continue
-        if (_flag_truth(flag_series) == df[source].is_null()).all():
-            flags.append(_MissingFlag(col.name, source, flag_series.dtype))
-    return flags
-
-
-def _missing_flag_source(name: str, by_name: dict[str, Column]) -> str | None:
-    upper = name.upper()
-    if "_MISSING" in upper:
-        idx = upper.index("_MISSING")
-        prefix = name[:idx]
-        if prefix in by_name:
-            return prefix
-        suffix = name[idx + len("_MISSING") :]
-        candidate = f"{prefix}{suffix}"
-        if candidate in by_name:
-            return candidate
-    if upper.startswith("IS_") and upper.endswith("_MISSING"):
-        candidate = name[3:-8]
-        if candidate in by_name:
-            return candidate
-    return None
-
-
-def _detect_count_bounds(columns: list[Column], df: pl.DataFrame) -> list[_CountBound]:
-    candidates = [
-        c
-        for c in columns
-        if c.name in df.columns
-        and c.type is ColumnType.NUMERIC
-        and is_integer_dtype(df[c.name].dtype)
-        and looks_like_count_column(c.name)
-    ]
-    bounds: list[_CountBound] = []
-    for low in candidates:
-        for high in candidates:
-            if low.name == high.name:
-                continue
-            both_nn = df.filter(pl.col(low.name).is_not_null() & pl.col(high.name).is_not_null())
-            if both_nn.height == 0:
-                continue
-            if (both_nn[low.name] <= both_nn[high.name]).all():
-                bounds.append(_CountBound(low.name, high.name))
-    return bounds
-
-
-def _flag_truth(series: pl.Series) -> pl.Series:
-    return series.fill_null(0).cast(pl.Int8) == 1

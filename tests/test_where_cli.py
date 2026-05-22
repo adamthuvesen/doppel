@@ -338,7 +338,7 @@ def test_gen_where_thick_support_no_warning(plan_csv: Path, tmp_path: Path) -> N
 # ── Oversample exhaustion ──────────────────────────────────────────────────────
 
 
-def test_gen_where_oversample_exhaustion_raises(tmp_path: Path) -> None:
+def test_gen_where_oversample_exhaustion_is_clean_cli_error(tmp_path: Path) -> None:
     src = tmp_path / "rare.csv"
     pl.DataFrame(
         {
@@ -365,11 +365,11 @@ def test_gen_where_oversample_exhaustion_raises(tmp_path: Path) -> None:
             "1.5",
         ],
     )
-    assert result.exit_code != 0
-    # The engine raises `ValueError("could not synthesize …")` and Typer propagates it
-    # — it lives on the result's `exception` attribute when CliRunner catches it.
-    assert isinstance(result.exception, ValueError)
-    assert "could not synthesize" in str(result.exception).lower()
+    assert result.exit_code == 2
+    combined = result.stdout + (result.stderr or "")
+    assert "could not synthesize" in combined.lower()
+    assert "Traceback" not in combined
+    assert not isinstance(result.exception, ValueError)
 
 
 def test_gen_where_invalid_max_oversample_rejected(plan_csv: Path, tmp_path: Path) -> None:

@@ -109,6 +109,49 @@ def test_sample_text_policy_fake_for_artifact(tmp_path: Path) -> None:
     assert all(str(v).endswith(".example") for v in synth["company_domain"].drop_nulls())
 
 
+def test_sample_constraint_exhaustion_is_clean_cli_error(mixed_csv: Path, tmp_path: Path) -> None:
+    schema = tmp_path / "schema.toml"
+    schema.write_text(
+        """
+[table]
+name = "mixed"
+
+[[constraints]]
+kind = "range"
+column = "age"
+min = 10000
+""",
+        encoding="utf-8",
+    )
+    artifact = tmp_path / "model.doppel"
+    fit_result = runner.invoke(
+        app,
+        [
+            "fit",
+            str(mixed_csv),
+            "--schema",
+            str(schema),
+            "--output",
+            str(artifact),
+            "--seed",
+            "5",
+        ],
+    )
+    assert fit_result.exit_code == 0, fit_result.stdout
+
+    out = tmp_path / "synth.csv"
+    sample_result = runner.invoke(
+        app,
+        ["sample", str(artifact), "--rows", "20", "--output", str(out), "--seed", "5"],
+    )
+
+    assert sample_result.exit_code == 2
+    combined = sample_result.stdout + (sample_result.stderr or "")
+    assert "could not synthesize" in combined.lower()
+    assert "Traceback" not in combined
+    assert not isinstance(sample_result.exception, ValueError)
+
+
 def test_gen_and_fit_then_sample_produce_same_output(mixed_csv: Path, tmp_path: Path) -> None:
     """`doppel gen` should equal `doppel fit && doppel sample` for the same seed pipeline.
 

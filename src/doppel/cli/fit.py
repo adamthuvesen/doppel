@@ -186,9 +186,12 @@ def sample(
         console.print(
             f"[dim]applying[/] {len(schema_toml.constraints)} constraints from embedded schema"
         )
-        out_ds, _ = synthesize_with_constraints(
-            synth, schema_toml.constraints, rows, Rng.from_seed(seed)
-        )
+        try:
+            out_ds, _ = synthesize_with_constraints(
+                synth, schema_toml.constraints, rows, Rng.from_seed(seed)
+            )
+        except ValueError as exc:
+            raise typer.BadParameter(str(exc)) from exc
     else:
         out_ds = synth.sample(rows, Rng.from_seed(seed))
     print_repair_summary(console, synth.last_repair_summary)

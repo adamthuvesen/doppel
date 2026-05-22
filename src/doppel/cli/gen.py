@@ -321,14 +321,17 @@ def _run_single(
             f"[dim]applying[/] {len(constraints)} constraints via reject-resample "
             f"(max-oversample={max_oversample:g}x)"
         )
-        synth_ds, creport = synthesize_with_constraints(
-            synth,
-            constraints,
-            rows,
-            sample_rng,
-            max_factor=max_oversample,
-            on_iteration=_progress_callback(where),
-        )
+        try:
+            synth_ds, creport = synthesize_with_constraints(
+                synth,
+                constraints,
+                rows,
+                sample_rng,
+                max_factor=max_oversample,
+                on_iteration=_progress_callback(where),
+            )
+        except ValueError as exc:
+            raise typer.BadParameter(str(exc)) from exc
         _print_constraint_summary(creport)
     else:
         synth_ds = synth.sample(rows, sample_rng)
@@ -464,9 +467,12 @@ def _run_multi(
     out_dataset, _report = synth.sample(rows_per_root, Rng.from_seed(seed))
 
     if where is not None and where_table is not None:
-        out_dataset = _filter_multi_table_where(
-            out_dataset, where_table, where, max_oversample, seed, synth, rows_per_root
-        )
+        try:
+            out_dataset = _filter_multi_table_where(
+                out_dataset, where_table, where, max_oversample, seed, synth, rows_per_root
+            )
+        except ValueError as exc:
+            raise typer.BadParameter(str(exc)) from exc
 
     output_dir.mkdir(parents=True, exist_ok=True)
     for name, out_table in out_dataset.tables.items():

@@ -147,6 +147,23 @@ def test_quality_report_survives_synth_dtype_mismatch() -> None:
     assert rendered["value"] is None
 
 
+def test_quality_report_flags_missing_and_extra_synth_columns() -> None:
+    real = pl.DataFrame({"a": [1, 2], "b": [3, 4]})
+    synth = pl.DataFrame({"a": [1, 2], "c": [9, 10]})
+
+    report = compute_quality(real, synth, _columns(real))
+
+    by_column = {issue.column: issue for issue in report.dtype_mismatches}
+    assert by_column["b"].real_dtype == "Int64"
+    assert by_column["b"].synth_dtype == "<missing>"
+    assert by_column["c"].real_dtype == "<missing>"
+    assert by_column["c"].synth_dtype == "Int64"
+    payload = json.loads(to_json(report))
+    rendered = {issue["column"]: issue for issue in payload["dtype_mismatches"]}
+    assert rendered["b"]["synth_dtype"] == "<missing>"
+    assert rendered["c"]["real_dtype"] == "<missing>"
+
+
 def test_key_and_text_columns_are_skipped_in_marginals() -> None:
     df = pl.DataFrame(
         {

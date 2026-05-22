@@ -16,6 +16,8 @@ from doppel.quality.privacy import PrivacyReport
 from doppel.schema.heuristics import is_integer_dtype, looks_like_count_column
 from doppel.schema.types import Column, ColumnType
 
+_MISSING_DTYPE = "<missing>"
+
 
 @dataclass(frozen=True)
 class DtypeMismatch:
@@ -93,6 +95,13 @@ def _dtype_mismatches(real: pl.DataFrame, synth: pl.DataFrame) -> list[DtypeMism
     issues: list[DtypeMismatch] = []
     for name in real.columns:
         if name not in synth.columns:
+            issues.append(
+                DtypeMismatch(
+                    column=name,
+                    real_dtype=str(real[name].dtype),
+                    synth_dtype=_MISSING_DTYPE,
+                )
+            )
             continue
         real_dtype = real[name].dtype
         synth_dtype = synth[name].dtype
@@ -102,6 +111,15 @@ def _dtype_mismatches(real: pl.DataFrame, synth: pl.DataFrame) -> list[DtypeMism
                     column=name,
                     real_dtype=str(real_dtype),
                     synth_dtype=str(synth_dtype),
+                )
+            )
+    for name in synth.columns:
+        if name not in real.columns:
+            issues.append(
+                DtypeMismatch(
+                    column=name,
+                    real_dtype=_MISSING_DTYPE,
+                    synth_dtype=str(synth[name].dtype),
                 )
             )
     return issues

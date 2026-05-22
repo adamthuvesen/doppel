@@ -139,6 +139,67 @@ def test_diff_json_includes_thresholds_block(mixed_csv: Path, tmp_path: Path) ->
     assert payload["thresholds"]["breaches"] == []
 
 
+def test_diff_threshold_gate_fails_on_structural_diagnostics(tmp_path: Path) -> None:
+    import polars as pl
+
+    real = tmp_path / "real.csv"
+    synth = tmp_path / "synth.csv"
+    json_path = tmp_path / "report.json"
+    pl.DataFrame({"a": [1, 2, 3], "b": [10, 20, 30]}).write_csv(real)
+    pl.DataFrame({"a": [1, 2, 3], "c": [10, 20, 30]}).write_csv(synth)
+
+    result = runner.invoke(
+        app,
+        [
+            "diff",
+            str(real),
+            str(synth),
+            "--json",
+            str(json_path),
+            "--max-marginal",
+            "1.0",
+        ],
+    )
+
+    assert result.exit_code == 2, result.stdout
+    assert "dtype_mismatches" in result.stdout
+    payload = json.loads(json_path.read_text())
+    assert payload["thresholds"]["passed"] is False
+    assert [breach["name"] for breach in payload["thresholds"]["breaches"]] == ["dtype_mismatches"]
+
+
+def test_diff_threshold_gate_fails_on_non_finite_requested_metric(tmp_path: Path) -> None:
+    import polars as pl
+
+    real = tmp_path / "real.csv"
+    synth = tmp_path / "synth.csv"
+    json_path = tmp_path / "report.json"
+    values = [f"mostly-unique-text-{i:03d}" for i in range(80)]
+    pl.DataFrame({"free_text": values}).write_csv(real)
+    pl.DataFrame({"free_text": values}).write_csv(synth)
+
+    result = runner.invoke(
+        app,
+        [
+            "diff",
+            str(real),
+            str(synth),
+            "--json",
+            str(json_path),
+            "--min-dcr-p5",
+            "0.0",
+        ],
+    )
+
+    assert result.exit_code == 2, result.stdout
+    assert "dcr_p5: n/a" in result.stdout
+    payload = json.loads(json_path.read_text())
+    assert payload["thresholds"]["passed"] is False
+    assert payload["thresholds"]["breaches"] == [
+        {"name": "dcr_p5", "actual": None, "allowed": ">= 0.0"}
+    ]
+
+
 def test_diff_fail_on_verbatim_text_flag(tmp_path: Path) -> None:
     """A TEXT column copied verbatim from source trips --fail-on-verbatim-text."""
     import polars as pl

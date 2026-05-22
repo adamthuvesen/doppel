@@ -65,13 +65,23 @@ class ThresholdBreach:
 
 def check_thresholds(report: QualityReport, spec: ThresholdSpec) -> list[ThresholdBreach]:
     breaches: list[ThresholdBreach] = []
-    if spec.max_marginal is not None and report.avg_marginal > spec.max_marginal:
+    if report.dtype_mismatches:
+        breaches.append(
+            ThresholdBreach("dtype_mismatches", float(len(report.dtype_mismatches)), "0")
+        )
+    if report.invariant_issues:
+        breaches.append(
+            ThresholdBreach("invariant_issues", float(len(report.invariant_issues)), "0")
+        )
+    if spec.max_marginal is not None and (
+        not math.isfinite(report.avg_marginal) or report.avg_marginal > spec.max_marginal
+    ):
         breaches.append(
             ThresholdBreach("avg_marginal", report.avg_marginal, f"<= {spec.max_marginal}")
         )
-    if (
-        spec.max_correlation_distance is not None
-        and report.correlations.frobenius_distance > spec.max_correlation_distance
+    if spec.max_correlation_distance is not None and (
+        not math.isfinite(report.correlations.frobenius_distance)
+        or report.correlations.frobenius_distance > spec.max_correlation_distance
     ):
         breaches.append(
             ThresholdBreach(
@@ -80,7 +90,10 @@ def check_thresholds(report: QualityReport, spec: ThresholdSpec) -> list[Thresho
                 f"<= {spec.max_correlation_distance}",
             )
         )
-    if spec.min_dcr_p5 is not None and report.privacy.percentile_5 < spec.min_dcr_p5:
+    if spec.min_dcr_p5 is not None and (
+        not math.isfinite(report.privacy.percentile_5)
+        or report.privacy.percentile_5 < spec.min_dcr_p5
+    ):
         breaches.append(
             ThresholdBreach("dcr_p5", report.privacy.percentile_5, f">= {spec.min_dcr_p5}")
         )
@@ -344,5 +357,12 @@ def _threshold_payload(
         "min_dcr_p5": spec.min_dcr_p5,
         "fail_on_verbatim_text": spec.fail_on_verbatim_text,
         "passed": not breaches,
-        "breaches": [{"name": b.name, "actual": b.actual, "allowed": b.allowed} for b in breaches],
+        "breaches": [
+            {
+                "name": b.name,
+                "actual": b.actual if math.isfinite(b.actual) else None,
+                "allowed": b.allowed,
+            }
+            for b in breaches
+        ],
     }

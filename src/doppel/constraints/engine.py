@@ -26,6 +26,7 @@ from doppel.constraints.dsl import (
     RangeConstraint,
     WhereConstraint,
 )
+from doppel.constraints.oversample import geometric_oversample
 from doppel.constraints.reject import CompiledWhere, ConstraintViolation
 from doppel.dataset import Dataset, Table
 from doppel.synth.cart import CartSynthesizer
@@ -39,6 +40,13 @@ class ConstraintReport:
     rows_attempted: int
     rows_kept: int
     oversample_factor: float
+
+
+@dataclass
+class _RejectAccum:
+    kept: pl.DataFrame = field(default_factory=lambda: pl.DataFrame())
+    violation_totals: dict[str, tuple[int, int]] = field(default_factory=dict)
+    attempted_rows: int = 0
 
 
 @dataclass(frozen=True)
@@ -78,36 +86,44 @@ def synthesize_with_constraints(
     derived_names = {c.column for c in parts.derived}
     compiled_wheres = _compile_wheres(parts.wheres, column_names | derived_names)
 
-    kept = pl.DataFrame()
-    factor = initial_factor
-    attempted = 0
-    violation_totals: dict[str, tuple[int, int]] = {}
+    accum: _RejectAccum = _RejectAccum()
 
-    while kept.height < n and factor <= max_factor + 1e-9:
-        deficit = n - kept.height
-        batch_size = max(int(deficit * factor), 1)
+    def _synthesize(batch_size: int) -> pl.DataFrame:
         batch = synth.sample(batch_size, rng).only().data
         if batch is None:
             raise RuntimeError("synthesizer returned a table with no data")
+        return batch
+
+    def _accept(batch: pl.DataFrame) -> int:
         batch = expr_mod.apply(batch, parts.derived)
         mask, counts = reject_mod.combined_violation_mask(
             batch, parts.ranges, parts.inequalities, compiled_wheres
         )
-        _add_violation_counts(violation_totals, counts)
-        kept = pl.concat([kept, batch.filter(~mask)], how="vertical")
-        attempted += batch_size
-        if on_iteration is not None:
-            on_iteration(batch_size, kept.height, factor)
-        factor *= 1.5
+        _add_violation_counts(accum.violation_totals, counts)
+        clean = batch.filter(~mask)
+        accum.kept = pl.concat([accum.kept, clean], how="vertical")
+        return clean.height
 
-    if kept.height < n:
-        raise ValueError(
+    def _on_iter(batch_size: int, kept_total: int, factor: float) -> None:
+        accum.attempted_rows += batch_size
+        if on_iteration is not None:
+            on_iteration(batch_size, kept_total, factor)
+
+    geometric_oversample(
+        n,
+        synthesize=_synthesize,
+        accept=_accept,
+        initial_factor=initial_factor,
+        max_factor=max_factor,
+        on_iteration=_on_iter,
+        exhausted_message=lambda _t, attempted, factor: (
             f"could not synthesize {n} rows satisfying constraints "
             f"after {attempted} attempts (oversample factor {factor:.1f}x). "
             "Constraints may be unsatisfiable for this data."
-        )
-
-    final = kept.head(n)
+        ),
+    )
+    attempted = accum.attempted_rows
+    final = accum.kept.head(n)
     table = Table(
         name=synth.table_name,
         columns=synth.original_columns,
@@ -116,7 +132,7 @@ def synthesize_with_constraints(
     )
     return Dataset.single(table), ConstraintReport(
         derived_applied=derived_labels,
-        violations=_violation_counts_from_totals(violation_totals),
+        violations=_violation_counts_from_totals(accum.violation_totals),
         rows_attempted=attempted,
         rows_kept=final.height,
         oversample_factor=attempted / max(n, 1),

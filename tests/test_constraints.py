@@ -91,6 +91,31 @@ def test_derived_rejects_hostile_nodes(expression: str) -> None:
         derived_mod.apply(df, [DerivedConstraint(column="x", expression=expression)])
 
 
+def test_derived_rejects_bool_numeric_literal() -> None:
+    df = pl.DataFrame({"a": [1, 2]})
+    with pytest.raises(ValueError, match="unsupported"):
+        derived_mod.apply(df, [DerivedConstraint(column="x", expression="True + a")])
+
+
+def test_derived_unknown_expression_column_still_rejected() -> None:
+    df = pl.DataFrame({"a": [1, 2]})
+    with pytest.raises(ValueError, match="unknown column"):
+        derived_mod.apply(df, [DerivedConstraint(column="x", expression="missing + a")])
+
+
+def test_derived_chained_constraints_see_prior_columns() -> None:
+    df = pl.DataFrame({"a": [1, 2, 3], "sum": [0, 0, 0], "scaled": [0, 0, 0]})
+    out = derived_mod.apply(
+        df,
+        [
+            DerivedConstraint(column="sum", expression="a * 2"),
+            DerivedConstraint(column="scaled", expression="sum + 1"),
+        ],
+    )
+    assert out["sum"].to_list() == [2, 4, 6]
+    assert out["scaled"].to_list() == [3, 5, 7]
+
+
 def test_derived_apply_does_not_mutate_allowed_columns() -> None:
     df = pl.DataFrame({"a": [1, 2]})
     allowed = {"a"}

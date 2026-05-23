@@ -78,11 +78,12 @@ def apply(
     if not constraints:
         return df
     columns = set(allowed_columns) if allowed_columns is not None else set(df.columns)
+    working = set(columns)
     out = df
     for c in constraints:
-        expr = compile_expression(c.expression, columns, mode="numeric")
+        expr = compile_expression(c.expression, working, mode="numeric")
         out = out.with_columns(expr.alias(c.column))
-        columns.add(c.column)
+        working.add(c.column)
     return out
 
 

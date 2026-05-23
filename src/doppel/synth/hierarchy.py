@@ -16,6 +16,7 @@ What v1 does NOT yet do (named honestly, deferred to a later phase):
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 
 import numpy as np
@@ -24,6 +25,8 @@ import polars as pl
 from doppel.dataset import Dataset, ForeignKey, Table
 from doppel.synth.cart import CartSynthesizer
 from doppel.synth.seed import Rng
+
+_log = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -138,6 +141,13 @@ class HierarchicalSynthesizer:
         # np.repeat over the parent's PK column: dtype is preserved if we
         # construct the polars Series with the parent's dtype explicitly,
         # so Int32/UInt64/Float32 FKs don't silently widen to Int64 / String.
+        if parent_pk_series.n_unique() != parent_df.height:
+            _log.debug(
+                "hierarchy: parent table %r PK column %r has duplicate values; "
+                "FK assignment may map multiple children to the same parent row",
+                edge.parent_table,
+                edge.parent_column,
+            )
         fk_values = np.repeat(parent_pk_series.to_numpy(), counts)
         return child_df.with_columns(
             pl.Series(edge.child_column, fk_values, dtype=parent_pk_series.dtype)
@@ -151,10 +161,23 @@ def _empirical_child_counts(dataset: Dataset, edge: ForeignKey) -> list[int]:
         raise ValueError("FK edge requires both parent and child tables to have data")
     # Drop orphan-null FK rows before grouping so they don't accidentally collide with
     # parent rows whose PK is also null (rare but silent if it happens).
-    grouped = (
-        child.data.filter(pl.col(edge.child_column).is_not_null()).group_by(edge.child_column).len()
-    )
+    child_nn = child.data.filter(pl.col(edge.child_column).is_not_null())
+    grouped = child_nn.group_by(edge.child_column).len()
     by_pk = {row[0]: int(row[1]) for row in grouped.iter_rows()}
+    parent_pk_set = set(parent.data[edge.parent_column].drop_nulls().unique().to_list())
+    orphan_fks = [
+        fk for fk in child_nn[edge.child_column].unique().to_list() if fk not in parent_pk_set
+    ]
+    if orphan_fks:
+        _log.debug(
+            "hierarchy: %d orphan FK values in %s.%s not present in %s.%s; "
+            "excluded from empirical child-count distribution",
+            len(orphan_fks),
+            edge.child_table,
+            edge.child_column,
+            edge.parent_table,
+            edge.parent_column,
+        )
     parent_pks = parent.data[edge.parent_column].to_list()
     return [by_pk.get(pk, 0) for pk in parent_pks]
 

@@ -351,7 +351,7 @@ def test_cart_synth_populates_nonnull_pool_on_conditional_path() -> None:
     synth.fit(Dataset.single(infer_table("t", df)), Rng.from_seed(0))
     for cs in synth._column_synths:
         # Skip the first column (uses the first-column path which always populates).
-        if cs.is_first:
+        if cs.unconditional_resample:
             continue
         if cs.has_constant:
             continue

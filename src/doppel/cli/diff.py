@@ -20,6 +20,7 @@ from rich.progress import (
     TimeElapsedColumn,
 )
 
+from doppel.cli import labels as cli_labels
 from doppel.cli._common import resolve_source, sample_frame
 from doppel.quality.aggregate import QualityReport
 from doppel.quality.aggregate import compute as compute_quality
@@ -217,8 +218,8 @@ def run(
         password_cmd=password_cmd,
         connection_timeout=connection_timeout,
     )
-    real_label = _diff_label(real_spec)
-    synth_label = _diff_label(synth_spec)
+    real_label = cli_labels.source_label(real_spec)
+    synth_label = cli_labels.source_label(synth_spec)
     console.print(f"[dim]reading[/] {real_label}")
     real_df = source_read(real_spec, timeout=connection_timeout)
     console.print(f"[dim]reading[/] {synth_label}")
@@ -228,7 +229,7 @@ def run(
         synth_df, sample_rows, seed=sample_seed + 1, console=console, label="synth"
     )
 
-    columns = infer_table(_diff_table_name(real_spec), real_df).columns
+    columns = infer_table(cli_labels.table_name_for_source(real_spec), real_df).columns
     console.print(
         f"[dim]computing report for[/] {len(columns)} columns "
         f"({real_df.height} real vs {synth_df.height} synth rows)"
@@ -332,18 +333,6 @@ def _resolve_diff_arg(
         password_cmd=password_cmd,
         connection_timeout=connection_timeout,
     )
-
-
-def _diff_label(spec: FilePath | DatabaseUri) -> str:
-    if isinstance(spec, FilePath):
-        return spec.path.name
-    return spec.uri
-
-
-def _diff_table_name(spec: FilePath | DatabaseUri) -> str:
-    if isinstance(spec, FilePath):
-        return spec.path.stem
-    return spec.table or "query"
 
 
 def _threshold_payload(

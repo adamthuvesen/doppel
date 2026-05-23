@@ -10,6 +10,7 @@ from rich.console import Console
 
 from doppel.artifact import load as load_artifact
 from doppel.artifact import save as save_artifact
+from doppel.cli import labels as cli_labels
 from doppel.cli._common import (
     fit_progress,
     print_repair_summary,
@@ -19,11 +20,9 @@ from doppel.cli._common import (
 )
 from doppel.constraints.engine import synthesize_with_constraints
 from doppel.dataset import Dataset
-from doppel.schema import toml as schema_toml_mod
-from doppel.schema.infer import infer_table
+from doppel.pipeline.fit_rows import AUTO_FIT_CAP, AUTO_FIT_MULTIPLIER
+from doppel.pipeline.prepare import build_training_table, read_source_dataframe
 from doppel.sinks import write as sink_write
-from doppel.sources import read as source_read
-from doppel.sources.spec import DatabaseUri, FilePath
 from doppel.synth.cart import CartSynthesizer
 from doppel.synth.seed import Rng
 from doppel.text_policy import TextPolicy
@@ -66,10 +65,12 @@ def fit(
     fit_rows: int | None = typer.Option(
         None,
         "--fit-rows",
-        min=1,
+        min=0,
         help=(
-            "Randomly sample this many source rows before fitting. "
-            "For SQL sources, pushes the sample into the warehouse."
+            "Randomly sample this many source rows before fitting (useful for large files). "
+            "Defaults to min(100k) when source > 100k rows (gen uses min(rows*5, 100k)). "
+            "Pass 0 to disable the auto-cap and fit on the full source. "
+            "For SQL sources, pushes the sample into the warehouse via vendor-native syntax."
         ),
     ),
     sql_table: str | None = typer.Option(
@@ -104,22 +105,25 @@ def fit(
         password_cmd=password_cmd,
         connection_timeout=connection_timeout,
     )
-    source_label = _source_label(source_spec)
+    source_label = cli_labels.source_label(source_spec)
     console.print(f"[dim]reading[/] {source_label}")
-    sql_fit_rows = fit_rows if isinstance(source_spec, DatabaseUri) else None
-    df = source_read(source_spec, fit_rows=sql_fit_rows, seed=seed, timeout=connection_timeout)
-    # File sources still client-sample; SQL was already capped at the warehouse.
-    if not isinstance(source_spec, DatabaseUri):
-        df = sample_frame(df, fit_rows, seed=seed, console=console, label="fit")
-    console.print(f"[dim]inferring schema for[/] {df.height} rows x {df.width} columns")
-    table_name = _source_table_name(source_spec)
-    table = infer_table(table_name, df)
+    fit_cap_hint = AUTO_FIT_CAP // AUTO_FIT_MULTIPLIER
+    _full_df, fit_df = read_source_dataframe(
+        source_spec,
+        fit_rows=fit_rows,
+        requested_rows=fit_cap_hint,
+        seed=seed,
+        connection_timeout=connection_timeout,
+        sample_fit=lambda df, n: sample_frame(df, n, seed=seed, console=console, label="fit"),
+        notify_fit_cap=lambda msg: console.print(f"[dim]fit-rows:[/] {msg}"),
+    )
+    console.print(f"[dim]inferring schema for[/] {fit_df.height} rows x {fit_df.width} columns")
 
-    schema_toml = None
     if schema is not None:
         console.print(f"[dim]applying schema[/] {schema}")
-        schema_toml = schema_toml_mod.load(schema)
-        table = schema_toml_mod.apply_overrides(table, schema_toml)
+    prepared = build_training_table(fit_df, source_spec, schema)
+    table = prepared.table
+    schema_toml = prepared.schema_toml
 
     pii_detected = _detect_pii_if_available(table)
     if pii_detected:
@@ -138,7 +142,7 @@ def fit(
         synth.fit(dataset, Rng.from_seed(seed), progress=cb)
 
     console.print(f"[dim]writing artifact[/] {output}")
-    save_artifact(synth, output, training_row_count=df.height, schema_toml=schema_toml)
+    save_artifact(synth, output, training_row_count=fit_df.height, schema_toml=schema_toml)
     console.print(f"[green]ok[/] saved fitted artifact -> {output}")
 
 
@@ -203,35 +207,10 @@ def sample(
     if text_policy is not TextPolicy.SAMPLE:
         console.print(f"[dim]text policy[/] {text_policy.value}")
 
-    sink_label = _sink_label(sink_spec)
+    sink_label = cli_labels.sink_label(sink_spec)
     console.print(f"[dim]writing[/] {sink_label}")
     sink_write(out_df, sink_spec)
     console.print(f"[green]ok[/] wrote {out_df.height} rows x {out_df.width} cols -> {sink_label}")
-
-
-def _source_label(spec: FilePath | DatabaseUri) -> str:
-    """Human-readable identifier — file path or redacted URI."""
-    if isinstance(spec, FilePath):
-        return str(spec.path)
-    return spec.uri
-
-
-def _sink_label(spec: object) -> str:
-    """Human-readable identifier for a SinkSpec."""
-    from doppel.sources.spec import DuckDbSink
-
-    if isinstance(spec, FilePath):
-        return str(spec.path)
-    if isinstance(spec, DuckDbSink):
-        return f"duckdb:///{spec.path}?table={spec.table}"
-    return str(spec)
-
-
-def _source_table_name(spec: FilePath | DatabaseUri) -> str:
-    """Pick a table-name for schema inference."""
-    if isinstance(spec, FilePath):
-        return spec.path.stem
-    return spec.table or "query"
 
 
 def _detect_pii_if_available(table: Table) -> list[PIIDetection]:

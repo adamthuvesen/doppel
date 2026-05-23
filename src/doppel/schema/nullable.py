@@ -12,9 +12,13 @@ Strategy:
 
 from __future__ import annotations
 
+import logging
+
 import polars as pl
 
 from doppel.schema.types import ColumnType
+
+_log = logging.getLogger(__name__)
 
 NULL_SENTINEL = "__doppel_null__"
 
@@ -37,6 +41,11 @@ def encode_feature(series: pl.Series, ctype: ColumnType) -> pl.Series:
         # All-null fallback — pick 0 so sklearn doesn't choke. The downstream null-mask
         # model will still ensure these rows synthesize as null.
         fill = 0 if median is None else median
+        if median is None:
+            _log.debug(
+                "encode_feature: column %r is all-null numeric/datetime; imputing 0 for sklearn",
+                series.name,
+            )
         return normalised.fill_null(fill)
     if ctype in (ColumnType.CATEGORICAL, ColumnType.TEXT):
         if series.null_count() == 0 and series.dtype != pl.String:

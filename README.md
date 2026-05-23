@@ -69,6 +69,33 @@ Common flags:
 
 See [docs/determinism.md](docs/determinism.md) for the seed contract.
 
+## Programmatic usage (experimental)
+
+Library API is not semver-frozen until v0.2. Prefer the CLI for stable workflows.
+
+```python
+from pathlib import Path
+
+from doppel.pipeline import SingleTableGenerateConfig, generate_single_table
+from doppel.sources.spec import FilePath
+from doppel.text_policy import TextPolicy
+
+result = generate_single_table(
+    SingleTableGenerateConfig(
+        source_spec=FilePath(path=Path("sales.parquet")),
+        rows=1000,
+        seed=1,
+        text_policy=TextPolicy.SAMPLE,
+    ),
+    sample_fit=lambda df, n: df if n is None else df.head(n),
+)
+synth_df = result.out_df
+```
+
+`generate_single_table` mirrors `doppel gen` for single-table runs (read, fit, sample,
+constraints/`where`, optional PII strip/restore, text policy). Pass `sample_fit` for
+client-side fit-row sampling the way the CLI does.
+
 ## Fit Once, Sample Later
 
 ```bash
@@ -204,6 +231,10 @@ artifacts from code. Only load files you trust. See [SECURITY.md](SECURITY.md).
   precision is dropped.
 - Warehouse writes are DuckDB only.
 - `fit` refuses detected PII; use `gen` for one-shot PII handling.
+- `KEY` columns synthesize sequential IDs from `1..n` (or deterministic UUID hex for
+  `uuid` / `*_uuid` string keys), not a continuation of source ID ranges.
+- `.json` output serialises datetimes as strings; reading that file back yields string
+  columns, so `doppel diff` against JSON synth output is not meaningful. Prefer Parquet or CSV.
 
 ## Examples
 

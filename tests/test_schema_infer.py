@@ -37,3 +37,12 @@ def test_integer_binary_column_becomes_categorical_flag() -> None:
     col = table.columns[0]
     assert col.type is ColumnType.CATEGORICAL
     assert col.categories == (0, 1)
+
+
+def test_infer_table_empty_dataframe() -> None:
+    df = pl.DataFrame({"a": pl.Series([], dtype=pl.Int64), "b": pl.Series([], dtype=pl.String)})
+    table = infer_table("empty", df)
+    assert table.name == "empty"
+    assert table.data is not None
+    assert table.data.height == 0
+    assert len(table.columns) == 2

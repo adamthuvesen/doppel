@@ -41,5 +41,9 @@ report.html
 report.json
 openspec/custom/
 
+# Committed benchmark results live here despite the report.json rule above.
+!benchmarks/results/
+!benchmarks/results/*.json
+
 # Local-only demo recording (regenerate with `vhs demo.tape`)
 assets/

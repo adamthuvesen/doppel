@@ -118,5 +118,4 @@ preserved via `_INTEGER_DTYPE_NAMES`/`_FLOAT_DTYPE_NAMES` in `synth/cart.py`.)
 
 - [openspec/custom/reviews/recent-changes.md](openspec/custom/reviews/recent-changes.md)
   — the most recent code review, including findings + fixes.
-- `~/.claude/plans/let-s-make-a-detailed-enchanted-kay.md` — the original phased plan.
 - [SECURITY.md](SECURITY.md) — pickle threat model + privacy posture.

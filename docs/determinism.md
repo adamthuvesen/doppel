@@ -10,9 +10,9 @@ All randomness in the fit and sample paths goes through two primitives in
 - `Rng.from_seed(seed: int | None) -> Rng` — top-level entry point.
 - `rng.spawn() -> Rng` — fork an independent child stream.
 
-`Rng` wraps `np.random.default_rng(seed)`. Spawning uses
-`numpy.random.SeedSequence(...).spawn()` for statistically independent child
-streams that stay deterministic from the parent seed.
+`Rng` wraps `np.random.default_rng(seed)`. `spawn()` draws an integer from the
+parent generator and reseeds a fresh `default_rng` with it, so each child stream
+is independent yet still fully determined by the parent seed.
 
 ## Forbidden APIs
 

@@ -6,12 +6,6 @@ doppel fits a source table and generates rows with similar distributions,
 correlations, null patterns, unique-value counts, and foreign-key structure. Given
 the same source and `--seed`, output is deterministic.
 
-`doppel diff` ships a self-contained HTML report. Its correlation section renders the real
-and synthetic association matrices side by side, with a divergence map that lights up
-wherever the synthetic twin's joint structure drifts from the source:
-
-![doppel quality report — real vs. synthetic vs. divergence correlation heatmaps](docs/images/quality-report.png)
-
 ## Fidelity Benchmark
 
 `doppel gen` then `doppel diff` on
@@ -30,6 +24,12 @@ seed-deterministic; reproduce them with `uv run python benchmarks/run.py`.
 | Seed | `42` | same seed + source → identical numbers |
 
 Full machine-readable report: [benchmarks/results/housing.json](benchmarks/results/housing.json).
+
+`doppel diff` also ships a self-contained HTML report. Its correlation section renders the
+real and synthetic association matrices side by side, with a divergence map that lights up
+wherever the synthetic twin's joint structure drifts from the source:
+
+![doppel quality report — real vs. synthetic vs. divergence correlation heatmaps](docs/images/quality-report.png)
 
 ## Install
 

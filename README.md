@@ -6,6 +6,12 @@ doppel fits a source table and generates rows with similar distributions,
 correlations, null patterns, unique-value counts, and foreign-key structure. Given
 the same source and `--seed`, output is deterministic.
 
+`doppel diff` ships a self-contained HTML report. Its correlation section renders the real
+and synthetic association matrices side by side, with a divergence map that lights up
+wherever the synthetic twin's joint structure drifts from the source:
+
+![doppel quality report — real vs. synthetic vs. divergence correlation heatmaps](docs/images/quality-report.png)
+
 ## Fidelity Benchmark
 
 `doppel gen` then `doppel diff` on
@@ -219,12 +225,6 @@ doppel diff real.parquet synth.parquet \
   --json doppel-report.json \
   -o report.html
 ```
-
-The `-o` HTML report is a self-contained single file. Its correlation section renders the
-real and synthetic association matrices side by side, plus a divergence map that lights up
-wherever the synthetic twin's joint structure drifts from the source:
-
-![doppel quality report — real vs. synthetic vs. divergence correlation heatmaps](docs/images/quality-report.png)
 
 Metrics:
 

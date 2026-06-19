@@ -25,6 +25,12 @@ seed-deterministic; reproduce them with `uv run python benchmarks/run.py`.
 
 Full machine-readable report: [benchmarks/results/housing.json](benchmarks/results/housing.json).
 
+`doppel diff` also ships a self-contained HTML report. Its correlation section renders the
+real and synthetic association matrices side by side, with a divergence map that lights up
+wherever the synthetic twin's joint structure drifts from the source:
+
+![doppel quality report — real vs. synthetic vs. divergence correlation heatmaps](docs/images/quality-report.png)
+
 ## Install
 
 ```bash

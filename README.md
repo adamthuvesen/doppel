@@ -220,6 +220,12 @@ doppel diff real.parquet synth.parquet \
   -o report.html
 ```
 
+The `-o` HTML report is a self-contained single file. Its correlation section renders the
+real and synthetic association matrices side by side, plus a divergence map that lights up
+wherever the synthetic twin's joint structure drifts from the source:
+
+![doppel quality report — real vs. synthetic vs. divergence correlation heatmaps](docs/images/quality-report.png)
+
 Metrics:
 
 | Metric | Meaning |

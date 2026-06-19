@@ -21,6 +21,20 @@ uv run doppel schema infer examples/saas_accounts.csv \
   --output /tmp/doppel-demo/saas_accounts.schema.toml
 ```
 
+Expected output:
+
+```text
+ok wrote 200 rows x 15 cols -> /tmp/doppel-demo/saas_accounts_synth.csv
+quality | marginal=0.1188 | corr=0.0946 | dcr_p5=0.0373 | text_leaks=0
+ok wrote HTML report -> /tmp/doppel-demo/saas_accounts_report.html
+ok wrote JSON report -> /tmp/doppel-demo/saas_accounts_report.json
+ok wrote schema -> /tmp/doppel-demo/saas_accounts.schema.toml
+```
+
+The metric values are from the checked-in fixture with `--seed 7`. Small changes can
+come from dependency updates, but `text_leaks=0` should hold because the demo hashes
+the text column.
+
 Exercised features:
 
 - Unique `account_id` key.

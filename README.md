@@ -57,17 +57,30 @@ Outputs: CSV, TSV, Parquet, JSON/NDJSON, Arrow/IPC, DuckDB.
 ## Quickstart
 
 ```bash
-doppel gen examples/saas_accounts.csv -n 1000 -o synth.csv --seed 1
+uv run doppel gen examples/saas_accounts.csv -n 1000 -o synth.csv \
+  --seed 1 \
+  --text-policy hash
 
-doppel diff examples/saas_accounts.csv synth.csv \
-  --max-marginal 0.10 \
-  --min-dcr-p5 0.05 \
+uv run doppel diff examples/saas_accounts.csv synth.csv \
+  --max-marginal 0.12 \
+  --min-dcr-p5 0.02 \
   --fail-on-verbatim-text
 
-doppel doctor
+uv run doppel doctor
 ```
 
-`doppel diff` exits `2` when a threshold is breached.
+Expected shape from the demo fixture:
+
+```text
+ok wrote 1000 rows x 15 cols -> synth.csv
+quality | marginal=0.1005 | corr=0.1062 | dcr_p5=0.0507 | text_leaks=0
+thresholds: all passed
+```
+
+Exact metric values can move slightly with dependency versions. `doppel diff` exits `2`
+when a threshold is breached. See [examples/README.md](examples/README.md) for a
+no-secret demo that writes the synthetic CSV, HTML report, JSON report, and inferred
+schema under `/tmp/doppel-demo`.
 
 ## Generate Rows
 

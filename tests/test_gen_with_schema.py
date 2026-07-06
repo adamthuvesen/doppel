@@ -125,3 +125,37 @@ max = 1.0
     assert df.height == 40
     assert (df["score"] >= 0.0).all()
     assert (df["score"] <= 1.0).all()
+
+
+def test_gen_rejects_unknown_schema_key_cleanly(mixed_csv: Path, tmp_path: Path) -> None:
+    schema = tmp_path / "schema.toml"
+    schema.write_text(
+        """
+[table]
+name = "mixed"
+
+[columns.country]
+type = "categorical"
+old_option = true
+"""
+    )
+    out = tmp_path / "synth.csv"
+    result = runner.invoke(
+        app,
+        [
+            "gen",
+            str(mixed_csv),
+            "--schema",
+            str(schema),
+            "--rows",
+            "10",
+            "--output",
+            str(out),
+            "--seed",
+            "1",
+        ],
+    )
+    assert result.exit_code == 2
+    combined = result.stdout + (result.stderr or "")
+    assert "old_option" in combined
+    assert "Traceback" not in combined

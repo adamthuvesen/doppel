@@ -1,8 +1,5 @@
 """End-to-end smoke test on a synthetic-but-representative feature table.
 
-Locks the class of regressions surfaced in
-`openspec/custom/reviews/real-parquet-eval-2026-05-17.md`:
-
 - Integer columns survive as integer dtype (no silent Float64 collapse).
 - Binary 0/1 flags inferred as categorical, not continuous.
 - Auto-detected ordered pairs do not fractionalise count columns.

@@ -1,13 +1,16 @@
-"""Multi-table schema — declares a set of tables, their files, and FK edges.
+"""Multi-table schema — declares a set of tables, their sources, and FK edges.
 
-File shape (v1 Phase 5):
+File-backed table:
 
     [tables.users]
-    file = "users.csv"  # `path = ...` is accepted as a legacy/documented alias.
+    file = "users.csv"
     primary_key = "user_id"
 
+URI-backed table:
+
     [tables.orders]
-    file = "orders.csv"
+    uri = "duckdb:///warehouse.db"
+    table = "orders"
     primary_key = "order_id"
 
     [tables.orders.columns.amount]
@@ -19,10 +22,9 @@ File shape (v1 Phase 5):
     parent_table = "users"
     parent_column = "user_id"
 
-`file` is resolved relative to the schema.toml's directory. `path` is accepted as an
-input alias for older docs/specs, but `save()` emits the canonical `file` key. Column
-overrides are optional — omitted columns fall back to inferred types. Constraints land
-in a later phase as a table-scoped section; v1 multi-table ships with FKs only.
+`file` is resolved relative to the schema.toml's directory. URI-backed tables require
+exactly one of `table` or `query`. Column overrides are optional; omitted columns fall
+back to inferred types.
 """
 
 from __future__ import annotations
@@ -33,7 +35,7 @@ from typing import Any
 
 import polars as pl
 import tomli_w
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from doppel.dataset import Dataset, ForeignKey, Table
 from doppel.schema.infer import infer_table
@@ -44,47 +46,22 @@ from doppel.sources.spec import DatabaseUri, parse_source_spec
 
 
 class TableSpec(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     file: str | None = None
     uri: str | None = None
     table: str | None = None
     query: str | None = None
     primary_key: str | None = None
     columns: dict[str, ColumnSpec] = Field(default_factory=dict)
-    inherit_parent_features: bool = False
-    """Opt-in (v0.2 roadmap): when fitting this child table, join parent rows on the FK
-    and use parent features to condition the child column distributions. Preserves
-    cross-table correlations like 'gold users place bigger orders'. Currently parsed but
-    not yet wired into HierarchicalSynthesizer — setting it raises a clear error so users
-    aren't silently misled about which behaviour they got."""
-
-    @model_validator(mode="before")
-    @classmethod
-    def _coerce_path_alias(cls, raw: object) -> object:
-        if not isinstance(raw, dict):
-            return raw
-        has_file = raw.get("file") is not None
-        has_path = raw.get("path") is not None
-        if not has_path:
-            return raw
-        if has_file and raw["file"] != raw["path"]:
-            raise ValueError("table entry may not declare both `file` and `path`; use `file`")
-        data = dict(raw)
-        data["file"] = data["path"]
-        data.pop("path", None)
-        return data
 
     @model_validator(mode="after")
     def _validate_source(self) -> TableSpec:
         # Exactly one of `file` / `uri` must be set.
         if self.file is None and self.uri is None:
-            raise ValueError(
-                "each [[tables]] entry must declare either `file` or `uri` "
-                "(`path` is accepted as an alias for `file`)"
-            )
+            raise ValueError("each [tables.<name>] entry must declare either `file` or `uri`")
         if self.file is not None and self.uri is not None:
-            raise ValueError(
-                "table entry may not declare both `file` (or `path`) and `uri`; pick one"
-            )
+            raise ValueError("table entry may not declare both `file` and `uri`; pick one")
         if self.uri is not None:
             if self.table is None and self.query is None:
                 raise ValueError(
@@ -105,6 +82,8 @@ class TableSpec(BaseModel):
 
 
 class ForeignKeySpec(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     child_table: str
     child_column: str
     parent_table: str
@@ -112,6 +91,8 @@ class ForeignKeySpec(BaseModel):
 
 
 class MultiSchemaToml(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     tables: dict[str, TableSpec]
     foreign_keys: list[ForeignKeySpec] = Field(default_factory=list)
 
@@ -145,8 +126,6 @@ def save(schema: MultiSchemaToml, path: Path) -> None:
             entry["columns"] = {
                 cname: _drop_none(cspec.model_dump()) for cname, cspec in spec.columns.items()
             }
-        if spec.inherit_parent_features:
-            entry["inherit_parent_features"] = True
         payload["tables"][name] = entry
     if schema.foreign_keys:
         payload["foreign_keys"] = [_drop_none(fk.model_dump()) for fk in schema.foreign_keys]
@@ -165,17 +144,8 @@ def to_dataset(
 
     For URI-backed tables, `password_cmd` and `connection_timeout` apply globally
     (one connection per URI, reused across tables that share it)."""
-    unsupported = [name for name, spec in schema.tables.items() if spec.inherit_parent_features]
-    if unsupported:
-        raise NotImplementedError(
-            f"tables {unsupported} declare `inherit_parent_features = true`, but cross-table "
-            "conditional sampling is not yet implemented (v0.2 roadmap). Remove the flag for now."
-        )
     tables: dict[str, Table] = {}
-    # De-dupe SQL reads by raw URI so multiple tables on the same warehouse
-    # connection don't open multiple sessions. ConnectorX is connection-per-call
-    # by design, so this dedup is a future-proofing for the v2 ADBC path; for v1
-    # the practical effect is "one warehouse round-trip per declared table".
+    # Count reads per redacted URI for tests that assert each declared table is read once.
     sql_read_count: dict[str, int] = {}
     for name, spec in schema.tables.items():
         df = _read_table_data(

@@ -86,7 +86,5 @@ class Dataset:
                 if not parents_of[child]:
                     queue.append(child)
         if len(order) != len(self.tables):
-            raise ValueError(
-                "foreign-key graph contains a cycle; doppel v1 supports only DAG schemas"
-            )
+            raise ValueError("foreign-key graph contains a cycle; doppel supports only DAG schemas")
         return order

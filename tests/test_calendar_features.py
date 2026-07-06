@@ -1,7 +1,4 @@
-"""Calendar-feature extraction, CART injection, schema TOML, and diff plumbing.
-
-Covers `openspec/changes/add-datetime-calendar-features/specs/datetime-calendar-features/spec.md`.
-"""
+"""Calendar-feature extraction, CART injection, schema TOML, and diff plumbing."""
 
 from __future__ import annotations
 
@@ -33,7 +30,7 @@ from doppel.synth.cart import CartSynthesizer
 from doppel.synth.seed import Rng
 
 # ---------------------------------------------------------------------------
-# Section 2 — extractor correctness
+# Extractor correctness
 # ---------------------------------------------------------------------------
 
 
@@ -141,7 +138,7 @@ def test_extra_features_quarter_week_minute_day() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Section 3 — Column dataclass
+# Column dataclass
 # ---------------------------------------------------------------------------
 
 
@@ -175,7 +172,7 @@ def test_column_stays_hashable_after_field_added() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Section 4 — TOML loader
+# TOML loader
 # ---------------------------------------------------------------------------
 
 
@@ -290,7 +287,7 @@ calendar_features = false
 
 
 # ---------------------------------------------------------------------------
-# Section 5 — schema infer omits calendar_features
+# Schema infer omits calendar_features
 # ---------------------------------------------------------------------------
 
 
@@ -325,7 +322,7 @@ def test_from_table_omits_calendar_features_when_unset(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Section 6/7 — CART pipeline integration
+# CART pipeline integration
 # ---------------------------------------------------------------------------
 
 
@@ -479,7 +476,7 @@ def test_date_column_in_same_dataset_as_datetime() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Section 9 — `--explain` integration
+# `--explain` integration
 # ---------------------------------------------------------------------------
 
 
@@ -515,7 +512,7 @@ def test_explain_columns_shows_disabled_as_empty_tuple() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Section 12 — determinism
+# Determinism
 # ---------------------------------------------------------------------------
 
 
@@ -570,7 +567,7 @@ def test_calendar_extraction_is_pure_no_rng() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Section 8/16 — Diff report calendar fidelity
+# Diff report calendar fidelity
 # ---------------------------------------------------------------------------
 
 
@@ -650,7 +647,7 @@ def test_json_renderer_includes_calendar_fidelity_key() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Section 15 — artifact roundtrip
+# Artifact roundtrip
 # ---------------------------------------------------------------------------
 
 
@@ -674,7 +671,7 @@ def test_fit_save_load_sample_byte_identical(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Section 14 — null synth datetime handles cleanly
+# Null synth datetime handles cleanly
 # ---------------------------------------------------------------------------
 
 
@@ -694,7 +691,7 @@ def test_null_in_source_datetime_handled_during_fit_and_sample() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Section 1 — pre-flight sanity (Polars dt.weekday semantics)
+# Polars dt.weekday semantics
 # ---------------------------------------------------------------------------
 
 
@@ -728,7 +725,7 @@ def test_duration_dtype_has_no_default_features() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Section 13.4 — CLI --explain integration
+# CLI --explain integration
 # ---------------------------------------------------------------------------
 
 
@@ -770,7 +767,7 @@ def test_gen_explain_lists_calendar_features(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Section 17 — performance smoke (slow)
+# Performance smoke (slow)
 # ---------------------------------------------------------------------------
 
 

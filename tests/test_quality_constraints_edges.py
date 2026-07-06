@@ -1,8 +1,4 @@
-"""Regression tests for the 2026-05-18 audit findings.
-
-One named test per high/medium fix so a future regression trips a specific test
-rather than a vague integration failure.
-"""
+"""Behavior tests for quality, constraints, nullable encoding, and multi-table edges."""
 # pyright: reportPrivateUsage=false
 
 from __future__ import annotations
@@ -31,7 +27,7 @@ from doppel.synth.hierarchy import HierarchicalSynthesizer
 from doppel.synth.seed import Rng
 
 # -----------------------------------------------------------------------------
-# H1 — UUID name heuristic must not override the source dtype.
+# UUID name heuristic must not override the source dtype.
 # -----------------------------------------------------------------------------
 
 
@@ -52,7 +48,7 @@ def test_uuid_named_string_column_still_gets_uuid_hex() -> None:
 
 
 # -----------------------------------------------------------------------------
-# H2 — DCR must batch regardless of whether progress callback is set.
+# DCR must batch regardless of whether progress callback is set.
 # -----------------------------------------------------------------------------
 
 
@@ -99,7 +95,7 @@ def test_dcr_reports_sampled_row_counts_when_capped() -> None:
 
 
 # -----------------------------------------------------------------------------
-# H3 / H4 — Float NaN must not contaminate quality scores.
+# Float NaN must not contaminate quality scores.
 # -----------------------------------------------------------------------------
 
 
@@ -127,13 +123,13 @@ def test_nan_in_numeric_does_not_break_correlation_frobenius() -> None:
 
 
 # -----------------------------------------------------------------------------
-# H6 — Datetime recompose preserves a non-UTC timezone (also tested in test_datetime).
+# Datetime recompose preserves a non-UTC timezone.
 # -----------------------------------------------------------------------------
 # See tests/test_datetime.py::test_recompose_preserves_non_utc_timezone
 
 
 # -----------------------------------------------------------------------------
-# M12 — Constraint range/inequality null is a violation, not a pass.
+# Constraint range/inequality null is a violation, not a pass.
 # -----------------------------------------------------------------------------
 
 
@@ -151,7 +147,7 @@ def test_inequality_constraint_treats_null_as_violation() -> None:
 
 
 # -----------------------------------------------------------------------------
-# M14 — NULL_SENTINEL collision is detected loudly.
+# NULL_SENTINEL collision is detected loudly.
 # -----------------------------------------------------------------------------
 
 
@@ -168,7 +164,7 @@ def test_encode_feature_passes_when_no_collision() -> None:
 
 
 # -----------------------------------------------------------------------------
-# M15 — PII restore raises on stale original_order.
+# PII restore raises on stale original_order.
 # -----------------------------------------------------------------------------
 
 
@@ -184,13 +180,12 @@ def test_pii_restore_raises_on_missing_original_column() -> None:
 
 
 # -----------------------------------------------------------------------------
-# M21 — Multi-table FK overwrite preserves the parent PK dtype.
+# Multi-table FK overwrite preserves the parent PK dtype.
 # -----------------------------------------------------------------------------
 
 
 def test_multi_table_fk_preserves_int32_dtype() -> None:
-    """Regression: hierarchy used to let polars infer FK dtype from the Python list,
-    silently widening Int32 PKs to Int64 (or String) on the child."""
+    """FK assignment preserves the parent's Polars dtype on child rows."""
     parents = pl.DataFrame(
         {"user_id": pl.Series([10, 20, 30], dtype=pl.Int32), "tier": ["a", "b", "c"]}
     )
@@ -239,7 +234,7 @@ def test_multi_table_fk_preserves_int32_dtype() -> None:
 
 
 # -----------------------------------------------------------------------------
-# M26 — Multi-table to_dataset enforces referential integrity.
+# Multi-table to_dataset enforces referential integrity.
 # -----------------------------------------------------------------------------
 
 
@@ -274,7 +269,7 @@ def test_multi_schema_to_dataset_rejects_fk_orphans(tmp_path: Path) -> None:
 
 
 # -----------------------------------------------------------------------------
-# M25 — _is_binary_flag now requires both 0 and 1 (no more all-zero columns).
+# _is_binary_flag requires both 0 and 1.
 # -----------------------------------------------------------------------------
 
 
@@ -293,7 +288,7 @@ def test_genuine_binary_column_is_categorical() -> None:
 
 
 # -----------------------------------------------------------------------------
-# M5 — gen CLI quality summary uses the original real df, not the fit subset.
+# gen CLI quality summary uses the original real df, not the fit subset.
 # -----------------------------------------------------------------------------
 
 
@@ -303,7 +298,7 @@ def test_gen_quality_uses_full_real_for_comparison(tmp_path: Path) -> None:
     This is a smoke test — we only confirm the CLI completes; a bug where quality was
     computed against the subset would not change exit_code, only the numbers. Catching
     that exactly requires inspecting the quality summary which the CLI doesn't expose;
-    we rely on the unit-level fix in cli/gen.py being audited.
+    we rely on the unit-level quality-summary behavior.
     """
     from typer.testing import CliRunner
 
@@ -333,13 +328,12 @@ def test_gen_quality_uses_full_real_for_comparison(tmp_path: Path) -> None:
 
 
 # -----------------------------------------------------------------------------
-# M22 — Conditional-path nonnull_pool is populated so leaf-miss fallback is safe.
+# Conditional-path nonnull_pool is populated so leaf-miss fallback is safe.
 # -----------------------------------------------------------------------------
 
 
 def test_cart_synth_populates_nonnull_pool_on_conditional_path() -> None:
-    """Regression: the conditional sampling path used to leave nonnull_pool empty, so a
-    leaf-miss in `_sample_values` would dereference an empty list. We assert it's filled."""
+    """Leaf-miss fallback has observed values to sample from."""
     df = pl.DataFrame(
         {
             "x": list(range(40)),

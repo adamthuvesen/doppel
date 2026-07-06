@@ -60,8 +60,7 @@ def test_derived_rejects_function_calls() -> None:
 
 
 # Hostile-input coverage — every node type the AST evaluator must reject.
-# CLAUDE.md names Call / Attribute / eval / import explicitly; this parametrized
-# set is the broader allowlist tripwire so any future loosening trips immediately.
+# This parametrized set is the broad allowlist tripwire.
 @pytest.mark.parametrize(
     "expression",
     [

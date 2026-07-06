@@ -10,6 +10,7 @@ from pathlib import Path
 
 import polars as pl
 import typer
+from pydantic import ValidationError
 from rich.console import Console
 from rich.table import Table as _Table
 
@@ -284,7 +285,10 @@ def _run_single(
 
     if schema is not None:
         console.print(f"[dim]applying schema[/] {schema}")
-        schema_toml = schema_toml_mod.load(schema)
+        try:
+            schema_toml = schema_toml_mod.load(schema)
+        except (ValidationError, ValueError) as exc:
+            raise typer.BadParameter(str(exc)) from exc
         n_constraints = len(merge_where_into_constraints(schema_toml.constraints, where))
     else:
         n_constraints = len(merge_where_into_constraints([], where))
@@ -404,16 +408,15 @@ def _run_multi(
     connection_timeout: int = 300,
 ) -> None:
     console.print(f"[dim]loading multi-table schema[/] {schema_path}")
-    schema = multi_schema.load(schema_path)
     try:
+        schema = multi_schema.load(schema_path)
         dataset = multi_schema.to_dataset(
             schema,
             schema_path.parent,
             password_cmd=password_cmd,
             connection_timeout=connection_timeout,
         )
-    except NotImplementedError as exc:
-        # Re-raise as a clean BadParameter so the user sees the message without a traceback.
+    except (ValidationError, ValueError) as exc:
         raise typer.BadParameter(str(exc)) from exc
     console.print(f"[dim]read[/] {len(dataset.tables)} tables, {len(dataset.edges)} FK edges")
 
@@ -425,7 +428,7 @@ def _run_multi(
             raise typer.BadParameter(str(exc)) from exc
         console.print(
             "[yellow]note[/]: --where applies to the named table only; "
-            "child distributions in other tables are unconditional in v1."
+            "child distributions in other tables are unconditional."
         )
 
     console.print("[dim]fitting hierarchical synthesizer[/]")

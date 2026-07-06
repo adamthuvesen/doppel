@@ -6,8 +6,7 @@ dropped — adding it is a separate scope.
 
 On top of that, `calendar_features` extracts per-row temporal predictors (hour, dow,
 month, ...) that get injected into the CART feature matrix as predictors for downstream
-columns. Calendar features are NEVER targets and never appear in synth output. See
-`openspec/changes/add-datetime-calendar-features/` for the contract.
+columns. Calendar features are never targets and never appear in synth output.
 
 Polars 1.40 `dt.weekday()` returns 1-7 (Monday=1, Sunday=7). All extracted features are
 Int8 (range fits comfortably: hour 0-23, weekday 1-7, month 1-12, day 1-31, week 1-53,

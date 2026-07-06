@@ -1,4 +1,4 @@
-"""Constraint DSL — Pydantic models for the four constraint kinds we support in v1.
+"""Constraint DSL — Pydantic models for supported constraint kinds.
 
 - `range`     : column value lies in [min, max] (either bound optional).
 - `inequality`: `left OP right` where both sides are column names and OP is one of
@@ -16,12 +16,14 @@ from __future__ import annotations
 
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 ComparisonOp = Literal["<", "<=", ">", ">=", "==", "!="]
 
 
 class RangeConstraint(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     kind: Literal["range"] = "range"
     column: str
     min: float | None = None
@@ -29,6 +31,8 @@ class RangeConstraint(BaseModel):
 
 
 class InequalityConstraint(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     kind: Literal["inequality"] = "inequality"
     left: str
     op: ComparisonOp
@@ -36,12 +40,16 @@ class InequalityConstraint(BaseModel):
 
 
 class DerivedConstraint(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     kind: Literal["derived"] = "derived"
     column: str
     expression: str
 
 
 class WhereConstraint(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     kind: Literal["where"] = "where"
     expression: str
 

@@ -70,8 +70,8 @@ def build_pushdown_sql(
             else f"SELECT * FROM ({inner}) AS _doppel_t USING SAMPLE {fit_rows} ROWS"
         )
         return sql, False
-    # ANSI fallback for future / unknown vendors. Determinism depends on the
-    # vendor's RANDOM() seedability — we cannot guarantee it. Caller warns.
+    # ANSI fallback for unsupported vendors. Determinism depends on the vendor's
+    # RANDOM() seedability, so the caller warns.
     sql = f"SELECT * FROM ({inner}) AS _doppel_t ORDER BY RANDOM() LIMIT {fit_rows}"
     return sql, True
 
@@ -242,7 +242,7 @@ def _read_duckdb(spec: DatabaseUri, sql: str, *, timeout: int) -> pl.DataFrame:
 
 
 def _read_via_connectorx(spec: DatabaseUri, sql: str, *, timeout: int) -> pl.DataFrame:
-    """Snowflake / Postgres / future-vendor read via Polars + ConnectorX.
+    """Snowflake / Postgres read via Polars + ConnectorX.
 
     The `[sql]` extra is required here. We catch the ImportError raised by
     Polars when ConnectorX isn't present and re-raise a clear install hint."""

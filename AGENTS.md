@@ -1,6 +1,6 @@
 # AGENTS.md — doppel
 
-doppel is a Python CLI + library that generates synthetic tabular data preserving the statistical fingerprint of a source dataset (marginals, correlations, null patterns, referential structure). PyPI name `doppeldata`; CLI binary + import name `doppel`; the repo folder is `doppel` for historical reasons.
+doppel is a Python CLI + library that generates synthetic tabular data preserving the statistical fingerprint of a source dataset (marginals, correlations, null patterns, referential structure). PyPI name `doppeldata`; CLI binary + import name `doppel`; repo folder `doppel`.
 
 User-level guidance (tone, principles, git etiquette) lives in `~/.claude/CLAUDE.md` and `~/dotfiles/agents/AGENTS.md` and is *not* duplicated here. This file is for project-specific facts.
 
@@ -19,7 +19,7 @@ src/doppel/
   quality/     KS/TVD marginals, mixed-type correlation Frobenius, DCR percentiles
   report/      HTML/JSON/terminal renderers (separate from metric computation)
   artifact/    Versioned save/load of fitted models (.doppel = gzipped tar)
-tests/         Regression + phase-gated CLI e2e tests
+tests/         Regression + CLI e2e tests
 docs/          Deeper subsystem docs — see Index
 ```
 
@@ -58,7 +58,7 @@ Before editing a subsystem, read the matching doc:
 - **Determinism / seeding** → [docs/determinism.md](docs/determinism.md)
 - **SQL warehouse connectors (DuckDB / Snowflake / Postgres)** → [docs/sql-connectors.md](docs/sql-connectors.md)
 - **Pickle / artifact safety, privacy posture** → [SECURITY.md](SECURITY.md)
-- **Known limitations (v0.1 design choices)** → [docs/limitations.md](docs/limitations.md)
+- **Known limitations** → [docs/limitations.md](docs/limitations.md)
 
 If a doc disagrees with code, fix the doc in the same change.
 

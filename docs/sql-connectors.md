@@ -96,7 +96,7 @@ applies for files, and DuckDB is local).
 
 ## Multi-table SQL
 
-`schema.toml` `[[tables]]` blocks accept either `file` or `uri`:
+`schema.toml` `[tables.<name>]` blocks accept either `file` or `uri`:
 
 ```toml
 [tables.users]
@@ -118,10 +118,9 @@ parent_table = "users"
 parent_column = "user_id"
 ```
 
-Each `[[tables]]` block must declare exactly one of `file` / `uri`, and
+Each `[tables.<name>]` block must declare exactly one of `file` / `uri`, and
 URI-backed tables must additionally declare exactly one of `table` /
-`query`. `path` is still accepted as an alias for older schemas, but newly
-written schemas use `file`. The CLI's `--password-cmd` and
+`query`. The CLI's `--password-cmd` and
 `--connection-timeout` apply globally to every SQL table in the run.
 
 ## Sinks: file and DuckDB only
@@ -133,7 +132,7 @@ The `-o`/`--output` flag accepts:
 
 Snowflake/Postgres sinks raise `BadParameter` at parse time. Warehouse
 writes have their own design surface (transactions, idempotency, table
-existence, schema permissions, recovery) and are out of scope for v1.
+existence, schema permissions, recovery) and are out of scope.
 Write to a file or DuckDB and load with your normal ELT tooling.
 
 ## Connection lifecycle
@@ -146,9 +145,7 @@ correlate to a connection target without leaking credentials.
 
 ## Per-vendor caveats
 
-- **Snowflake**: only password authentication in v1. Key-pair, OAuth, and
-  SSO browser flow are forward-compatible at the URI level
-  (`?authenticator=externalbrowser&...`) but not exercised. The
+- **Snowflake**: only password authentication is supported. The
   `INFORMATION_SCHEMA.TABLES.ROW_COUNT` probe returns the value as of the
   last `ANALYZE`/`COMPACT`; in practice it's accurate enough for the 1M
   threshold safety net.
@@ -159,11 +156,8 @@ correlate to a connection target without leaking credentials.
   (`duckdb://?table=T`) is supported for sources but not for sinks
   (the sink must point at a persistable file).
 
-## Driver story
+## Driver
 
-ConnectorX is the v1 driver. ADBC (`adbc-driver-snowflake`,
-`adbc-driver-postgresql`) is the v2 migration target once the Snowflake
-ADBC driver is past 1.0 in production usage. The per-vendor SQL
-generators are pure functions and driver-agnostic, so the migration is a
-one-line swap in `sources/sql.py::_read_via_connectorx`. See
-[SECURITY.md](../SECURITY.md) for the threat-model implications.
+ConnectorX is the SQL read driver for Snowflake and Postgres. DuckDB reads
+use DuckDB directly. See [SECURITY.md](../SECURITY.md) for the threat-model
+implications of native database drivers.

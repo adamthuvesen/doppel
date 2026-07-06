@@ -184,7 +184,7 @@ def run(
         "--table",
         help=(
             "SQL sources only: table to read from. Applies to ALL URI arguments in this "
-            "invocation (asymmetric per-arg selection not supported in v1)."
+            "invocation; asymmetric per-argument selection is not supported."
         ),
     ),
     sql_query: str | None = typer.Option(

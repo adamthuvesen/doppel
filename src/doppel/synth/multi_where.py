@@ -42,7 +42,7 @@ def resolve_where_table(where: str, dataset: Dataset) -> str:
         detail = ", ".join(f"{t}={sorted(set(cols))}" for t, cols in sorted(tables_hit.items()))
         raise ValueError(
             f"--where references columns from multiple tables ({detail}); "
-            "v1 supports single-table predicates only. Run separate `gen` commands per table."
+            "doppel supports single-table predicates only. Run separate `gen` commands per table."
         )
     return next(iter(tables_hit))
 

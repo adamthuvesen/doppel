@@ -119,3 +119,36 @@ pattern = ".*"
     )
     with pytest.raises(ValueError, match="kind"):
         schema_toml.load(p)
+
+
+def test_unknown_column_key_rejected(tmp_path: Path) -> None:
+    p = tmp_path / "schema.toml"
+    p.write_text(
+        """
+[table]
+name = "users"
+
+[columns.plan]
+type = "categorical"
+old_option = true
+"""
+    )
+    with pytest.raises(ValueError, match="Extra inputs are not permitted"):
+        schema_toml.load(p)
+
+
+def test_unknown_constraint_key_rejected(tmp_path: Path) -> None:
+    p = tmp_path / "schema.toml"
+    p.write_text(
+        """
+[table]
+name = "users"
+
+[[constraints]]
+kind = "where"
+expression = "plan == 'enterprise'"
+old_option = true
+"""
+    )
+    with pytest.raises(ValueError, match="Extra inputs are not permitted"):
+        schema_toml.load(p)

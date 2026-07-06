@@ -1,4 +1,4 @@
-"""Programmatic orchestration for doppel (experimental until v0.2)."""
+"""Programmatic orchestration for doppel."""
 
 from doppel.pipeline.fit_rows import auto_fit_rows
 from doppel.pipeline.rng import RunRng

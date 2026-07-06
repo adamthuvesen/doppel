@@ -1,9 +1,4 @@
-"""Shared dtype sets and name heuristics — single source of truth.
-
-Lived in three modules previously (synth/cart.py, schema/infer.py, quality/aggregate.py).
-Drift between the synth's repair pass and the quality reporter is a real risk if these
-predicates diverge, so they're consolidated here.
-"""
+"""Shared dtype sets and name heuristics for inference, synthesis, and reporting."""
 
 from __future__ import annotations
 

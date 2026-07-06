@@ -109,7 +109,7 @@ See [docs/determinism.md](docs/determinism.md) for the seed contract.
 
 ## Programmatic usage (experimental)
 
-Library API is not semver-frozen until v0.2. Prefer the CLI for stable workflows.
+Library API is not semver-frozen. Prefer the CLI for stable workflows.
 
 ```python
 from pathlib import Path

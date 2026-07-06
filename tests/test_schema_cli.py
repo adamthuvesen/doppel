@@ -63,3 +63,22 @@ min = 0
     result = runner.invoke(app, ["schema", "check", str(mixed_csv), "--schema", str(schema_path)])
     assert result.exit_code != 0
     assert "constraint references unknown column" in result.stdout
+
+
+def test_schema_check_rejects_unknown_schema_key_cleanly(mixed_csv: Path, tmp_path: Path) -> None:
+    schema_path = tmp_path / "schema.toml"
+    schema_path.write_text(
+        """
+[table]
+name = "mixed"
+
+[columns.country]
+type = "categorical"
+old_option = true
+"""
+    )
+    result = runner.invoke(app, ["schema", "check", str(mixed_csv), "--schema", str(schema_path)])
+    assert result.exit_code != 0
+    combined = result.stdout + (result.stderr or "")
+    assert "old_option" in combined
+    assert "Traceback" not in combined

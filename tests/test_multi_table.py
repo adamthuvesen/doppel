@@ -151,39 +151,8 @@ parent_column = "user_id"
     assert len(dataset.edges) == 1
 
 
-def test_multi_schema_accepts_path_alias(tmp_path: Path) -> None:
-    users, orders = _make_relational_fixture()
-    (tmp_path / "users.csv").write_text(users.write_csv())
-    (tmp_path / "orders.csv").write_text(orders.write_csv())
-
-    schema_path = tmp_path / "schema.toml"
-    schema_path.write_text(
-        """
-[tables.users]
-path = "users.csv"
-primary_key = "user_id"
-
-[tables.orders]
-path = "orders.csv"
-primary_key = "order_id"
-
-[[foreign_keys]]
-child_table = "orders"
-child_column = "user_id"
-parent_table = "users"
-parent_column = "user_id"
-""",
-        encoding="utf-8",
-    )
-
-    schema = multi_schema.load(schema_path)
-    assert schema.tables["users"].file == "users.csv"
-    dataset = multi_schema.to_dataset(schema, tmp_path)
-    assert set(dataset.tables) == {"users", "orders"}
-
-
-def test_multi_schema_rejects_conflicting_file_and_path() -> None:
-    with pytest.raises(ValidationError, match="both `file` and `path`"):
+def test_multi_schema_rejects_unknown_table_keys() -> None:
+    with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
         multi_schema.TableSpec.model_validate({"file": "users.csv", "path": "people.csv"})
 
 
@@ -279,8 +248,7 @@ parent_column = "user_id"
     assert out_users.height == 25, "rows-per-table users=25 should override default -n 10"
 
 
-def test_inherit_parent_features_raises_until_implemented(tmp_path: Path) -> None:
-    """The flag is parsed but the algorithmic work is v0.2 — should fail loudly, not silently."""
+def test_gen_multi_table_unknown_schema_key_clean_cli_error(tmp_path: Path) -> None:
     users, orders = _make_relational_fixture()
     (tmp_path / "users.csv").write_text(users.write_csv())
     (tmp_path / "orders.csv").write_text(orders.write_csv())
@@ -294,40 +262,7 @@ primary_key = "user_id"
 [tables.orders]
 file = "orders.csv"
 primary_key = "order_id"
-inherit_parent_features = true
-
-[[foreign_keys]]
-child_table = "orders"
-child_column = "user_id"
-parent_table = "users"
-parent_column = "user_id"
-"""
-    )
-    schema = multi_schema.load(schema_path)
-    assert schema.tables["orders"].inherit_parent_features is True
-    import pytest
-
-    with pytest.raises(NotImplementedError, match="inherit_parent_features"):
-        multi_schema.to_dataset(schema, tmp_path)
-
-
-def test_gen_multi_table_inherit_parent_features_clean_cli_error(tmp_path: Path) -> None:
-    """At the CLI layer, the NotImplementedError should surface as a clean BadParameter
-    (exit 2, no traceback) instead of a raw NotImplementedError dump."""
-    users, orders = _make_relational_fixture()
-    (tmp_path / "users.csv").write_text(users.write_csv())
-    (tmp_path / "orders.csv").write_text(orders.write_csv())
-    schema_path = tmp_path / "schema.toml"
-    schema_path.write_text(
-        """
-[tables.users]
-file = "users.csv"
-primary_key = "user_id"
-
-[tables.orders]
-file = "orders.csv"
-primary_key = "order_id"
-inherit_parent_features = true
+unsupported_knob = true
 
 [[foreign_keys]]
 child_table = "orders"
@@ -353,8 +288,7 @@ parent_column = "user_id"
     )
     assert result.exit_code == 2  # typer BadParameter convention
     combined = result.stdout + (result.stderr or "")
-    assert "inherit_parent_features" in combined
-    assert "v0.2 roadmap" in combined
+    assert "unsupported_knob" in combined
     assert "Traceback" not in combined  # clean error, no stack dump
 
 

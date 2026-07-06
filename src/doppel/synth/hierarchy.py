@@ -1,17 +1,15 @@
 """Hierarchical synthesizer — multi-table orchestration over single-table CART.
 
-v1 design (Phase 5 MVP):
-  - One `CartSynthesizer` per table, fit on that table's data independently.
-  - For each FK edge, store the empirical distribution of "children per parent row".
-  - At sample time, topologically order the tables; sample root tables to a user-given
-    row count; for each child table, draw a child-count per generated parent row from
-    the empirical distribution, generate that many child rows, then overwrite the FK
-    column to point at the parent's synthetic primary-key value.
+One `CartSynthesizer` is fit independently per table. At sample time, root tables are
+generated to user-requested row counts; each child table draws an empirical child-count
+per generated parent row, samples that many child rows, then overwrites the child FK to
+point at the parent's synthetic primary key.
 
-What v1 does NOT yet do (named honestly, deferred to a later phase):
-  - Condition child column distributions on parent attributes (cross-table correlations).
-  - Composite or polymorphic foreign keys.
-  - Self-referential or cyclic schemas.
+Supported schema shape:
+  - Directed acyclic FK graph.
+  - At most one parent FK per child table.
+  - Independent per-table column distributions; parent attributes do not condition child
+    columns.
 """
 
 from __future__ import annotations
@@ -115,11 +113,11 @@ class HierarchicalSynthesizer:
         synth_dfs: dict[str, pl.DataFrame],
         rng: Rng,
     ) -> pl.DataFrame:
-        # v1 simplification — single parent per child.
+        # Current hierarchy supports a single parent per child table.
         if len(edges_in) > 1:
             raise NotImplementedError(
                 f"table {name!r} has {len(edges_in)} foreign keys; "
-                "v1 supports at most one parent FK per child"
+                "doppel supports at most one parent FK per child"
             )
         edge = edges_in[0]
         parent_df = synth_dfs[edge.parent_table]

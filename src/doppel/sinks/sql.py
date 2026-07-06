@@ -1,4 +1,4 @@
-"""SQL-backed sinks — DuckDB only in v1.
+"""SQL-backed sinks — DuckDB only.
 
 Snowflake/Postgres writes are explicitly out of scope (transactions,
 idempotency, schema-create rights, recovery) and are rejected at the

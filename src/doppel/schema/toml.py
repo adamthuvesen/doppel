@@ -33,7 +33,7 @@ from typing import Any
 
 import tomli_w
 import typer
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from doppel.constraints.dsl import (
     Constraint,
@@ -47,6 +47,8 @@ from doppel.schema.types import Column, ColumnType
 
 
 class TableMeta(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     name: str
     primary_key: str | None = None
 
@@ -55,6 +57,8 @@ _CALENDAR_ALLOWLIST = tuple(f.value for f in CalendarFeature)
 
 
 class ColumnSpec(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     type: ColumnType
     nullable: bool = True
     ordered: bool = False
@@ -98,6 +102,8 @@ class ColumnSpec(BaseModel):
 
 
 class SchemaToml(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     table: TableMeta
     columns: dict[str, ColumnSpec] = Field(default_factory=dict)
     constraints: list[Constraint] = Field(default_factory=list)
@@ -134,8 +140,7 @@ def apply_overrides(inferred: Table, schema: SchemaToml) -> Table:
     """Merge user TOML overrides into the inferred Table. TOML wins per-field.
 
     Validation:
-      - column overrides naming a column not present in the inferred data are rejected
-        loudly (was previously silent).
+      - column overrides naming a column not present in the inferred data are rejected.
       - any declared `primary_key` is auto-promoted to `ColumnType.KEY` so the
         synthesizer generates unique values for it rather than modelling the column.
     """

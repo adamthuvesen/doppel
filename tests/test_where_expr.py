@@ -1,9 +1,8 @@
 """Boolean-mode expression evaluator — happy paths and hostile-input rejections.
 
 The boolean mode extends the arithmetic AST with `Compare`, `BoolOp(And|Or)`, and
-str/bool constants. This test bank closes audit gap #11 (thin hostile-input
-coverage) by enumerating every node type the v1 grammar must reject AND verifying
-the v0.1 numeric-mode surface didn't widen as a side effect.
+str/bool constants. These tests enumerate every rejected node type and verify the
+numeric-mode grammar stays arithmetic-only.
 """
 
 from __future__ import annotations
@@ -95,7 +94,7 @@ def test_boolean_chained_compare_error_suggests_workaround() -> None:
         compile_expression("0 < x < 10", {"x"}, mode="boolean")
 
 
-# Hostile-input parametrised rejection (closes audit gap #11) ──────────────────
+# Hostile-input parametrised rejection ─────────────────────────────────────────
 
 
 @pytest.mark.parametrize(
@@ -125,8 +124,8 @@ def test_boolean_chained_compare_error_suggests_workaround() -> None:
 def test_boolean_rejects_hostile_node(expression: str, node_name: str) -> None:
     with pytest.raises(ValueError) as exc_info:
         compile_expression(expression, {"a", "obj"}, mode="boolean")
-    # The message must NAME the rejected node type so the user (and the audit) can
-    # see exactly what tripped the allowlist.
+    # The message must name the rejected node type so the user can see exactly
+    # what tripped the allowlist.
     message = str(exc_info.value)
     assert node_name.lower() in message.lower(), (
         f"error message {message!r} must reference {node_name!r}"

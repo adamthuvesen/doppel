@@ -136,8 +136,7 @@ def _correlation_ratio(numeric_values: np.ndarray, categories: pl.Series) -> flo
     total = float(np.var(numeric_values))
     if total == 0:
         return 0.0
-    # Compute per-category mean and count in one Polars pass; avoids the O(n*k) Python
-    # comparison loop the previous implementation used.
+    # Compute per-category mean and count in one Polars pass.
     grouped = (
         pl.DataFrame({"v": numeric_values, "c": categories})
         .group_by("c")

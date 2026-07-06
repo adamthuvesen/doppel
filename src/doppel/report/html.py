@@ -539,8 +539,8 @@ def _privacy_section(report: QualityReport) -> str:
   <h2>Distance to closest record</h2>
   <p class="note">For every synthetic row, the L2 distance to its nearest real neighbour in
   encoded space. Values bunched near zero mean the twin is echoing real rows.</p>
-  <div class="warn">Heuristic, not a formal privacy guarantee — differential privacy lands
-  post-v1. Compared {p.n_synth:,} synthetic vs {p.n_real:,} real rows over {p.n_features}
+  <div class="warn">Heuristic, not a formal privacy guarantee; doppel does not implement
+  differential privacy. Compared {p.n_synth:,} synthetic vs {p.n_real:,} real rows over {p.n_features}
   encoded features.</div>
   {strip}
 </section>"""

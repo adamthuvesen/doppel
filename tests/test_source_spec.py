@@ -1,8 +1,8 @@
 """Unit tests for the SourceSpec / SinkSpec parser.
 
-Covers Section 9 (URI parser) and Section 10 (auth) of the SQL-connectors
-change. End-to-end DuckDB reads live in test_sql_duckdb.py; mocked driver
-behaviour lives in test_sql_pushdown.py."""
+End-to-end DuckDB reads live in test_sql_duckdb.py; mocked driver behaviour
+lives in test_sql_pushdown.py.
+"""
 
 from __future__ import annotations
 

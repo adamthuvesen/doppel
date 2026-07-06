@@ -1,11 +1,10 @@
 """Safe expression evaluator — numeric (for `derived`) and boolean (for `where`).
 
 Parses a small subset of Python expressions via `ast` and walks the tree, emitting
-a `polars.Expr`. Two evaluation contexts share one walker so the audit surface is
-a single allowlist:
+a `polars.Expr`. Two evaluation contexts share one walker so there is one allowlist:
 
 - **numeric** (default) — only `Name`, `Constant(int|float)`, `UnaryOp(-)`, and
-  `BinOp(+,-,*,/)`. Used by `DerivedConstraint`. Surface unchanged from v0.1.
+  `BinOp(+,-,*,/)`. Used by `DerivedConstraint`.
 - **boolean** — numeric subgrammar PLUS `Compare` (single op only, never chained),
   `BoolOp(And|Or)`, and `Constant(str|bool)`. Used by `WhereConstraint`. The
   top-level node MUST be `Compare` or `BoolOp` so a bare numeric expression like

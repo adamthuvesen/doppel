@@ -5,7 +5,8 @@ feature space (numeric and datetime min-max scaled to [0,1], categorical one-hot
 text dropped). Report percentiles of those minimum distances.
 
 Low percentiles → some synthetic rows are very close to real rows → potential memorisation.
-This is a heuristic, *not* a formal privacy guarantee — differential privacy lands post-v1.
+This is a heuristic, not a formal privacy guarantee; doppel does not implement
+differential privacy.
 """
 
 from __future__ import annotations

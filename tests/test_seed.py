@@ -31,9 +31,7 @@ def test_spawn_is_deterministic_across_instances() -> None:
 def test_spawn_child_stream_differs_from_parent_continuation() -> None:
     """spawn() must produce a stream distinct from the parent's continuing draws.
 
-    Regression guard: a broken `spawn()` that returned `self` (or shared internal state with
-    the parent) would otherwise satisfy the cross-instance determinism test above. This test
-    fails for that bug.
+    This catches shared state between parent and child RNG streams.
     """
     parent = Rng.from_seed(7)
     child_draws = parent.spawn().numpy.integers(0, 1_000_000_000, size=5).tolist()

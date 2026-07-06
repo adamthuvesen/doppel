@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import typer
+from pydantic import ValidationError
 from rich.console import Console
 
 from doppel.cli import labels as cli_labels
@@ -125,18 +126,13 @@ def check(
     console.print(f"[dim]reading[/] {source_label}")
     df = source_read(source_spec, timeout=connection_timeout)
     inferred = infer_table(cli_labels.table_name_for_source(source_spec), df)
-    schema = schema_toml.load(schema_file)
 
-    errors: list[str] = []
     try:
+        schema = schema_toml.load(schema_file)
         schema_toml.validate_against_table(inferred, schema)
-    except ValueError as exc:
-        errors.append(str(exc))
-
-    if errors:
-        for e in errors:
-            console.print(f"[red]err[/] {e}")
-        raise typer.Exit(code=1)
+    except (ValidationError, ValueError) as exc:
+        console.print(f"[red]err[/] {exc}")
+        raise typer.Exit(code=1) from None
 
     console.print(
         f"[green]ok[/] schema is consistent with {source_label}: "

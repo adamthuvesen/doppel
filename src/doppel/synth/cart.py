@@ -155,9 +155,8 @@ def _fit_column(
     nonnull_list = nonnull.to_list()
     unconditional = features.width == 0
 
-    # Free text is always sampled-with-replacement in Phase 1 — fitting a classifier
-    # on a high-cardinality string target leaks raw values into a noisy model and
-    # buys us nothing over empirical resampling. PII handling lands in Phase 6.
+    # Free text is sampled with replacement: fitting a classifier on a high-cardinality
+    # string target leaks raw values into a noisy model without improving synthesis.
     if unconditional or len(nonnull_list) <= 1 or col.type is ColumnType.TEXT:
         const_value, has_const = (
             (nonnull_list[0], True)

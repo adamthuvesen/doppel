@@ -35,8 +35,8 @@ def test_decompose_preserves_nulls() -> None:
 def test_recompose_preserves_non_utc_timezone() -> None:
     """A tz-aware Datetime column must round-trip without wall-clock shift.
 
-    Regression: previously `recompose` returned naive UTC then cast to the tz-aware target,
-    which `replaces` (not converts) the timezone — shifting non-UTC values by the offset.
+    `recompose` converts from UTC into the target timezone instead of replacing the
+    timezone metadata.
     """
     original_utc = pl.Series(
         "ts",

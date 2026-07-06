@@ -31,7 +31,7 @@ fitted synthesizer. A crafted pickle payload can execute arbitrary code on load.
 
 - Only load `.doppel` files from trusted sources. The restricted unpickler reduces
   risk but doesn't eliminate it — a novel exploit chain inside an allowed class is
-  out of scope for v0.1.
+  still possible.
 - For an artifact from an unknown source, inspect the manifest first:
   `tar -xzOf model.doppel manifest.json | jq`. Or use `doppel artifact info <file>`,
   which never invokes the unpickler.
@@ -63,23 +63,15 @@ the warehouse, so a malicious query is an own-goal, not a doppel
 vulnerability. We document this in CLI help and treat the query string the
 same way `bash -c` treats its argument.
 
-**Vendor driver vulnerabilities.** ConnectorX is the v1 read driver and
+**Vendor driver vulnerabilities.** ConnectorX is the SQL read driver and
 ships its own native code. A vulnerability in ConnectorX or its underlying
 libraries (Arrow, libpq, etc.) is out of scope for the doppel threat
 model — keep your `[sql]` extra current with `pip install -U
 "doppeldata[sql]"`.
 
-**ADBC migration plan.** ConnectorX has a moderate bus factor. The
-per-vendor SQL generators (`sources/sql.py`) are driver-agnostic and the
-URI dispatch happens entirely in `sources/spec.py`, so swapping ConnectorX
-for ADBC (`adbc-driver-snowflake`, `adbc-driver-postgresql`) when the
-ecosystem matures is a one-line change in `_read_via_connectorx`. v2
-roadmap.
-
 **Warehouse writes are explicitly out of scope.** Snowflake and Postgres
 sinks raise at parse time. DuckDB writes are file writes — same blast
-radius as Parquet. This keeps the v1 surface area honest: doppel is a
-synth tool, not an ELT tool.
+radius as Parquet. Doppel is a synth tool, not an ELT tool.
 
 ### 3. Synthetic-output privacy
 
@@ -89,12 +81,12 @@ doppel's privacy posture is **heuristic**, not formal:
   those columns are stripped before fit and regenerated via Faker at sample time —
   no real names / emails / phone numbers reach the output.
 - `doppel fit` refuses any source where Presidio detects PII; the artifact format
-  doesn't yet carry detection metadata to support round-trip regeneration (v0.2).
+  doesn't carry detection metadata to support round-trip regeneration.
 - Free-text columns without detected PII are sampled with replacement and **may leak
   original values**. `doppel diff` reports a distance-to-closest-record percentile
   and a per-column verbatim-text fraction so you can spot row-level memorisation.
-- No differential privacy in v0.1. If you need a formal privacy guarantee, doppel
-  is not the right tool yet — `--epsilon` is v0.2 roadmap.
+- No differential privacy. If you need a formal privacy guarantee, doppel is not
+  the right tool.
 
 ### 3. Constraint expression evaluator
 

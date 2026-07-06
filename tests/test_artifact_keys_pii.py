@@ -1,7 +1,4 @@
-"""Regression tests for the issues raised in the Phase-6 review.
-
-One test per finding so the fix is documented in code, not just memory.
-"""
+"""Behavior tests for artifact safety, key generation, and PII confidence."""
 
 from __future__ import annotations
 
@@ -25,7 +22,7 @@ from doppel.synth.cart import CartSynthesizer
 from doppel.synth.seed import Rng
 
 # ---------------------------------------------------------------------------
-# C1 — restricted unpickler refuses dangerous classes
+# Restricted unpickler refuses dangerous classes
 # ---------------------------------------------------------------------------
 
 
@@ -132,7 +129,7 @@ def test_safe_pickle_round_trips_legitimate_artifact(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# H1 — UUID-typed KEY columns must respect --seed
+# UUID-typed KEY columns respect --seed
 # ---------------------------------------------------------------------------
 
 
@@ -183,7 +180,7 @@ def test_uuid_key_column_values_look_like_hex_uuids() -> None:
 
 
 # ---------------------------------------------------------------------------
-# H2 — Faker generation deterministic across same-seed calls in one process
+# Faker generation is deterministic across same-seed calls in one process
 # ---------------------------------------------------------------------------
 
 
@@ -204,7 +201,7 @@ def test_faker_generate_different_seeds_differ() -> None:
 
 
 # ---------------------------------------------------------------------------
-# M1 — declared primary_key is auto-promoted to KEY type
+# Declared primary_key is auto-promoted to KEY type
 # ---------------------------------------------------------------------------
 
 
@@ -292,14 +289,13 @@ def test_promoted_string_pk_yields_string_synth_values() -> None:
 
 
 # ---------------------------------------------------------------------------
-# M5 — PII confidence is clamped to [0, 1]
+# PII confidence is clamped to [0, 1]
 # ---------------------------------------------------------------------------
 
 
-pii_available = pytest.importorskip("presidio_analyzer", reason="pii extra not installed")
-
-
 def test_pii_confidence_never_exceeds_one() -> None:
+    pytest.importorskip("presidio_analyzer", reason="pii extra not installed")
+
     from doppel.pii.detect import detect
 
     # Cells that contain MULTIPLE emails would naively over-count.
@@ -310,6 +306,3 @@ def test_pii_confidence_never_exceeds_one() -> None:
     found = detect(df, table.columns, sample_size=20)
     for d in found:
         assert 0.0 <= d.confidence <= 1.0, f"confidence out of range: {d.confidence}"
-
-
-_ = pii_available  # silence "unused" without disabling the importorskip side-effect.

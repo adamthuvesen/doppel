@@ -14,7 +14,7 @@ class WarehouseConnectionError(RuntimeError):
 
 class UnsupportedSinkError(ValueError):
     """Raised when a sink URI scheme is not supported (e.g. Snowflake/Postgres
-    writes, which doppel deliberately does not implement in v1)."""
+    writes, which doppel deliberately does not implement)."""
 
 
 class RowCountProbeError(RuntimeError):

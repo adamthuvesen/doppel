@@ -1,6 +1,10 @@
 # doppel demo
 
-A small SaaS-accounts CSV to try doppel against without using real data.
+Use this fixture when you want to try doppel without touching private data.
+
+The demo starts from [saas_accounts.csv](saas_accounts.csv), writes a 200-row
+synthetic CSV, builds HTML and JSON quality reports, and infers an editable
+schema file. Everything lands under `/tmp/doppel-demo`.
 
 ```bash
 mkdir -p /tmp/doppel-demo
@@ -35,12 +39,12 @@ The metric values are from the checked-in fixture with `--seed 7`. Small changes
 come from dependency updates, but `text_leaks=0` should hold because the demo hashes
 the text column.
 
-Exercised features:
+What this demo covers:
 
-- Unique `account_id` key.
-- High-cardinality text (`company_domain`) — defaults will leak; use `--text-policy
-  hash|fake|drop` for safer output.
-- Categorical columns (`region`, `tier`).
-- Integer count invariants (`num_active_seats_l90d <= num_seats`).
-- Nullable feature + paired missingness flag.
-- Binary target flag.
+- `account_id` is a unique key.
+- `company_domain` is high-cardinality text. Plain sampling can copy these values,
+  so the command uses `--text-policy hash`.
+- `region` and `tier` exercise categorical columns.
+- `num_active_seats_l90d <= num_seats` exercises count invariants.
+- Nullable features and paired missingness flags exercise null handling.
+- A binary target flag exercises boolean-like categorical data.

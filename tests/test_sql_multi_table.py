@@ -1,8 +1,8 @@
-"""Multi-table SQL: `[[tables]]` blocks accept `uri` alongside file-backed tables.
+"""Multi-table SQL: `[tables.<name>]` blocks accept `uri` alongside file-backed tables.
 
-Covers Section 14 of the SQL-connectors change. Mixed `file` + `uri` runs
-go end-to-end against a DuckDB fixture; the TOML validator rejects malformed
-blocks at load time."""
+Mixed `file` + `uri` runs go end-to-end against a DuckDB fixture; the TOML
+validator rejects malformed blocks at load time.
+"""
 
 from __future__ import annotations
 

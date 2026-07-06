@@ -1,4 +1,4 @@
-"""Phase 0 scaffold smoke test: every documented subcommand is reachable from --help."""
+"""Every documented subcommand is reachable from --help."""
 
 from __future__ import annotations
 

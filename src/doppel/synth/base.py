@@ -1,8 +1,7 @@
 """Single-table synthesizer protocol.
 
 `Synthesizer` describes the surface of a single-table generator: `fit(dataset, rng)` and
-`sample(n, rng) -> Dataset`. The only concrete implementation in v1 is `CartSynthesizer`;
-a future `CopulaSynthesizer` (Phase 7) will satisfy the same shape.
+`sample(n, rng) -> Dataset`. `CartSynthesizer` is the concrete implementation.
 
 Multi-table synthesis is a separate concern with a different signature — see
 `HierarchicalSynthesizer` in `doppel.synth.hierarchy`, which orchestrates one

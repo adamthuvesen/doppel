@@ -1,7 +1,6 @@
-"""Regression tests for bugs found during real-dataset smoke testing.
+"""Behavior tests for real-world CSV, key, datetime, and JSON edge cases.
 
 Datasets tested: Titanic, Heart Disease, NYC Taxi, Adult Census Income.
-Each test covers one concrete failure mode observed on those datasets.
 """
 
 from __future__ import annotations
@@ -19,9 +18,7 @@ from doppel.schema.types import ColumnType
 from doppel.sources.file import _normalise_strings  # type: ignore[reportPrivateUsage]
 
 # ---------------------------------------------------------------------------
-# Fix 1 — CamelCase / PascalCase key column detection
-# Titanic's "PassengerId" was not detected as KEY because _looks_like_key_name
-# only checked for "_id" (snake_case) suffix, missing the "Id" (camelCase) pattern.
+# CamelCase / PascalCase key column detection
 # ---------------------------------------------------------------------------
 
 
@@ -76,11 +73,7 @@ def test_key_column_produces_unique_values_in_synth() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Fix 2 — CSV string whitespace stripping and null sentinel detection
-# Adult Census Income from UCI has leading spaces (" Private", " ?") in every
-# string cell because the format is ", value" (space after comma).
-# The previous reader preserved those spaces, causing numeric-stored-as-string
-# columns to be misclassified and "?" sentinels to survive as category values.
+# CSV string whitespace stripping and null sentinel detection
 # ---------------------------------------------------------------------------
 
 
@@ -129,9 +122,7 @@ def test_csv_reader_strips_whitespace(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Fix 3 — String-to-numeric auto-promotion
-# Adult Census Income has numeric columns stored as strings due to leading spaces.
-# After whitespace stripping, columns like "fnlwgt" (" 77516") should become Int64.
+# String-to-numeric auto-promotion
 # ---------------------------------------------------------------------------
 
 
@@ -167,9 +158,7 @@ def test_normalise_strings_preserves_nulls_when_promoting() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Fix 4 — Ordered-pair enforcement for datetime/numeric columns
-# NYC Taxi: tpep_pickup_datetime <= tpep_dropoff_datetime always held in real
-# data (min duration = 0s), but CART leaf-sampling could generate pickup > dropoff.
+# Ordered-pair enforcement for datetime/numeric columns
 # ---------------------------------------------------------------------------
 
 

@@ -1,8 +1,7 @@
-"""RNG plumbing — a single seeded Generator threaded through synthesis, sklearn, and leaf sampling.
+"""RNG plumbing for synthesis, sklearn, and leaf sampling.
 
-The same `Rng` instance funnels seeds into sklearn estimators (`random_state=rng.sklearn_seed()`)
-and into our own leaf sampling (`rng.numpy`). Retrofitting determinism is misery, so we standardise
-on this contract from Phase 1.
+`Rng` funnels seeds into sklearn estimators (`random_state=rng.sklearn_seed()`) and
+leaf sampling (`rng.numpy`) so the same source and seed produce the same output.
 """
 
 from __future__ import annotations

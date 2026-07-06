@@ -1,14 +1,18 @@
 # SQL connectors
 
-Doppel reads from DuckDB, Snowflake, and Postgres via database URIs. Install
-the optional extra to enable Snowflake / Postgres support:
+Doppel can read source data from DuckDB, Snowflake, and Postgres. Use this
+when the table already lives in a warehouse and exporting to Parquet first is
+extra work.
+
+DuckDB works with the base install. Snowflake and Postgres need the SQL extra:
 
 ```bash
 pip install "doppeldata[sql]"
 ```
 
-DuckDB reads work without the extra (they use the top-level `duckdb`
-dependency directly).
+DuckDB writes are also supported. Snowflake and Postgres are read-only from
+doppel's point of view; write a file or a DuckDB table, then load it with your
+normal warehouse tooling.
 
 ## URI formats
 
@@ -18,21 +22,20 @@ dependency directly).
 | Snowflake     | `snowflake://user@account/db/schema?warehouse=WH&role=R`        |
 | Postgres      | `postgres://user@host:5432/dbname` (alias: `postgresql://...`)  |
 
-For every URI source you must pass **exactly one** of:
+For every URI source, pass exactly one selector:
 
 - `--table NAME` — reads the whole table
 - `--query "SELECT ..."` — reads the result of a custom query (developer-trust input)
 
-For DuckDB the path goes in the URI path component; for Snowflake/Postgres
-the database, schema, and warehouse routing live in the path and query
-string respectively.
+For DuckDB, the path goes in the URI path component. For Snowflake and Postgres,
+the database, schema, and warehouse routing live in the path and query string.
 
 ## Auth
 
-Three mechanisms, applied in precedence order:
+There are three password mechanisms. doppel applies them in this order:
 
-1. **`--password-cmd "<shell-cmd>"`** (recommended). The command's stdout
-   is captured and substituted into the URI's password slot. Example:
+1. **`--password-cmd "<shell-cmd>"`**. This is the safest default for local
+   use. doppel captures stdout and puts it in the URI password slot.
    ```
    --password-cmd "op read op://vault/snowflake/password"
    ```
@@ -47,19 +50,18 @@ Three mechanisms, applied in precedence order:
    braced `${VAR}` form is expanded — bare `$VAR` is left literal so
    passwords with `$` in them survive.
 
-3. **URI-embedded** (`scheme://user:pass@host/...`): supported but emits a
-   one-line stderr warning that the password appears in shell history.
-   Prefer (1) or (2) outside throwaway development.
+3. **URI-embedded** (`scheme://user:pass@host/...`): supported, with a
+   one-line stderr warning because the password can appear in shell history.
+   Use this only for throwaway local runs.
 
-Passwords are redacted at the parser boundary by substituting `:***@`
-into a log-safe URI form. The raw URI is held separately and passed
-straight to the driver — it never appears in logs, error messages, or
-`--explain` output.
+doppel redacts passwords at the parser boundary by substituting `:***@` into
+the log-safe URI. The raw URI is kept separately and passed straight to the
+driver. It should not appear in logs, error messages, or `--explain` output.
 
 ## Sample pushdown
 
-When `--fit-rows N` is set on a SQL source, doppel pushes the sample down
-to the warehouse using vendor-native syntax:
+When you set `--fit-rows N` on a SQL source, doppel asks the database for the
+sample instead of reading the full table first:
 
 | Vendor    | Generated SQL                                                              |
 | --------- | -------------------------------------------------------------------------- |
@@ -68,12 +70,11 @@ to the warehouse using vendor-native syntax:
 | DuckDB    | `SELECT * FROM (<base>) AS t USING SAMPLE N ROWS (REPEATABLE S)`           |
 | Other     | `SELECT * FROM (<base>) AS t ORDER BY RANDOM() LIMIT N` (with warning)     |
 
-The probability `p` for Postgres is computed from the row-count estimate
-with a 5% oversample (since `TABLESAMPLE BERNOULLI` returns approximate
-row counts); the client-side `LIMIT N` then guarantees the exact row count
-the user asked for. Determinism for the ANSI fallback depends on the
-vendor's `RANDOM()` seedability; doppel emits a warning when the fallback
-is used.
+For Postgres, `p` is computed from the row-count estimate with a 5% oversample
+because `TABLESAMPLE BERNOULLI` returns approximate row counts. The client-side
+`LIMIT N` keeps the final fit set at the requested size. Determinism for the
+ANSI fallback depends on the vendor's `RANDOM()` seedability; doppel warns when
+that fallback is used.
 
 Setting `--seed` propagates through every supported vendor's seed clause.
 
@@ -86,17 +87,17 @@ query against the catalog:
 - Postgres: `SELECT reltuples::BIGINT FROM pg_class`
 - For `--query`: `SELECT COUNT(*) FROM (<query>) AS _doppel_probe`
 
-If the estimate exceeds **1,000,000 rows** AND `--fit-rows` is not set,
-doppel hard-fails with a message naming the row count and suggesting
-`--fit-rows N` (to sample) or `--fit-rows 0` (to fit on the whole thing,
-with a warning that the network egress will be paid).
+If the estimate exceeds **1,000,000 rows** and `--fit-rows` is not set, doppel
+fails before reading the data. The error names the row count and suggests
+`--fit-rows N` to sample or `--fit-rows 0` to fit on the whole table. The latter
+can move a lot of data over the network.
 
 The probe is skipped for DuckDB and file sources (the auto-cap behavior
 applies for files, and DuckDB is local).
 
 ## Multi-table SQL
 
-`schema.toml` `[tables.<name>]` blocks accept either `file` or `uri`:
+In `schema.toml`, each `[tables.<name>]` block can read from a file or a URI:
 
 ```toml
 [tables.users]
@@ -108,7 +109,7 @@ uri = "snowflake://${SF_USER}@account/db/schema?warehouse=WH"
 table = "ORDERS"
 primary_key = "order_id"
 
-# Or use --query in place of `table`:
+# Or use query in place of table:
 # query = "SELECT * FROM ORDERS WHERE created_at >= '2025-01-01'"
 
 [[foreign_keys]]
@@ -118,37 +119,35 @@ parent_table = "users"
 parent_column = "user_id"
 ```
 
-Each `[tables.<name>]` block must declare exactly one of `file` / `uri`, and
-URI-backed tables must additionally declare exactly one of `table` /
-`query`. The CLI's `--password-cmd` and
-`--connection-timeout` apply globally to every SQL table in the run.
+Each `[tables.<name>]` block must declare exactly one of `file` or `uri`.
+URI-backed tables must also declare exactly one of `table` or `query`. The
+CLI's `--password-cmd` and `--connection-timeout` apply to every SQL table in
+the run.
 
-## Sinks: file and DuckDB only
+## Sinks
 
 The `-o`/`--output` flag accepts:
 
 - a file path (any extension supported by `sinks.file`); or
 - a DuckDB URI of the form `duckdb:///path.db?table=NAME`.
 
-Snowflake/Postgres sinks raise `BadParameter` at parse time. Warehouse
-writes have their own design surface (transactions, idempotency, table
-existence, schema permissions, recovery) and are out of scope.
-Write to a file or DuckDB and load with your normal ELT tooling.
+Snowflake and Postgres sink URIs raise `BadParameter` at parse time. Warehouse
+writes need decisions about transactions, idempotency, table creation, schema
+permissions, and recovery. doppel leaves that to your normal ELT tooling.
 
 ## Connection lifecycle
 
-One connection per source URI per CLI invocation. `--connection-timeout
-SECONDS` (default 300) wires into the driver's timeout where supported,
-and a Python-side watchdog enforces it where not. The redacted URI is
-logged to stderr at info level before the connection opens, so failures
-correlate to a connection target without leaking credentials.
+Each source URI opens one connection per CLI invocation. `--connection-timeout
+SECONDS` (default 300) is passed to the driver where supported, with a
+Python-side watchdog for the rest. Before opening the connection, doppel logs
+the redacted URI to stderr at info level so failures still point at the right
+target.
 
 ## Per-vendor caveats
 
 - **Snowflake**: only password authentication is supported. The
   `INFORMATION_SCHEMA.TABLES.ROW_COUNT` probe returns the value as of the
-  last `ANALYZE`/`COMPACT`; in practice it's accurate enough for the 1M
-  threshold safety net.
+  last `ANALYZE`/`COMPACT`; it is accurate enough for the 1M threshold guard.
 - **Postgres**: `TABLESAMPLE BERNOULLI(p)` returns approximately `p%` of
   rows, not exactly N. Doppel oversamples by 5% and applies `LIMIT N`
   client-side to guarantee the exact row count.

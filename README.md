@@ -1,44 +1,27 @@
 # doppel
 
-Synthetic tabular data from real datasets.
+doppel makes synthetic tabular data from real datasets.
 
-doppel fits a source table and generates rows with similar distributions,
-correlations, null patterns, unique-value counts, and foreign-key structure. Given
-the same source and `--seed`, output is deterministic.
+Give it a CSV, TSV, Parquet, JSON/NDJSON, Arrow/IPC file, or a DuckDB,
+Snowflake, or Postgres source. doppel fits the source and writes new rows with
+similar distributions, correlations, null patterns, unique-value counts, and
+foreign-key structure. The same source plus the same `--seed` produces the same
+output.
 
-## Fidelity Benchmark
+Use it for realistic test fixtures, demo data, dbt seeds, CI quality gates, or
+local work where production-shaped data helps. doppel has no differential
+privacy guarantee; text-heavy datasets and rare rows still need care.
 
-`doppel gen` then `doppel diff` on
-[California Housing](https://scikit-learn.org/stable/datasets/real_world.html#california-housing-dataset)
-— 20,640 rows × 9 numeric columns, ships with scikit-learn. The metrics are
-seed-deterministic; reproduce them with `uv run python benchmarks/run.py`.
+## Quick Start
 
-| Metric | Value | Reading |
-|--------|-------|---------|
-| Dataset | California Housing (20,640 × 9) | real public data, all numeric |
-| Mean marginal KS/TVD | **0.0069** | per-column distribution distance — lower is closer |
-| Correlation Frobenius distance | **0.0207** | correlation-structure distance — lower is closer |
-| DCR p5 | **0.0152** | 5th-percentile distance to nearest real row — higher means less copying |
-| Verbatim text rate | n/a | no text columns in this dataset to copy |
-| Fit + generate | ~1.9 s | 20,640 rows, wall-clock on one laptop |
-| Seed | `42` | same seed + source → identical numbers |
-
-Full machine-readable report: [benchmarks/results/housing.json](benchmarks/results/housing.json).
-
-`doppel diff` also ships a self-contained HTML report. Its correlation section renders the
-real and synthetic association matrices side by side, with a divergence map that lights up
-wherever the synthetic twin's joint structure drifts from the source:
-
-![doppel quality report — real vs. synthetic vs. divergence correlation heatmaps](docs/images/quality-report.png)
-
-## Install
+Install the repo dependencies and check the CLI:
 
 ```bash
 uv sync
 uv run doppel --help
 ```
 
-For optional connectors and PII handling:
+Add extras when you need warehouse reads or PII regeneration:
 
 ```bash
 uv sync --extra sql
@@ -48,13 +31,7 @@ uv sync --all-extras
 
 CLI and import name: `doppel`.
 
-## Supported Formats
-
-Inputs: CSV, TSV, Parquet, JSON/NDJSON, Arrow/IPC, DuckDB, Snowflake, Postgres.
-
-Outputs: CSV, TSV, Parquet, JSON/NDJSON, Arrow/IPC, DuckDB.
-
-## Quickstart
+Run the bundled SaaS fixture, then compare the synthetic output with the source:
 
 ```bash
 uv run doppel gen examples/saas_accounts.csv -n 1000 -o synth.csv \
@@ -82,6 +59,37 @@ when a threshold is breached. See [examples/README.md](examples/README.md) for a
 no-secret demo that writes the synthetic CSV, HTML report, JSON report, and inferred
 schema under `/tmp/doppel-demo`.
 
+## Supported Formats
+
+Inputs: CSV, TSV, Parquet, JSON/NDJSON, Arrow/IPC, DuckDB, Snowflake, Postgres.
+
+Outputs: CSV, TSV, Parquet, JSON/NDJSON, Arrow/IPC, DuckDB.
+
+## Fidelity Benchmark
+
+`doppel gen` then `doppel diff` on
+[California Housing](https://scikit-learn.org/stable/datasets/real_world.html#california-housing-dataset)
+-- 20,640 rows x 9 numeric columns, shipped with scikit-learn. The metrics are
+seed-deterministic; reproduce them with `uv run python benchmarks/run.py`.
+
+| Metric | Value | Reading |
+|--------|-------|---------|
+| Dataset | California Housing (20,640 x 9) | real public data, all numeric |
+| Mean marginal KS/TVD | **0.0069** | per-column distribution distance; lower is closer |
+| Correlation Frobenius distance | **0.0207** | correlation-structure distance; lower is closer |
+| DCR p5 | **0.0152** | 5th-percentile distance to nearest real row; higher means less copying |
+| Verbatim text rate | n/a | no text columns in this dataset to copy |
+| Fit + generate | ~1.9 s | 20,640 rows, wall-clock on one laptop |
+| Seed | `42` | same seed + source gives identical numbers |
+
+Full machine-readable report: [benchmarks/results/housing.json](benchmarks/results/housing.json).
+
+`doppel diff` also writes a self-contained HTML report. The correlation section shows the
+real and synthetic association matrices side by side, plus a divergence map for where the
+synthetic twin's joint structure drifts from the source:
+
+![doppel quality report — real vs. synthetic vs. divergence correlation heatmaps](docs/images/quality-report.png)
+
 ## Generate Rows
 
 ```bash
@@ -107,9 +115,10 @@ Common flags:
 
 See [docs/determinism.md](docs/determinism.md) for the seed contract.
 
-## Programmatic usage (experimental)
+## Python API
 
-Library API is not semver-frozen. Prefer the CLI for stable workflows.
+The Python API is useful for tests and local tooling. It is still experimental,
+so prefer the CLI for workflows you expect to keep stable.
 
 ```python
 from pathlib import Path
@@ -216,8 +225,7 @@ such as "larger customers place larger orders."
 
 `schema.toml` can:
 
-- override column types: `KEY`, `NUMERIC`, `CATEGORICAL`, `TEXT`, `BOOLEAN`,
-  `DATETIME`, `DATE`
+- override column types: `KEY`, `NUMERIC`, `CATEGORICAL`, `TEXT`, `DATETIME`
 - declare primary and foreign keys
 - add range, inequality, and derived constraints
 - toggle datetime calendar features
@@ -252,11 +260,12 @@ Use `--sample-rows N` and `--max-dcr-rows N` for large comparisons.
 
 ## Privacy and Security
 
-doppel is not differential privacy.
+doppel has no differential privacy guarantee.
 
-Detected PII can be regenerated with `[pii]`. Undetected free text may be copied
-verbatim from the source. For identifying text columns, use
-`--text-policy hash|fake|drop` and check output with `doppel diff`.
+With the `[pii]` extra installed, detected PII can be regenerated. Free-text columns
+that are not detected as PII may copy real strings into the output. For text-heavy
+datasets, choose an explicit text policy and check the result with `doppel diff`:
+`--text-policy hash|fake|drop`.
 
 `.doppel` files use a restricted unpickler with an allowlist, but they are still model
 artifacts from code. Only load files you trust. See [SECURITY.md](SECURITY.md).
@@ -269,9 +278,10 @@ artifacts from code. Only load files you trust. See [SECURITY.md](SECURITY.md).
   precision is dropped.
 - Warehouse writes are DuckDB only.
 - `fit` refuses detected PII; use `gen` for one-shot PII handling.
-- `KEY` columns synthesize sequential IDs from `1..n` (or deterministic UUID hex for
-  `uuid` / `*_uuid` string keys), not a continuation of source ID ranges.
-- `.json` output serialises datetimes as strings; reading that file back yields string
+- `KEY` columns generate fresh IDs. Integer-like keys become `1..n`; string keys named
+  `uuid` or `*_uuid` become deterministic UUID hex values. Source ID ranges are not
+  continued.
+- `.json` output serializes datetimes as strings. Reading that file back yields string
   columns, so `doppel diff` against JSON synth output is not meaningful. Prefer Parquet or CSV.
 
 ## Examples

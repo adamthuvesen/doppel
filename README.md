@@ -1,5 +1,7 @@
 # doppel
 
+![License](https://img.shields.io/github/license/adamthuvesen/doppel) ![Python](https://img.shields.io/badge/python-3.11%2B-blue)
+
 doppel makes synthetic tabular data from real datasets.
 
 Give it a CSV, TSV, Parquet, JSON/NDJSON, Arrow/IPC file, or a DuckDB,
@@ -64,6 +66,17 @@ schema under `/tmp/doppel-demo`.
 Inputs: CSV, TSV, Parquet, JSON/NDJSON, Arrow/IPC, DuckDB, Snowflake, Postgres.
 
 Outputs: CSV, TSV, Parquet, JSON/NDJSON, Arrow/IPC, DuckDB.
+
+## How It Works
+
+doppel uses sequential CART, the same family of methods used by synthpop and
+MICE-style chained synthesis. It models one column at a time, and each column
+can depend on the columns generated before it. That keeps correlations and
+conditional patterns that independent per-column sampling would lose.
+
+At sample time, doppel uses the fitted tree to find similar training rows, then
+draws one of their real values. Missing values get their own per-column model.
+Multi-table runs fit one synthesizer per table in foreign-key order.
 
 ## Fidelity Benchmark
 

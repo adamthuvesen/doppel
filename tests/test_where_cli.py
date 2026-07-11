@@ -270,6 +270,50 @@ def test_gen_where_zero_match_skips_fit(
     assert not fit_called, "synthesizer.fit() should not run when --where precheck fails"
 
 
+def test_gen_where_reads_source_once(
+    plan_csv: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The feasibility precheck must reuse the dataframe read for fitting."""
+    from doppel.cli import gen as gen_module
+    from doppel.pipeline import prepare
+
+    original_read = prepare.source_read
+    read_count = 0
+
+    def spy_read(*args: object, **kwargs: object) -> pl.DataFrame:
+        nonlocal read_count
+        read_count += 1
+        return original_read(*args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(prepare, "source_read", spy_read)
+    # Before the precheck moved into the pipeline, gen held its own imported alias.
+    # Patch that name too so this test catches a regression to the old double-read path.
+    monkeypatch.setattr(gen_module, "source_read", spy_read, raising=False)
+
+    out = tmp_path / "synth.csv"
+    result = runner.invoke(
+        app,
+        [
+            "gen",
+            str(plan_csv),
+            "--rows",
+            "10",
+            "--where",
+            "plan == 'enterprise'",
+            "--seed",
+            "1",
+            "--output",
+            str(out),
+            "--no-quality",
+            "--max-oversample",
+            "16.0",
+        ],
+    )
+
+    assert result.exit_code == 0, result.stdout
+    assert read_count == 1
+
+
 def test_gen_where_thin_support_warns(tmp_path: Path) -> None:
     """With <100 source matches the precheck emits a warning but proceeds.
 

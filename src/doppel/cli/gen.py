@@ -16,6 +16,7 @@ from rich.table import Table as _Table
 
 from doppel.cli import labels as cli_labels
 from doppel.cli._common import (
+    ConnectionTimeoutOpt,
     compute_quality_summary,
     fit_progress,
     print_quality_summary,
@@ -29,13 +30,8 @@ from doppel.dataset import Table
 from doppel.pii.detect import PIIDetection
 from doppel.pipeline.single_table import generate_single_table
 from doppel.pipeline.types import SingleTableGenerateConfig
-from doppel.pipeline.where import (
-    merge_where_into_constraints,
-    precheck_where,
-    thin_support_warning,
-)
+from doppel.pipeline.where import merge_where_into_constraints
 from doppel.schema import multi as multi_schema
-from doppel.sources import read as source_read
 from doppel.sources.spec import DatabaseUri, FilePath, SinkSpec
 from doppel.synth.cart import CartSynthesizer
 from doppel.synth.hierarchy import HierarchicalSynthesizer
@@ -124,12 +120,7 @@ def run(
             "Overrides URI-embedded password with a warning."
         ),
     ),
-    connection_timeout: int = typer.Option(
-        300,
-        "--connection-timeout",
-        min=1,
-        help="SQL sources only: connection/query timeout in seconds.",
-    ),
+    connection_timeout: ConnectionTimeoutOpt = 300,
     text_policy: TextPolicy = typer.Option(
         TextPolicy.SAMPLE,
         "--text-policy",
@@ -267,22 +258,6 @@ def _run_single(
     source_label = cli_labels.source_label(source_spec)
     console.print(f"[dim]reading[/] {source_label}")
 
-    sql_fit_rows = fit_rows if isinstance(source_spec, DatabaseUri) else None
-    if where is not None:
-        precheck_df = source_read(
-            source_spec,
-            fit_rows=sql_fit_rows,
-            seed=seed,
-            timeout=connection_timeout,
-        )
-        try:
-            matches = precheck_where(where, precheck_df)
-        except ValueError as exc:
-            raise typer.BadParameter(str(exc)) from exc
-        warn = thin_support_warning(matches, where)
-        if warn is not None:
-            console.print(f"[yellow]warn[/]: {warn}")
-
     if schema is not None:
         console.print(f"[dim]applying schema[/] {schema}")
         try:
@@ -331,6 +306,7 @@ def _run_single(
                 fit_progress=cb,
                 on_constraint_iteration=_progress_callback(where),
                 notify_fit_cap=lambda msg: console.print(f"[dim]fit-rows:[/] {msg}"),
+                notify_where_support=lambda msg: console.print(f"[yellow]warn[/]: {msg}"),
                 on_pii_detected=_on_pii_detected,
             )
     except ValueError as exc:
@@ -440,7 +416,7 @@ def _run_multi(
     overrides = _parse_rows_per_table(rows_per_table, set(roots))
     rows_per_root = {name: overrides.get(name, rows) for name in roots}
     console.print(f"[dim]sampling roots[/]: {rows_per_root}")
-    out_dataset, _report = synth.sample(rows_per_root, Rng.from_seed(seed))
+    out_dataset = synth.sample(rows_per_root, Rng.from_seed(seed))
 
     if where is not None and where_table is not None:
         try:

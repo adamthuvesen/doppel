@@ -87,7 +87,7 @@ def test_hierarchical_synth_preserves_fk_integrity() -> None:
     )
     synth = HierarchicalSynthesizer()
     synth.fit(ds, Rng.from_seed(42))
-    out, _ = synth.sample({"users": 30}, Rng.from_seed(7))
+    out = synth.sample({"users": 30}, Rng.from_seed(7))
     out_users = out.tables["users"].data
     out_orders = out.tables["orders"].data
     assert out_users is not None and out_orders is not None
@@ -106,7 +106,7 @@ def test_hierarchical_synth_child_count_distribution_resembles_real() -> None:
     )
     synth = HierarchicalSynthesizer()
     synth.fit(ds, Rng.from_seed(1))
-    out, _ = synth.sample({"users": 1000}, Rng.from_seed(2))
+    out = synth.sample({"users": 1000}, Rng.from_seed(2))
 
     real_avg = orders.height / users.height
     synth_users = out.tables["users"].data

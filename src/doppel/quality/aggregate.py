@@ -56,6 +56,16 @@ class QualityReport:
             return 0.0
         return sum(finite) / len(finite)
 
+    def text_leaks(self, threshold: float = 0.0) -> list[tuple[str, float]]:
+        """(column, verbatim_rate) for TEXT columns above `threshold`, worst first."""
+        leaks = [
+            (m.column, m.verbatim_rate)
+            for m in self.marginals
+            if m.verbatim_rate is not None and m.verbatim_rate > threshold
+        ]
+        leaks.sort(key=lambda t: t[1], reverse=True)
+        return leaks
+
 
 def compute(
     real: pl.DataFrame,

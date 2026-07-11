@@ -43,8 +43,7 @@ class SingleTableGenerateResult:
 
 @dataclass(frozen=True)
 class PreparedTrainingTable:
-    """Source read + schema inference, ready for fit."""
+    """Inferred + schema-adjusted table, ready for fit."""
 
-    real_df: pl.DataFrame
     table: Table
     schema_toml: SchemaToml | None

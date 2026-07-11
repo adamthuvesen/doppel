@@ -12,6 +12,7 @@ from doppel.artifact import load as load_artifact
 from doppel.artifact import save as save_artifact
 from doppel.cli import labels as cli_labels
 from doppel.cli._common import (
+    ConnectionTimeoutOpt,
     fit_progress,
     print_repair_summary,
     resolve_sink,
@@ -21,6 +22,7 @@ from doppel.cli._common import (
 from doppel.constraints.engine import synthesize_with_constraints
 from doppel.dataset import Dataset
 from doppel.pipeline.fit_rows import AUTO_FIT_CAP, AUTO_FIT_MULTIPLIER
+from doppel.pipeline.pii import pii_extra_available
 from doppel.pipeline.prepare import build_training_table, read_source_dataframe
 from doppel.sinks import write as sink_write
 from doppel.synth.cart import CartSynthesizer
@@ -88,12 +90,7 @@ def fit(
         "--password-cmd",
         help='Shell command whose stdout is the SQL password (e.g. "op read op://vault/db/pw").',
     ),
-    connection_timeout: int = typer.Option(
-        300,
-        "--connection-timeout",
-        min=1,
-        help="SQL sources only: connection/query timeout in seconds.",
-    ),
+    connection_timeout: ConnectionTimeoutOpt = 300,
 ) -> None:
     if model != "cart":
         raise typer.BadParameter(f"model={model!r} is not supported by this build. Use 'cart'.")
@@ -215,10 +212,8 @@ def sample(
 
 def _detect_pii_if_available(table: Table) -> list[PIIDetection]:
     """Return detected PII columns when the optional PII extra is installed."""
-    try:
-        from doppel.pii.detect import detect as detect_pii
-    except ImportError:
+    if not pii_extra_available() or table.data is None:
         return []
-    if table.data is None:
-        return []
+    from doppel.pii.detect import detect as detect_pii
+
     return detect_pii(table.data, table.columns)

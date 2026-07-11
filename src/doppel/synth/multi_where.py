@@ -131,7 +131,7 @@ def apply_where_to_sampled_dataset(
     while current_kept.height < target and factor <= max_factor + 1e-9:
         scaled = dict(rows_per_root)
         scaled[where_table] = max(int(target * factor), target + 1)
-        extra_ds, _ = synth.sample(scaled, rng.spawn())
+        extra_ds = synth.sample(scaled, rng.spawn())
         extra_table = extra_ds.tables[where_table]
         assert extra_table.data is not None
         current_kept = apply_predicate_mask(extra_table.data, predicate)

@@ -15,7 +15,7 @@ from doppel.pii.detect import PIIDetection
 _PII_PACKAGES = ("presidio_analyzer", "faker")
 
 
-def _pii_extra_available() -> bool:
+def pii_extra_available() -> bool:
     return all(importlib.util.find_spec(pkg) is not None for pkg in _PII_PACKAGES)
 
 
@@ -35,7 +35,7 @@ def strip_pii_if_available(
         table,
         [c.name for c in table.columns],
     )
-    if not _pii_extra_available():
+    if not pii_extra_available():
         warnings.warn(
             "PII detection skipped: the optional [pii] extra is not installed. "
             "Free-text columns are passed through unmodified and may leak source "

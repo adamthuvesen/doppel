@@ -10,18 +10,10 @@ from pathlib import Path
 
 import typer
 from rich.console import Console
-from rich.progress import (
-    BarColumn,
-    Progress,
-    SpinnerColumn,
-    TaskID,
-    TaskProgressColumn,
-    TextColumn,
-    TimeElapsedColumn,
-)
+from rich.progress import TaskID, TextColumn
 
 from doppel.cli import labels as cli_labels
-from doppel.cli._common import resolve_source, sample_frame
+from doppel.cli._common import ConnectionTimeoutOpt, progress_bar, resolve_source, sample_frame
 from doppel.quality.aggregate import QualityReport
 from doppel.quality.aggregate import compute as compute_quality
 from doppel.report.html import to_html
@@ -99,12 +91,7 @@ def check_thresholds(report: QualityReport, spec: ThresholdSpec) -> list[Thresho
             ThresholdBreach("dcr_p5", report.privacy.percentile_5, f">= {spec.min_dcr_p5}")
         )
     if spec.fail_on_verbatim_text:
-        leaks = [
-            (m.column, m.verbatim_rate)
-            for m in report.marginals
-            if m.verbatim_rate is not None and m.verbatim_rate > 0.0
-        ]
-        for column, rate in leaks:
+        for column, rate in report.text_leaks():
             breaches.append(
                 ThresholdBreach(f"verbatim_text[{column}]", rate, "0.0 (--fail-on-verbatim-text)")
             )
@@ -197,12 +184,7 @@ def run(
         "--password-cmd",
         help='Shell command whose stdout is the SQL password (e.g. "op read op://vault/db/pw").',
     ),
-    connection_timeout: int = typer.Option(
-        300,
-        "--connection-timeout",
-        min=1,
-        help="SQL sources only: connection/query timeout in seconds.",
-    ),
+    connection_timeout: ConnectionTimeoutOpt = 300,
 ) -> None:
     real_spec = _resolve_diff_arg(
         real,
@@ -285,15 +267,8 @@ def _dcr_progress(
     if total_rows < 5_000:
         yield None
         return
-    progress = Progress(
-        SpinnerColumn(),
-        TextColumn("[dim]dcr[/]"),
-        BarColumn(bar_width=None),
-        TaskProgressColumn(),
-        TextColumn("{task.completed}/{task.total} rows", style="dim"),
-        TimeElapsedColumn(),
-        console=console,
-        transient=False,
+    progress = progress_bar(
+        console, "dcr", TextColumn("{task.completed}/{task.total} rows", style="dim")
     )
     task_id: TaskID | None = None
 

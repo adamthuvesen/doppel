@@ -42,25 +42,28 @@ change the synth output (the CART feature matrix shape changes, which can change
 which leaves rows land in), but each configuration is itself fully deterministic
 under `--seed`.
 
-## Why `gen` re-seeds three times
+## Why `gen` re-seeds per phase
 
-[src/doppel/cli/gen.py](../src/doppel/cli/gen.py) calls `Rng.from_seed(seed)` three
-times — fit, sample, PII restore:
+The single-table `gen` path lives in
+[src/doppel/pipeline/single_table.py](../src/doppel/pipeline/single_table.py). It calls
+`Rng.from_seed(seed)` once per phase instead of threading one `Rng` through:
 
 ```python
-synth.fit(dataset, Rng.from_seed(seed), progress=cb)
-synth_ds = synth.sample(rows, Rng.from_seed(seed))
-out_df = restore_pii(..., Rng.from_seed(seed), ...)
+synth.fit(dataset, Rng.from_seed(config.seed), progress=fit_progress)
+synth_ds = synth.sample(config.rows, Rng.from_seed(config.seed))
+out_df = restore_pii(..., Rng.from_seed(config.seed), ...)
 ```
 
-Each call gets an independent seed-tree rooted at the same seed:
+Each call roots an independent seed-tree at the same seed:
 
 1. **fit** RNG drives sklearn estimators and null-mask resampling.
 2. **sample** RNG drives leaf-sampling and is unaffected by anything fit did.
 3. **PII restore** RNG drives Faker.
 
-Sharing one `Rng` across all three would mean any fit-time change (e.g. adding a
-column) shifts the sample output even when no sampling logic changed. Three roots
+Text-policy application gets a fourth root, `Rng.from_seed(config.seed).spawn()`.
+
+Sharing one `Rng` across phases would mean any fit-time change (e.g. adding a
+column) shifts the sample output even when no sampling logic changed. Separate roots
 keep each phase stable under refactors.
 
 ## Composes with `--where`

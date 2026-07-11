@@ -404,11 +404,7 @@ def _nulls_cell(real: float, synth: float, verbatim: float | None) -> str:
 
 
 def _verbatim_warning(report: QualityReport) -> str:
-    leaks = [
-        (m.column, m.verbatim_rate)
-        for m in report.marginals
-        if m.verbatim_rate is not None and m.verbatim_rate > 0
-    ]
+    leaks = report.text_leaks()
     if not leaks:
         return ""
     items = "\n".join(

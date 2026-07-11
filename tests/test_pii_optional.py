@@ -35,7 +35,7 @@ def _text_table() -> Table:
 
 def test_strip_pii_no_op_without_extra(monkeypatch: pytest.MonkeyPatch) -> None:
     """With the extra absent, a TEXT column must not crash and must pass through."""
-    monkeypatch.setattr(pii, "_pii_extra_available", lambda: False)
+    monkeypatch.setattr(pii, "pii_extra_available", lambda: False)
     table = _text_table()
 
     with pytest.warns(UserWarning, match=r"\[pii\] extra"):

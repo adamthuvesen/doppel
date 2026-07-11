@@ -63,4 +63,4 @@ def build_training_table(
     if schema_path is not None:
         schema_toml = schema_toml_mod.load(schema_path)
         table = schema_toml_mod.apply_overrides(table, schema_toml)
-    return PreparedTrainingTable(real_df=fit_df, table=table, schema_toml=schema_toml)
+    return PreparedTrainingTable(table=table, schema_toml=schema_toml)

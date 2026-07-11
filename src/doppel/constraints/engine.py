@@ -39,7 +39,6 @@ class ConstraintReport:
     violations: list[ConstraintViolation]
     rows_attempted: int
     rows_kept: int
-    oversample_factor: float
 
 
 @dataclass
@@ -135,7 +134,6 @@ def synthesize_with_constraints(
         violations=_violation_counts_from_totals(accum.violation_totals),
         rows_attempted=attempted,
         rows_kept=final.height,
-        oversample_factor=attempted / max(n, 1),
     )
 
 

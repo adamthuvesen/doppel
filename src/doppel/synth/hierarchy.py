@@ -15,7 +15,6 @@ Supported schema shape:
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
 
 import numpy as np
 import polars as pl
@@ -25,11 +24,6 @@ from doppel.synth.cart import CartSynthesizer
 from doppel.synth.seed import Rng
 
 _log = logging.getLogger(__name__)
-
-
-@dataclass(frozen=True)
-class HierarchicalReport:
-    rows_per_table: dict[str, int]
 
 
 class HierarchicalSynthesizer:
@@ -62,7 +56,7 @@ class HierarchicalSynthesizer:
             )
         self._fitted = True
 
-    def sample(self, rows_per_root: dict[str, int], rng: Rng) -> tuple[Dataset, HierarchicalReport]:
+    def sample(self, rows_per_root: dict[str, int], rng: Rng) -> Dataset:
         if not self._fitted:
             raise RuntimeError("HierarchicalSynthesizer.sample() called before fit()")
 
@@ -96,9 +90,7 @@ class HierarchicalSynthesizer:
             },
             edges=list(self._edges),
         )
-        return out, HierarchicalReport(
-            rows_per_table={name: df.height for name, df in synth_dfs.items()}
-        )
+        return out
 
     def _sample_root(self, name: str, target: int, rng: Rng) -> pl.DataFrame:
         ds = self._per_table[name].sample(target, rng.spawn())

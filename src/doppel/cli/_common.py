@@ -6,8 +6,10 @@ import math
 from collections.abc import Callable, Generator
 from contextlib import contextmanager
 from dataclasses import dataclass
+from typing import Annotated
 
 import polars as pl
+import typer
 from rich.console import Console
 from rich.progress import (
     BarColumn,
@@ -33,6 +35,16 @@ _QUALITY_SAMPLE_ROWS = 5_000
 _TEXT_LEAK_THRESHOLD = 0.10
 _TEXT_LEAK_HINT_LIMIT = 3
 
+# Shared across gen/fit/diff/schema — the timeout option is identical everywhere.
+ConnectionTimeoutOpt = Annotated[
+    int,
+    typer.Option(
+        "--connection-timeout",
+        min=1,
+        help="SQL sources only: connection/query timeout in seconds.",
+    ),
+]
+
 
 def sample_frame(
     df: pl.DataFrame,
@@ -50,6 +62,20 @@ def sample_frame(
     return df.sample(n=rows, seed=seed if seed is not None else 0, shuffle=True)
 
 
+def progress_bar(console: Console, label: str, tail: TextColumn) -> Progress:
+    """Spinner + bar + percentage + `tail` column + elapsed time, labelled `label`."""
+    return Progress(
+        SpinnerColumn(),
+        TextColumn(f"[dim]{label}[/]"),
+        BarColumn(bar_width=None),
+        TaskProgressColumn(),
+        tail,
+        TimeElapsedColumn(),
+        console=console,
+        transient=False,
+    )
+
+
 @contextmanager
 def fit_progress(console: Console) -> Generator[Callable[[int, int, str], None], None, None]:
     """Live per-column progress bar for CartSynthesizer.fit.
@@ -62,16 +88,7 @@ def fit_progress(console: Console) -> Generator[Callable[[int, int, str], None],
         with fit_progress(console) as cb:
             synth.fit(dataset, rng, progress=cb)
     """
-    progress = Progress(
-        SpinnerColumn(),
-        TextColumn("[dim]fit[/]"),
-        BarColumn(bar_width=None),
-        TaskProgressColumn(),
-        TextColumn("{task.fields[column]}", style="dim"),
-        TimeElapsedColumn(),
-        console=console,
-        transient=False,
-    )
+    progress = progress_bar(console, "fit", TextColumn("{task.fields[column]}", style="dim"))
     task_id: TaskID | None = None
 
     def _callback(done: int, total: int, column: str) -> None:
@@ -135,11 +152,9 @@ def compute_quality_summary(
     )
     report = compute_quality(real_s, synth_s, columns)
     leaks = [
-        TextLeak(column=m.column, verbatim_rate=m.verbatim_rate)
-        for m in report.marginals
-        if m.verbatim_rate is not None and m.verbatim_rate > _TEXT_LEAK_THRESHOLD
+        TextLeak(column=column, verbatim_rate=rate)
+        for column, rate in report.text_leaks(_TEXT_LEAK_THRESHOLD)
     ]
-    leaks.sort(key=lambda t: t.verbatim_rate, reverse=True)
     return QualitySummary(
         avg_marginal=report.avg_marginal,
         corr_frobenius=report.correlations.frobenius_distance,

@@ -46,19 +46,15 @@ def render(report: QualityReport, console: Console, *, top_n: int | None = None)
         marg_table.caption += f" · showing worst {top_n} of {len(report.marginals)} columns"
     console.print(marg_table)
 
-    text_warnings = [
-        m for m in report.marginals if m.verbatim_rate is not None and m.verbatim_rate > 0
-    ]
+    text_warnings = report.text_leaks()
     if text_warnings:
         console.print(
             "[yellow]note:[/] TEXT columns are resampled from training values "
             "(sample-with-replacement):"
         )
-        for m in text_warnings:
-            vr = m.verbatim_rate
-            assert vr is not None
+        for column, vr in text_warnings:
             console.print(
-                f"  [dim]{escape(m.column)}[/]  {vr:.1%} of synth values are verbatim copies"
+                f"  [dim]{escape(column)}[/]  {vr:.1%} of synth values are verbatim copies"
             )
 
     if report.dtype_mismatches or report.invariant_issues:

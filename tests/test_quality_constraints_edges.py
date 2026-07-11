@@ -228,7 +228,7 @@ def test_multi_table_fk_preserves_int32_dtype() -> None:
     )
     synth = HierarchicalSynthesizer()
     synth.fit(dataset, Rng.from_seed(0))
-    out, _ = synth.sample({"users": 3}, Rng.from_seed(0))
+    out = synth.sample({"users": 3}, Rng.from_seed(0))
     fk_dtype = out.tables["orders"].data["user_id"].dtype  # type: ignore[index]
     assert fk_dtype == pl.Int32, f"expected Int32 FK dtype preserved, got {fk_dtype}"
 

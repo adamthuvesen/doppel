@@ -10,13 +10,17 @@ from doppel.dataset import Table
 from doppel.pii.detect import PIIDetection
 
 # The `pii` extra pulls these. `doppel.pii.detect` / `.text` import fine without them
-# (Presidio/Faker are constructed lazily inside the functions), so probing the module
-# import is not enough — probe the underlying packages at the point of use.
-_PII_PACKAGES = ("presidio_analyzer", "faker")
+# (Presidio/Faker are constructed lazily inside the functions), so probe the
+# underlying packages at the point of use. Detection needs only Presidio; the
+# one-shot generation path also needs Faker to restore stripped columns.
 
 
-def pii_extra_available() -> bool:
-    return all(importlib.util.find_spec(pkg) is not None for pkg in _PII_PACKAGES)
+def pii_detection_available() -> bool:
+    return importlib.util.find_spec("presidio_analyzer") is not None
+
+
+def pii_regeneration_available() -> bool:
+    return pii_detection_available() and importlib.util.find_spec("faker") is not None
 
 
 def strip_pii_if_available(
@@ -35,7 +39,7 @@ def strip_pii_if_available(
         table,
         [c.name for c in table.columns],
     )
-    if not pii_extra_available():
+    if not pii_regeneration_available():
         warnings.warn(
             "PII detection skipped: the optional [pii] extra is not installed. "
             "Free-text columns are passed through unmodified and may leak source "

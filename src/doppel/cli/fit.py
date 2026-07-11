@@ -22,7 +22,7 @@ from doppel.cli._common import (
 from doppel.constraints.engine import synthesize_with_constraints
 from doppel.dataset import Dataset
 from doppel.pipeline.fit_rows import AUTO_FIT_CAP, AUTO_FIT_MULTIPLIER
-from doppel.pipeline.pii import pii_extra_available
+from doppel.pipeline.pii import pii_detection_available
 from doppel.pipeline.prepare import build_training_table, read_source_dataframe
 from doppel.sinks import write as sink_write
 from doppel.synth.cart import CartSynthesizer
@@ -211,8 +211,8 @@ def sample(
 
 
 def _detect_pii_if_available(table: Table) -> list[PIIDetection]:
-    """Return detected PII columns when the optional PII extra is installed."""
-    if not pii_extra_available() or table.data is None:
+    """Return detected PII columns when Presidio is installed."""
+    if not pii_detection_available() or table.data is None:
         return []
     from doppel.pii.detect import detect as detect_pii
 

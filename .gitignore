@@ -39,7 +39,6 @@ htmlcov/
 *.doppel
 report.html
 report.json
-openspec/
 
 # Committed benchmark results live here despite the report.json rule above.
 !benchmarks/results/

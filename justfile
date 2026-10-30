@@ -7,7 +7,7 @@ setup:
     uv sync --locked --all-extras
     uv run --no-sync doppel doctor
 
-# Lint, format check, types, and fast tests, in parallel. Prints the output of every failed lane.
+# Lint, format check, types, import boundaries, and fast tests, in parallel. Prints the output of every failed lane.
 check:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -27,6 +27,7 @@ check:
     lane ruff-format uv run --no-sync ruff format --check src tests
     lane types uv run --no-sync basedpyright
     lane pytest uv run --no-sync pytest -q -m "not slow" -p no:cacheprovider
+    lane boundaries scripts/check_boundaries.sh
     failed=0
     for i in "${!names[@]}"; do
         if wait "${pids[$i]}"; then
@@ -52,4 +53,4 @@ verify *args:
 # Slow tests, with the coverage report.
 slow:
     uv sync --locked --all-extras
-    uv run --no-sync pytest -m slow --cov --cov-report=term-missing
+    uv run --no-sync pytest -m slow

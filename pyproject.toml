@@ -62,6 +62,7 @@ dev = [
     "basedpyright==1.40.2",
     "pglast>=8.7",
     "scipy-stubs>=1.18.1.1",
+    "import-linter>=2.16",
 ]
 
 [tool.uv.sources]
@@ -94,15 +95,71 @@ select = [
     "C4",     # flake8-comprehensions
     "PTH",    # flake8-use-pathlib
     "PGH003", # a type ignore must name its rule
+    "TID251", # banned APIs; see banned-api below
 ]
 ignore = [
     "E501",   # handled by formatter
     "ANN401", # allow Any in narrow cases
 ]
 
+[tool.ruff.lint.flake8-tidy-imports.banned-api]
+"subprocess".msg = "Process spawning is banned. The owner is sources/spec.py (--password-cmd)."
+"os.system".msg = "Process spawning is banned. The owner is sources/spec.py (--password-cmd)."
+"os.popen".msg = "Process spawning is banned. The owner is sources/spec.py (--password-cmd)."
+"pty".msg = "Process spawning is banned. The owner is sources/spec.py (--password-cmd)."
+"asyncio.subprocess".msg = "Process spawning is banned. The owner is sources/spec.py (--password-cmd)."
+"asyncio.create_subprocess_exec".msg = "Process spawning is banned. The owner is sources/spec.py (--password-cmd)."
+"asyncio.create_subprocess_shell".msg = "Process spawning is banned. The owner is sources/spec.py (--password-cmd)."
+"os.execl".msg = "Process spawning is banned. The owner is sources/spec.py (--password-cmd)."
+"os.execle".msg = "Process spawning is banned. The owner is sources/spec.py (--password-cmd)."
+"os.execlp".msg = "Process spawning is banned. The owner is sources/spec.py (--password-cmd)."
+"os.execlpe".msg = "Process spawning is banned. The owner is sources/spec.py (--password-cmd)."
+"os.execv".msg = "Process spawning is banned. The owner is sources/spec.py (--password-cmd)."
+"os.execve".msg = "Process spawning is banned. The owner is sources/spec.py (--password-cmd)."
+"os.execvp".msg = "Process spawning is banned. The owner is sources/spec.py (--password-cmd)."
+"os.execvpe".msg = "Process spawning is banned. The owner is sources/spec.py (--password-cmd)."
+"os.spawnl".msg = "Process spawning is banned. The owner is sources/spec.py (--password-cmd)."
+"os.spawnle".msg = "Process spawning is banned. The owner is sources/spec.py (--password-cmd)."
+"os.spawnlp".msg = "Process spawning is banned. The owner is sources/spec.py (--password-cmd)."
+"os.spawnlpe".msg = "Process spawning is banned. The owner is sources/spec.py (--password-cmd)."
+"os.spawnv".msg = "Process spawning is banned. The owner is sources/spec.py (--password-cmd)."
+"os.spawnve".msg = "Process spawning is banned. The owner is sources/spec.py (--password-cmd)."
+"os.spawnvp".msg = "Process spawning is banned. The owner is sources/spec.py (--password-cmd)."
+"os.spawnvpe".msg = "Process spawning is banned. The owner is sources/spec.py (--password-cmd)."
+"os.posix_spawn".msg = "Process spawning is banned. The owner is sources/spec.py (--password-cmd)."
+"os.posix_spawnp".msg = "Process spawning is banned. The owner is sources/spec.py (--password-cmd)."
+"socket".msg = "Network clients are banned in src. There is no owner file."
+"http.client".msg = "Network clients are banned in src. There is no owner file."
+"urllib.request".msg = "Network clients are banned in src. There is no owner file."
+"requests".msg = "Network clients are banned in src. There is no owner file."
+"httpx".msg = "Network clients are banned in src. There is no owner file."
+"pickle".msg = "Unsafe loading is banned outside src/doppel/artifact/."
+"marshal".msg = "Unsafe loading is banned outside src/doppel/artifact/."
+"joblib".msg = "Unsafe loading is banned outside src/doppel/artifact/."
+"numpy.load".msg = "Unsafe loading is banned outside src/doppel/artifact/."
+"random".msg = "Nondeterminism is banned. All randomness comes from doppel.synth.seed.Rng (owner: synth/seed.py)."
+"uuid.uuid4".msg = "Nondeterminism is banned. All randomness comes from doppel.synth.seed.Rng (owner: synth/seed.py)."
+"uuid.uuid1".msg = "Nondeterminism is banned. All randomness comes from doppel.synth.seed.Rng (owner: synth/seed.py)."
+"os.urandom".msg = "Nondeterminism is banned. All randomness comes from doppel.synth.seed.Rng (owner: synth/seed.py)."
+"numpy.random".msg = "Nondeterminism is banned. All randomness comes from doppel.synth.seed.Rng (owner: synth/seed.py)."
+"secrets".msg = "secrets is banned. The owner is text_policy.py (hash salt)."
+"duckdb".msg = "duckdb is banned outside sources/sql.py and sinks/sql.py."
+"presidio_analyzer".msg = "Presidio and spaCy are banned outside pii/detect.py."
+"spacy".msg = "Presidio and spaCy are banned outside pii/detect.py."
+"faker".msg = "Faker is banned outside pii/fake.py."
+
 [tool.ruff.lint.per-file-ignores]
+"src/doppel/sources/spec.py" = ["TID251"]  # --password-cmd runs a subprocess
+"src/doppel/artifact/**" = ["TID251"]  # reads the pickled artifact
+"src/doppel/synth/seed.py" = ["TID251"]  # the one numpy.random.Generator
+"src/doppel/text_policy.py" = ["TID251"]  # secrets for the hash salt
+"src/doppel/sources/sql.py" = ["TID251"]  # duckdb
+"src/doppel/sinks/sql.py" = ["TID251"]  # duckdb
+"src/doppel/pii/detect.py" = ["TID251"]  # presidio and spaCy
+"src/doppel/pii/fake.py" = ["TID251"]  # faker
 # Tests skip annotation/assert-style checks; PII tests need to import after `importorskip`.
-"tests/**/*.py" = ["ANN", "S101", "E402"]
+"tests/**/*.py" = ["ANN", "S101", "E402", "TID251"]  # tests may fake or drive anything
+"benchmarks/run.py" = ["TID251"]  # runs the CLI in a subprocess
 
 [tool.ruff.lint.flake8-bugbear]
 # Typer's whole API uses function calls as argument defaults — canonical pattern.
@@ -143,6 +200,160 @@ addopts = [
 markers = [
     "slow: marks tests as slow (run explicitly with '-m slow')",
     "integration: marks integration tests",
+    "extras: needs an optional extra (pii or sql); the base-install job skips these",
+]
+
+[tool.importlinter]
+root_package = "doppel"
+
+[[tool.importlinter.contracts]]
+name = "Nothing in core imports the CLI"
+type = "forbidden"
+source_modules = [
+    "doppel.artifact",
+    "doppel.constraints",
+    "doppel.dataset",
+    "doppel.locations",
+    "doppel.pii",
+    "doppel.pipeline",
+    "doppel.quality",
+    "doppel.report",
+    "doppel.schema",
+    "doppel.sinks",
+    "doppel.sources",
+    "doppel.synth",
+    "doppel.text_policy",
+]
+forbidden_modules = ["doppel.cli"]
+
+[[tool.importlinter.contracts]]
+name = "Artifact, pipeline, and report are independent"
+type = "independence"
+modules = ["doppel.artifact", "doppel.pipeline", "doppel.report"]
+
+[[tool.importlinter.contracts]]
+name = "Report imports only quality"
+type = "forbidden"
+source_modules = ["doppel.report"]
+forbidden_modules = [
+    "doppel.artifact",
+    "doppel.cli",
+    "doppel.constraints",
+    "doppel.dataset",
+    "doppel.locations",
+    "doppel.pii",
+    "doppel.pipeline",
+    "doppel.schema",
+    "doppel.sinks",
+    "doppel.sources",
+    "doppel.synth",
+    "doppel.text_policy",
+]
+allow_indirect_imports = true
+
+[[tool.importlinter.contracts]]
+name = "Quality is pure metrics over the schema"
+type = "forbidden"
+source_modules = ["doppel.quality"]
+forbidden_modules = [
+    "doppel.synth",
+    "doppel.constraints",
+    "doppel.pii",
+    "doppel.sources",
+    "doppel.sinks",
+    "doppel.report",
+    "doppel.pipeline",
+    "doppel.artifact",
+    "doppel.dataset",
+    "doppel.text_policy",
+    "doppel.cli",
+]
+allow_indirect_imports = true
+
+[[tool.importlinter.contracts]]
+name = "Sources is a leaf"
+type = "forbidden"
+source_modules = ["doppel.sources"]
+forbidden_modules = [
+    "doppel.artifact",
+    "doppel.cli",
+    "doppel.constraints",
+    "doppel.dataset",
+    "doppel.pii",
+    "doppel.pipeline",
+    "doppel.quality",
+    "doppel.report",
+    "doppel.schema",
+    "doppel.sinks",
+    "doppel.synth",
+    "doppel.text_policy",
+]
+allow_indirect_imports = true
+
+[[tool.importlinter.contracts]]
+name = "Sinks is a leaf"
+type = "forbidden"
+source_modules = ["doppel.sinks"]
+forbidden_modules = [
+    "doppel.artifact",
+    "doppel.cli",
+    "doppel.constraints",
+    "doppel.dataset",
+    "doppel.pii",
+    "doppel.pipeline",
+    "doppel.quality",
+    "doppel.report",
+    "doppel.schema",
+    "doppel.sources",
+    "doppel.synth",
+    "doppel.text_policy",
+]
+allow_indirect_imports = true
+
+[[tool.importlinter.contracts]]
+name = "PII and text policy do not reach up or sideways"
+type = "forbidden"
+source_modules = ["doppel.pii", "doppel.text_policy"]
+forbidden_modules = [
+    "doppel.pipeline",
+    "doppel.artifact",
+    "doppel.quality",
+    "doppel.report",
+    "doppel.constraints",
+    "doppel.sources",
+    "doppel.sinks",
+    "doppel.cli",
+]
+allow_indirect_imports = true
+
+[[tool.importlinter.contracts]]
+name = "Synth does not reach up"
+type = "forbidden"
+source_modules = ["doppel.synth"]
+forbidden_modules = [
+    "doppel.pipeline",
+    "doppel.artifact",
+    "doppel.report",
+    "doppel.quality",
+    "doppel.pii",
+    "doppel.sources",
+    "doppel.sinks",
+    "doppel.text_policy",
+    "doppel.cli",
+    "doppel.constraints",
+]
+allow_indirect_imports = true
+
+[[tool.importlinter.contracts]]
+name = "Schema layers"
+type = "layers"
+layers = [
+    "doppel.schema.multi",
+    "doppel.schema.infer | doppel.schema.toml",
+    "doppel.dataset",
+    "doppel.schema.datetime | doppel.schema.nullable | doppel.schema.heuristics",
+    "doppel.schema.types",
+    "doppel.schema.calendar_feature",
 ]
 
 [tool.coverage.run]

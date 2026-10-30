@@ -29,13 +29,13 @@ import polars as pl
 from sklearn.tree import DecisionTreeClassifier, DecisionTreeRegressor
 
 from doppel.dataset import Dataset, Table
-from doppel.schema.datetime import (
-    CalendarFeature,
-    decompose,
-    recompose,
-)
+from doppel.schema.calendar_feature import CalendarFeature
 from doppel.schema.datetime import (
     calendar_features as extract_calendar_features,
+)
+from doppel.schema.datetime import (
+    decompose,
+    recompose,
 )
 from doppel.schema.heuristics import FLOAT_DTYPE_NAMES, INTEGER_DTYPE_NAMES
 from doppel.schema.nullable import encode_feature

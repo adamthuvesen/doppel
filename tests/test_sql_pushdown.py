@@ -14,7 +14,7 @@ import pytest
 import typer
 from pglast import ast
 
-from doppel.sources.spec import quote_table_name
+from doppel.locations import quote_table_name
 from doppel.sources.sql import build_count_sql, build_pushdown_sql
 
 # ---------- build_pushdown_sql ----------

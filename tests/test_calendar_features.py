@@ -20,11 +20,8 @@ from doppel.report.html import to_html
 from doppel.report.json import to_json
 from doppel.report.terminal import render as render_terminal
 from doppel.schema import toml as schema_toml
-from doppel.schema.datetime import (
-    CalendarFeature,
-    calendar_features,
-    default_features_for,
-)
+from doppel.schema.calendar_feature import CalendarFeature, default_features_for
+from doppel.schema.datetime import calendar_features
 from doppel.schema.infer import infer_table
 from doppel.schema.types import Column, ColumnType
 from doppel.synth.cart import CartSynthesizer

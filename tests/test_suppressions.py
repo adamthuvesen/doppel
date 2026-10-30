@@ -51,7 +51,8 @@ def _tracked_python_files() -> list[Path]:
         capture_output=True,
         text=True,
     ).stdout.split()
-    return [REPO_ROOT / name for name in listed if name.endswith(".py")]
+    paths = (REPO_ROOT / name for name in listed if name.endswith(".py"))
+    return [path for path in paths if path.exists()]  # a tracked file may be deleted mid-edit
 
 
 def test_no_file_wide_disables_and_every_ignore_has_a_rule_and_a_reason() -> None:

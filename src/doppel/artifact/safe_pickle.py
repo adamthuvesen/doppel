@@ -46,7 +46,8 @@ _ALLOWED_GLOBALS: frozenset[tuple[str, str]] = frozenset(
         *(("builtins", name) for name in _ALLOWED_BUILTINS),
         *(("collections", name) for name in ("OrderedDict", "defaultdict", "deque", "Counter")),
         ("_codecs", "encode"),
-        ("doppel.schema.datetime", "CalendarFeature"),
+        ("doppel.schema.calendar_feature", "CalendarFeature"),
+        ("doppel.schema.datetime", "CalendarFeature"),  # artifacts saved before the move
         ("doppel.schema.types", "Column"),
         ("doppel.schema.types", "ColumnType"),
         ("doppel.synth.cart", "CartSynthesizer"),

@@ -26,15 +26,14 @@ docs/          Deeper subsystem docs — see Index
 ## Quickstart
 
 ```bash
-uv sync --all-extras          # install everything including the pii extra
-uv run pytest                 # run tests
-uv run ruff check src tests   # lint
-uv run ruff format src tests  # format (writes)
-uv run pyright                # type-check (strict mode, do not relax)
-uv run doppel --help          # smoke-test the CLI
+just setup    # uv sync --locked --all-extras, then doppel doctor
+just check    # ruff, format check, basedpyright strict, pytest -m "not slow"
+just fix      # ruff --fix and format
+just slow     # slow tests
+just verify   # not built yet
 ```
 
-A change isn't done until `ruff check`, `ruff format --check`, `pyright`, and `pytest` are all green. CI enforces the same.
+A change isn't done until `just check` is green. CI runs the same recipe, plus a base-install job (`uv sync --locked`, `pytest -m "not extras"`). Mark a test `@pytest.mark.extras` when it needs the `pii` or `sql` extra. A bare `uv run` drops the extras, so use `just` or `uv run --no-sync`.
 
 ## Critical Conventions
 
@@ -43,11 +42,11 @@ A change isn't done until `ruff check`, `ruff format --check`, `pyright`, and `p
 - **CART never sees raw nanoseconds.** Datetime columns decompose to Int64 epoch-seconds before fitting and recompose at output; route new modeling paths through [src/doppel/schema/datetime.py](src/doppel/schema/datetime.py) `decompose`/`recompose`.
 - **`primary_key` auto-promotes to `ColumnType.KEY`** so the synthesizer generates unique values rather than modelling them. Preserve this in `apply_overrides` and `multi.to_dataset`.
 - **Pickle/artifact loading is allowlisted.** `.doppel` loads go through `artifact.safe_pickle.safe_loads`; add new classes explicitly and document why. See [SECURITY.md](SECURITY.md).
-- **No new dependencies without justification.** The stack is locked: Polars + DuckDB + sklearn + scipy + Pydantic + Typer + Rich + Presidio + Faker + tomli-w.
+- **No new dependencies without justification.** The stack is locked: Polars + DuckDB + sklearn + scipy + Pydantic + Typer + Rich + PyArrow + Presidio + Faker + tomli-w. Python is 3.14 and the spaCy model `en_core_web_lg` is locked in `uv.lock` (never downloaded at run time).
 - **No CHANGELOG file.** Git history + GitHub Releases carry change communication.
 - **FKs are never auto-detected at gen-time.** Heuristics live only in `schema infer`, which writes them to TOML for review; multi-table `gen`/`fit` requires an explicit `[[foreign_keys]]` block.
 - **Don't loosen the AST evaluator** in [src/doppel/constraints/derived.py](src/doppel/constraints/derived.py): only `Name | Constant(int|float) | UnaryOp(-) | BinOp(+,-,*,/)`. Calls, attribute access, and starred forms stay blocked.
-- **pyright strict, with `Any`/`cast` at untyped boundaries** (scipy stats results, sklearn `predict_proba`, Presidio, Faker). Index scipy results as tuples (`ks_2samp(a, b)[0]`); `.statistic` is untyped. `typer.Argument(...)`/`typer.Option(...)` defaults are canonical (`B008` whitelisted in `pyproject.toml`).
+- **basedpyright strict, no `# type: ignore`.** The checker reads only `# pyright: ignore[rule]  # reason`, and `tests/test_suppressions.py` enforces it. `scipy-stubs` types scipy results. Presidio and Faker stay untyped boundaries (`Any`/`cast`). `typer.Argument(...)`/`typer.Option(...)` defaults are canonical (`B008` whitelisted in `pyproject.toml`).
 - **Tests are real.** Most edits land with a regression test; use the `mixed_df` / `mixed_csv` / `mixed_parquet` fixtures for the common small mixed-dtype case.
 - **Never commit secrets, `.env`, or AI-attribution lines.**
 

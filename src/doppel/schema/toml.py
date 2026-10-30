@@ -42,7 +42,7 @@ from doppel.constraints.dsl import (
     WhereConstraint,
 )
 from doppel.dataset import Table
-from doppel.schema.datetime import CalendarFeature
+from doppel.schema.calendar_feature import CalendarFeature
 from doppel.schema.types import Column, ColumnType
 
 

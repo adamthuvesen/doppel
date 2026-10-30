@@ -23,6 +23,7 @@ def _slow_read(**kwargs: Any) -> pl.DataFrame:
     return pl.DataFrame({"a": [1]})
 
 
+@pytest.mark.extras
 def test_connection_timeout_redacts_password() -> None:
     spec = parse_source_spec(
         "snowflake://user:hunter2@account/db/s?warehouse=WH",

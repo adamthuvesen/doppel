@@ -16,14 +16,9 @@ from typing import Any, cast
 
 import polars as pl
 
+from doppel.locations import quote_table_name, table_name_parts
 from doppel.sources.errors import RowCountProbeError, WarehouseConnectionError
-from doppel.sources.spec import (
-    DatabaseUri,
-    emit_redacted_log,
-    quote_table_name,
-    redact_text,
-    table_name_parts,
-)
+from doppel.sources.spec import DatabaseUri, emit_redacted_log, redact_text
 
 ROW_COUNT_THRESHOLD = 1_000_000
 # Fraction samples (Postgres BERNOULLI, Snowflake SYSTEM) return approximate row

@@ -5,9 +5,13 @@ from __future__ import annotations
 import polars as pl
 
 from doppel.constraints import expr as expr_mod
+from doppel.constraints.multi_where import (
+    apply_predicate_mask,
+    prune_fk_descendants,
+    resolve_where_table,
+)
 from doppel.dataset import Dataset, ForeignKey, Table
 from doppel.schema.infer import infer_table
-from doppel.synth.multi_where import apply_predicate_mask, prune_fk_descendants, resolve_where_table
 
 
 def _users_orders_dataset() -> Dataset:

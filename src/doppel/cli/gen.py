@@ -28,27 +28,23 @@ from doppel.cli._common import (
     sample_frame,
 )
 from doppel.constraints.engine import ConstraintReport
+from doppel.constraints.multi_where import (
+    apply_where_to_sampled_dataset,
+    resolve_where_table,
+)
 from doppel.dataset import Table
 from doppel.pii.detect import PIIDetection
 from doppel.pipeline.pii import strip_pii_if_available
 from doppel.pipeline.prepare import table_name_for_source
 from doppel.pipeline.single_table import generate_single_table
+from doppel.pipeline.sink_guard import reject_sink_matching_source
 from doppel.pipeline.types import SingleTableGenerateConfig
 from doppel.pipeline.where import merge_where_into_constraints
 from doppel.schema import multi as multi_schema
-from doppel.sources.spec import (
-    DatabaseUri,
-    FilePath,
-    SinkSpec,
-    parse_sink_spec,
-    reject_sink_matching_source,
-)
+from doppel.sinks.spec import SinkSpec, parse_sink_spec
+from doppel.sources.spec import DatabaseUri, FilePath
 from doppel.synth.cart import CartSynthesizer
 from doppel.synth.hierarchy import HierarchicalSynthesizer
-from doppel.synth.multi_where import (
-    apply_where_to_sampled_dataset,
-    resolve_where_table,
-)
 from doppel.synth.seed import Rng
 from doppel.text_policy import TextPolicy, resolve_hash_salt
 from doppel.text_policy import apply as apply_text_policy

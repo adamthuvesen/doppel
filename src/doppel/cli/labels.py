@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from doppel.sources.spec import DuckDbSink, FilePath, SinkSpec, SourceSpec
+from doppel.locations import FilePath
+from doppel.sinks.spec import DuckDbSink, SinkSpec
+from doppel.sources.spec import SourceSpec
 
 
 def source_label(spec: SourceSpec) -> str:

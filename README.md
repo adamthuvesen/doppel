@@ -308,11 +308,8 @@ artifacts from code. Only load files you trust. See [SECURITY.md](SECURITY.md).
 ## Development
 
 ```bash
-uv sync --all-extras
-uv run ruff check src tests
-uv run ruff format --check src tests
-uv run pyright
-uv run pytest
+just setup   # install every extra and the locked spaCy model
+just check   # ruff, format check, basedpyright, fast tests
 ```
 
 ## License

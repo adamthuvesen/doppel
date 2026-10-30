@@ -1,14 +1,15 @@
 """Writers — symmetric counterpart of `sources`, emitting files or DuckDB tables.
 
 `write(df, spec)` dispatches on the tag of the `SinkSpec`. Warehouse writes
-(Snowflake/Postgres) are rejected at parse time in `sources.spec` — they
+(Snowflake/Postgres) are rejected at parse time in `sinks.spec` — they
 never reach this dispatcher."""
 
 from __future__ import annotations
 
 import polars as pl
 
-from doppel.sources.spec import FilePath, SinkSpec
+from doppel.locations import FilePath
+from doppel.sinks.spec import SinkSpec
 
 
 def write(df: pl.DataFrame, spec: SinkSpec) -> None:

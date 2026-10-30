@@ -56,6 +56,7 @@ def patch_probe() -> Iterator[MagicMock]:
 # ---------- Mocked Snowflake/Postgres read ----------
 
 
+@pytest.mark.extras
 def test_snowflake_read_uses_connectorx(
     patch_snowflake: MagicMock, patch_probe: MagicMock, tmp_path: Path
 ) -> None:
@@ -85,6 +86,7 @@ def test_snowflake_read_uses_connectorx(
     assert "snowflake://user@account/db/schema" in kwargs["uri"]
 
 
+@pytest.mark.extras
 def test_postgres_read_uses_connectorx(
     patch_snowflake: MagicMock, patch_probe: MagicMock, tmp_path: Path
 ) -> None:
@@ -112,6 +114,7 @@ def test_postgres_read_uses_connectorx(
     assert '"public"."users"' in kwargs["query"]
 
 
+@pytest.mark.extras
 def test_pushdown_sql_sent_to_driver_snowflake(
     patch_snowflake: MagicMock, patch_probe: MagicMock, tmp_path: Path
 ) -> None:
@@ -146,6 +149,7 @@ def test_pushdown_sql_sent_to_driver_snowflake(
     assert "LIMIT 1000" in sent_sql
 
 
+@pytest.mark.extras
 def test_pushdown_sql_sent_to_driver_postgres(
     patch_snowflake: MagicMock, patch_probe: MagicMock, tmp_path: Path
 ) -> None:
@@ -213,6 +217,7 @@ def test_row_count_probe_rejects_huge_table_without_fit_rows(
     assert not patch_snowflake.called
 
 
+@pytest.mark.extras
 def test_row_count_probe_with_fit_rows_zero_proceeds(
     patch_snowflake: MagicMock, patch_probe: MagicMock, tmp_path: Path
 ) -> None:
@@ -242,6 +247,7 @@ def test_row_count_probe_with_fit_rows_zero_proceeds(
     assert patch_snowflake.called
 
 
+@pytest.mark.extras
 def test_row_count_probe_under_threshold_proceeds(
     patch_snowflake: MagicMock, patch_probe: MagicMock, tmp_path: Path
 ) -> None:
@@ -274,6 +280,7 @@ def _table_spec(uri: str, table: str) -> DatabaseUri:
     return spec
 
 
+@pytest.mark.extras
 @pytest.mark.parametrize(
     ("uri", "probe_value"),
     [
@@ -292,6 +299,7 @@ def test_row_count_probe_unknown_count_requires_fit_rows(
     assert patch_snowflake.call_count == 1
 
 
+@pytest.mark.extras
 def test_row_count_probe_unknown_count_proceeds_with_fit_rows(
     patch_snowflake: MagicMock, mock_df: pl.DataFrame
 ) -> None:
@@ -343,6 +351,7 @@ def test_postgres_sink_rejected(tmp_path: Path) -> None:
 # ---------- Error redaction ----------
 
 
+@pytest.mark.extras
 def test_connection_error_redacts_password(mock_df: pl.DataFrame) -> None:
     """If the driver raises, the error message must not contain the raw password."""
 

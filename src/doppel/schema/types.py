@@ -4,12 +4,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import TYPE_CHECKING
 
-if TYPE_CHECKING:
-    import polars as pl
+import polars as pl
 
-    from doppel.schema.datetime import CalendarFeature
+from doppel.schema.calendar_feature import CalendarFeature, default_features_for
 
 
 class ColumnType(StrEnum):
@@ -47,7 +45,4 @@ class Column:
         """
         if self.calendar_features is not None:
             return self.calendar_features
-        # Local import to avoid the StrEnum import cycle at module load.
-        from doppel.schema.datetime import default_features_for
-
         return default_features_for(dtype)

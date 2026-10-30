@@ -1,4 +1,4 @@
-"""Unit tests for the SourceSpec / SinkSpec parser.
+"""Unit tests for the SourceSpec and SinkSpec parsers.
 
 End-to-end DuckDB reads live in test_sql_duckdb.py; mocked driver behaviour
 lives in test_sql_pushdown.py.
@@ -12,15 +12,9 @@ from pathlib import Path
 import pytest
 import typer
 
-from doppel.sources.spec import (
-    DatabaseUri,
-    DuckDbSink,
-    FilePath,
-    expand_env_vars,
-    parse_sink_spec,
-    parse_source_spec,
-    redact_uri,
-)
+from doppel.locations import FilePath, expand_env_vars
+from doppel.sinks.spec import DuckDbSink, parse_sink_spec
+from doppel.sources.spec import DatabaseUri, parse_source_spec, redact_uri
 
 
 def test_parse_file_path(tmp_path: Path) -> None:

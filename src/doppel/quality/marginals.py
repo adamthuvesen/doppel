@@ -17,14 +17,11 @@ import numpy as np
 import polars as pl
 from scipy.stats import ks_2samp
 
-from doppel.schema.datetime import (
-    CalendarFeature,
-    default_features_for,
-    to_float_array,
-)
+from doppel.schema.calendar_feature import CalendarFeature, default_features_for
 from doppel.schema.datetime import (
     calendar_features as extract_calendar_features,
 )
+from doppel.schema.datetime import to_float_array
 from doppel.schema.nullable import null_rate
 from doppel.schema.types import Column, ColumnType
 

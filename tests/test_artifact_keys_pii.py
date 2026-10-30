@@ -278,6 +278,7 @@ def test_uuid_key_column_values_look_like_hex_uuids() -> None:
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.extras
 def test_faker_generate_same_seed_produces_same_output_in_same_process() -> None:
     from doppel.pii.fake import generate
 
@@ -286,6 +287,7 @@ def test_faker_generate_same_seed_produces_same_output_in_same_process() -> None
     assert a == b
 
 
+@pytest.mark.extras
 def test_faker_generate_different_seeds_differ() -> None:
     from doppel.pii.fake import generate
 

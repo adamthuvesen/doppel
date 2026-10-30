@@ -27,7 +27,7 @@ from doppel.pipeline.fit_rows import AUTO_FIT_CAP, AUTO_FIT_MULTIPLIER
 from doppel.pipeline.pii import pii_detection_available
 from doppel.pipeline.prepare import build_training_table, read_source_dataframe
 from doppel.sinks import write as sink_write
-from doppel.sources.spec import parse_sink_spec
+from doppel.sinks.spec import parse_sink_spec
 from doppel.synth.cart import CartSynthesizer
 from doppel.synth.seed import Rng
 from doppel.text_policy import TextPolicy

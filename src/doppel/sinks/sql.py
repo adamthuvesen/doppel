@@ -9,7 +9,8 @@ from __future__ import annotations
 
 import polars as pl
 
-from doppel.sources.spec import DuckDbSink, quote_table_name
+from doppel.locations import quote_table_name
+from doppel.sinks.spec import DuckDbSink
 
 
 def write_duckdb(df: pl.DataFrame, spec: DuckDbSink) -> None:

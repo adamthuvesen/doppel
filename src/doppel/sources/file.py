@@ -2,30 +2,31 @@
 
 from __future__ import annotations
 
+from collections.abc import Collection
 from pathlib import Path
 
 import polars as pl
 
-# Common null sentinels found in real-world datasets (UCI, Kaggle, Excel exports, etc.).
-# Applied after whitespace stripping so " ?" and "?" are both caught.
-_NULL_SENTINELS: frozenset[str] = frozenset(
-    ["?", "NA", "N/A", "na", "n/a", "none", "None", "NULL", "null", ""]
-)
+# Only the empty string is NULL by default: "NA" is also North America and "None" a
+# valid label. Callers pass more tokens with `--null-values`. Tokens are compared
+# after whitespace stripping, so " " is NULL too.
+DEFAULT_NULL_VALUES: tuple[str, ...] = ("",)
 _DATE_PREFIX_RE = r"^\d{4}-\d{2}-\d{2}([T ][0-9]{2}:[0-9]{2}:[0-9]{2})?"
 
 
-def read(path: Path) -> pl.DataFrame:
+def read(path: Path, *, null_values: Collection[str] = DEFAULT_NULL_VALUES) -> pl.DataFrame:
     suffix = path.suffix.lower()
     if suffix == ".csv":
-        return _normalise_strings(pl.read_csv(path, try_parse_dates=True))
+        return _normalise_strings(pl.read_csv(path, try_parse_dates=True), null_values)
     if suffix == ".tsv":
-        return _normalise_strings(pl.read_csv(path, separator="\t", try_parse_dates=True))
+        df = pl.read_csv(path, separator="\t", try_parse_dates=True)
+        return _normalise_strings(df, null_values)
     if suffix == ".parquet":
         return pl.read_parquet(path)
     if suffix == ".json":
-        return _normalise_strings(pl.read_json(path))
+        return _normalise_strings(pl.read_json(path), null_values)
     if suffix in {".ndjson", ".jsonl"}:
-        return _normalise_strings(pl.read_ndjson(path))
+        return _normalise_strings(pl.read_ndjson(path), null_values)
     if suffix in {".arrow", ".feather", ".ipc"}:
         return pl.read_ipc(path)
     raise ValueError(
@@ -34,12 +35,14 @@ def read(path: Path) -> pl.DataFrame:
     )
 
 
-def _normalise_strings(df: pl.DataFrame) -> pl.DataFrame:
+def _normalise_strings(
+    df: pl.DataFrame, null_values: Collection[str] = DEFAULT_NULL_VALUES
+) -> pl.DataFrame:
     """Strip whitespace, coerce null sentinels, and promote numeric-looking string columns."""
     string_cols = [c for c in df.columns if df[c].dtype == pl.String]
     if not string_cols:
         return df
-    sentinels = list(_NULL_SENTINELS)
+    sentinels = sorted({*DEFAULT_NULL_VALUES, *null_values})
     exprs = []
     for c in string_cols:
         stripped = pl.col(c).str.strip_chars()

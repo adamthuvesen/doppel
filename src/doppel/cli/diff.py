@@ -13,7 +13,13 @@ from rich.console import Console
 from rich.progress import TaskID, TextColumn
 
 from doppel.cli import labels as cli_labels
-from doppel.cli._common import ConnectionTimeoutOpt, progress_bar, resolve_source, sample_frame
+from doppel.cli._common import (
+    ConnectionTimeoutOpt,
+    NullValuesOpt,
+    progress_bar,
+    resolve_source,
+    sample_frame,
+)
 from doppel.quality.aggregate import QualityReport
 from doppel.quality.aggregate import compute as compute_quality
 from doppel.report.html import to_html
@@ -185,6 +191,7 @@ def run(
         help='Shell command whose stdout is the SQL password (e.g. "op read op://vault/db/pw").',
     ),
     connection_timeout: ConnectionTimeoutOpt = 300,
+    null_values: NullValuesOpt = None,
 ) -> None:
     real_spec = _resolve_diff_arg(
         real,
@@ -192,6 +199,7 @@ def run(
         sql_query=sql_query,
         password_cmd=password_cmd,
         connection_timeout=connection_timeout,
+        null_values=null_values,
     )
     synth_spec = _resolve_diff_arg(
         synth,
@@ -199,6 +207,7 @@ def run(
         sql_query=sql_query,
         password_cmd=password_cmd,
         connection_timeout=connection_timeout,
+        null_values=null_values,
     )
     real_label = cli_labels.source_label(real_spec)
     synth_label = cli_labels.source_label(synth_spec)
@@ -289,6 +298,7 @@ def _resolve_diff_arg(
     sql_query: str | None,
     password_cmd: str | None,
     connection_timeout: int,
+    null_values: str | None,
 ) -> FilePath | DatabaseUri:
     """Resolve a diff positional argument.
 
@@ -307,6 +317,7 @@ def _resolve_diff_arg(
         query=query_for_parse,
         password_cmd=password_cmd,
         connection_timeout=connection_timeout,
+        null_values=null_values,
     )
 
 

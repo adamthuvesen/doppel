@@ -14,6 +14,8 @@ from doppel.artifact import save as save_artifact
 from doppel.cli import labels as cli_labels
 from doppel.cli._common import (
     ConnectionTimeoutOpt,
+    HashSaltOpt,
+    NullValuesOpt,
     fit_progress,
     print_repair_summary,
     resolve_sink,
@@ -92,6 +94,7 @@ def fit(
         help='Shell command whose stdout is the SQL password (e.g. "op read op://vault/db/pw").',
     ),
     connection_timeout: ConnectionTimeoutOpt = 300,
+    null_values: NullValuesOpt = None,
 ) -> None:
     if model != "cart":
         raise typer.BadParameter(f"model={model!r} is not supported by this build. Use 'cart'.")
@@ -102,6 +105,7 @@ def fit(
         query=sql_query,
         password_cmd=password_cmd,
         connection_timeout=connection_timeout,
+        null_values=null_values,
     )
     source_label = cli_labels.source_label(source_spec)
     console.print(f"[dim]reading[/] {source_label}")
@@ -173,6 +177,7 @@ def sample(
         "--text-policy",
         help="How to handle free-text columns in output: sample, hash, fake, or drop.",
     ),
+    hash_salt: HashSaltOpt = None,
 ) -> None:
     sink_spec = resolve_sink(output)
     console.print(f"[dim]loading[/] {artifact}")
@@ -203,7 +208,7 @@ def sample(
     out_df = out_ds.only().data
     assert out_df is not None
     out_df = apply_text_policy(
-        out_df, synth.original_columns, text_policy, Rng.from_seed(seed).spawn()
+        out_df, synth.original_columns, text_policy, Rng.from_seed(seed).spawn(), salt=hash_salt
     )
     if text_policy is not TextPolicy.SAMPLE:
         console.print(f"[dim]text policy[/] {text_policy.value}")

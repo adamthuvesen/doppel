@@ -106,7 +106,11 @@ def generate_single_table(
         )
 
     out_df = apply_text_policy(
-        out_df, table.columns, config.text_policy, Rng.from_seed(config.seed).spawn()
+        out_df,
+        table.columns,
+        config.text_policy,
+        Rng.from_seed(config.seed).spawn(),
+        salt=config.hash_salt,
     )
 
     return SingleTableGenerateResult(

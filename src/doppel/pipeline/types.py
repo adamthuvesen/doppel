@@ -26,6 +26,7 @@ class SingleTableGenerateConfig:
     where: str | None = None
     max_oversample: float = 4.0
     text_policy: TextPolicy = TextPolicy.SAMPLE
+    hash_salt: str | None = None
     connection_timeout: int = 300
 
 

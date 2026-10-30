@@ -138,6 +138,7 @@ def to_dataset(
     *,
     password_cmd: str | None = None,
     connection_timeout: int = 300,
+    null_values: tuple[str, ...] = ("",),
 ) -> Dataset:
     """Materialise a Dataset: read each table's file or URI, infer schema, apply
     overrides, wire FKs.
@@ -155,6 +156,7 @@ def to_dataset(
             password_cmd=password_cmd,
             connection_timeout=connection_timeout,
             sql_read_count=sql_read_count,
+            null_values=null_values,
         )
         inferred = infer_table(name, df)
         inferred_names = {c.name for c in inferred.columns}
@@ -197,38 +199,6 @@ def to_dataset(
     return Dataset(tables=tables, edges=edges)
 
 
-def from_dataset(dataset: Dataset, *, files: dict[str, str] | None = None) -> MultiSchemaToml:
-    """Produce a Pydantic schema from a Dataset — useful for `doppel schema infer` on a directory."""
-    files = files or {}
-    return MultiSchemaToml(
-        tables={
-            name: TableSpec(
-                file=files.get(name),
-                primary_key=t.primary_key,
-                columns={
-                    col.name: ColumnSpec(
-                        type=col.type,
-                        nullable=col.nullable,
-                        ordered=col.ordered,
-                        categories=list(col.categories) if col.categories is not None else None,
-                    )
-                    for col in t.columns
-                },
-            )
-            for name, t in dataset.tables.items()
-        },
-        foreign_keys=[
-            ForeignKeySpec(
-                child_table=e.child_table,
-                child_column=e.child_column,
-                parent_table=e.parent_table,
-                parent_column=e.parent_column,
-            )
-            for e in dataset.edges
-        ],
-    )
-
-
 def _read_table_data(
     *,
     name: str,
@@ -237,12 +207,13 @@ def _read_table_data(
     password_cmd: str | None,
     connection_timeout: int,
     sql_read_count: dict[str, int],
+    null_values: tuple[str, ...],
 ) -> pl.DataFrame:
     """Read one table's data — file path or SQL URI. Errors are scoped to the
     table name so multi-table schemas report which entry failed."""
     if spec.file is not None:
         path = (base_dir / spec.file).resolve()
-        return source_file.read(path)
+        return source_file.read(path, null_values=null_values)
     if spec.uri is None:  # pragma: no cover — model_validator forbids this
         raise ValueError(f"table {name!r}: neither `file` nor `uri` is set")
     source_spec = parse_source_spec(
@@ -307,7 +278,6 @@ __all__ = [
     "ForeignKeySpec",
     "MultiSchemaToml",
     "TableSpec",
-    "from_dataset",
     "is_multi_table",
     "load",
     "save",

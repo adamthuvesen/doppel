@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import polars as pl
+import pytest
 from typer.testing import CliRunner
 
 from doppel.cli import app
@@ -102,6 +103,44 @@ def test_gen_text_policy_hash_removes_verbatim_text(tmp_path: Path) -> None:
     assert "company_domain" in synth.columns
     assert set(synth["company_domain"].to_list()).isdisjoint(domains)
     assert all(str(v).startswith("hash_") for v in synth["company_domain"].drop_nulls())
+
+
+def _hashed_domains(tmp_path: Path, run: str, *salt_args: str) -> list[str]:
+    src = tmp_path / "domains.csv"
+    if not src.exists():
+        domains = [f"customer-{i}.example.com" for i in range(80)]
+        pl.DataFrame({"company_domain": domains, "score": list(range(80))}).write_csv(src)
+    out = tmp_path / f"synth-{run}.csv"
+    result = runner.invoke(
+        app,
+        [
+            "gen",
+            str(src),
+            "-n",
+            "40",
+            "-o",
+            str(out),
+            "--seed",
+            "3",
+            "--text-policy",
+            "hash",
+            *salt_args,
+        ],
+    )
+    assert result.exit_code == 0, result.stdout
+    return pl.read_csv(out)["company_domain"].to_list()
+
+
+def test_gen_text_policy_hash_salt_is_random_per_run(tmp_path: Path) -> None:
+    first = _hashed_domains(tmp_path, "a")
+    second = _hashed_domains(tmp_path, "b")
+    assert set(first).isdisjoint(second)
+
+
+def test_gen_text_policy_hash_salt_repeats_hashes(tmp_path: Path) -> None:
+    first = _hashed_domains(tmp_path, "a", "--hash-salt", "s3cret")
+    second = _hashed_domains(tmp_path, "b", "--hash-salt", "s3cret")
+    assert first == second
 
 
 def test_gen_prints_quality_summary_by_default(mixed_csv: Path, tmp_path: Path) -> None:
@@ -295,3 +334,21 @@ def test_gen_text_policy_drop_removes_text_columns(tmp_path: Path) -> None:
     )
     assert result.exit_code == 0, result.stdout
     assert "company_domain" not in pl.read_csv(out).columns
+
+
+@pytest.mark.parametrize(
+    ("null_args", "expected_na"), [([], True), (["--null-values", "NA,?"], False)]
+)
+def test_gen_null_values_controls_na_tokens(
+    tmp_path: Path, null_args: list[str], expected_na: bool
+) -> None:
+    src = tmp_path / "accounts.csv"
+    regions = ["NA", "EU", "APAC"] * 20
+    pl.DataFrame({"region": regions, "seats": list(range(60))}).write_csv(src)
+    out = tmp_path / "synth.csv"
+    result = runner.invoke(
+        app, ["gen", str(src), "-n", "200", "-o", str(out), "--seed", "1", *null_args]
+    )
+    assert result.exit_code == 0, result.stdout
+    synth_regions = pl.read_csv(out, null_values=[])["region"].to_list()
+    assert ("NA" in synth_regions) is expected_na

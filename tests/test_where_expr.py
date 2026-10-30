@@ -7,10 +7,13 @@ numeric-mode grammar stays arithmetic-only.
 
 from __future__ import annotations
 
+import inspect
+import sys
+
 import polars as pl
 import pytest
 
-from doppel.constraints.expr import compile_expression
+from doppel.constraints.expr import Mode, compile_expression
 
 # Happy paths ──────────────────────────────────────────────────────────────────
 
@@ -164,3 +167,26 @@ def test_numeric_mode_default_unchanged() -> None:
 def test_boolean_unknown_column_names_lists_allowed() -> None:
     with pytest.raises(ValueError, match="missing_col"):
         compile_expression("missing_col == 1", {"a", "b"}, mode="boolean")
+
+
+@pytest.mark.parametrize(
+    "expression",
+    ["-" * 5000 + "x", "+".join(["x"] * 5000), "x" + " " * 20_000],
+    ids=["deep-unary", "long-sum", "long-string"],
+)
+@pytest.mark.parametrize("mode", ["numeric", "boolean"])
+def test_oversized_expression_raises_value_error(expression: str, mode: Mode) -> None:
+    with pytest.raises(ValueError, match="too large"):
+        compile_expression(expression, {"x"}, mode=mode)
+
+
+def test_deep_expression_under_the_cap_raises_value_error() -> None:
+    expression = "-" * 300 + "x"
+    previous = sys.getrecursionlimit()
+    sys.setrecursionlimit(len(inspect.stack()) + 100)
+    try:
+        with pytest.raises(ValueError, match="too deeply nested"):
+            compile_expression(expression, {"x"})
+    finally:
+        sys.setrecursionlimit(previous)
+    assert compile_expression(expression, {"x"}) is not None

@@ -45,6 +45,28 @@ ConnectionTimeoutOpt = Annotated[
     ),
 ]
 
+NullValuesOpt = Annotated[
+    str | None,
+    typer.Option(
+        "--null-values",
+        help=(
+            "File sources only: comma-separated string values to read as NULL, "
+            'e.g. "NA,N/A,null". Only the empty string is NULL by default.'
+        ),
+    ),
+]
+
+HashSaltOpt = Annotated[
+    str | None,
+    typer.Option(
+        "--hash-salt",
+        help=(
+            "Salt for --text-policy hash. Without it each run draws a random salt; "
+            "pass one for repeatable hashes."
+        ),
+    ),
+]
+
 
 def sample_frame(
     df: pl.DataFrame,
@@ -180,6 +202,7 @@ def resolve_source(
     query: str | None,
     password_cmd: str | None,
     connection_timeout: int,
+    null_values: str | None = None,
 ) -> SourceSpec:
     """Resolve a CLI source argument into a `SourceSpec`.
 
@@ -193,7 +216,14 @@ def resolve_source(
         query=_normalise_optional_str(query),
         password_cmd=_normalise_optional_str(password_cmd),
         password_cmd_timeout=min(connection_timeout, 60),
+        null_values=parse_null_values(null_values),
     )
+
+
+def parse_null_values(raw: str | None) -> tuple[str, ...]:
+    """Parse `--null-values` (comma-separated) into the tokens a file reader treats as NULL."""
+    tokens = [] if raw is None else [token.strip() for token in raw.split(",")]
+    return ("", *sorted({token for token in tokens if token}))
 
 
 def resolve_sink(value: str) -> SinkSpec:

@@ -1,6 +1,8 @@
 # Determinism contract
 
 doppel guarantees byte-identical output when given the same `--seed`.
+One exception: `--text-policy hash` draws a random salt for each run, so its
+output is byte-identical only when you also pass the same `--hash-salt`.
 
 ## What `--seed` controls
 
@@ -31,6 +33,15 @@ The `_random_uuid_hex` helper in
 diverge.
 
 Regression test: `tests/test_seed.py`.
+
+## The hash salt
+
+`--text-policy hash` is pseudonymisation, not anonymisation. A fixed public salt
+lets anyone who can guess candidate values rebuild the mapping with a dictionary.
+So the salt is not drawn from `--seed`: without `--hash-salt`, doppel draws it with
+`secrets.token_hex` in [src/doppel/text_policy.py](../src/doppel/text_policy.py),
+the one place outside the RNG contract. Pass `--hash-salt VALUE` on `gen` or
+`sample` when two runs must produce the same hashes, and keep that value secret.
 
 ## Pure functions don't need an RNG
 

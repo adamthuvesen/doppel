@@ -42,9 +42,10 @@ _DOTTED_IDENTIFIER_RE = re.compile(rf"(?:{_IDENTIFIER_PART})(?:\.(?:{_IDENTIFIER
 
 @dataclass(frozen=True)
 class FilePath:
-    """A file-backed source or sink."""
+    """A file-backed source or sink. `null_values` are the string tokens read as NULL."""
 
     path: Path
+    null_values: tuple[str, ...] = ("",)
 
 
 @dataclass(frozen=True)
@@ -224,6 +225,7 @@ def parse_source_spec(
     query: str | None,
     password_cmd: str | None,
     password_cmd_timeout: int = 30,
+    null_values: tuple[str, ...] = ("",),
 ) -> SourceSpec:
     """Parse a CLI argument into a SourceSpec. The single entry-point for both
     file paths and URIs.
@@ -246,7 +248,7 @@ def parse_source_spec(
             raise typer.BadParameter(f"path does not exist: {value!r}")
         if not path.is_file():
             raise typer.BadParameter(f"not a regular file: {value!r}")
-        return FilePath(path=path)
+        return FilePath(path=path, null_values=null_values)
 
     return _parse_database_uri(
         value,

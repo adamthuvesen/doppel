@@ -27,6 +27,11 @@ from doppel.constraints.dsl import DerivedConstraint
 
 Mode = Literal["numeric", "boolean"]
 
+# No source sets these numbers. They sit far above any hand-written `where` or
+# `derived` expression, and keep the recursive walker well inside Python's stack.
+_MAX_EXPRESSION_CHARS = 10_000
+_MAX_AST_NODES = 1_000
+
 _ALLOWED_ARITH_OPS: dict[type, str] = {
     ast.Add: "+",
     ast.Sub: "-",
@@ -56,15 +61,25 @@ def compile_expression(
     - `mode="boolean"`: arithmetic plus comparison and `and`/`or`. Used by
       `WhereConstraint`. Top-level node must be `Compare` or `BoolOp`.
     """
+    if len(expression) > _MAX_EXPRESSION_CHARS:
+        raise ValueError(
+            f"expression is too large: {len(expression)} characters (limit {_MAX_EXPRESSION_CHARS})"
+        )
     try:
         tree = ast.parse(expression, mode="eval")
+        node_count = sum(1 for _ in ast.walk(tree))
+        if node_count > _MAX_AST_NODES:
+            raise ValueError(
+                f"expression is too large: {node_count} syntax nodes (limit {_MAX_AST_NODES})"
+            )
+        if mode == "boolean":
+            _require_boolean_top_level(tree.body, expression)
+            return _emit_boolean(tree.body, allowed_columns)
+        return _emit_numeric(tree.body, allowed_columns)
     except SyntaxError as exc:
         raise ValueError(f"invalid expression {expression!r}: {exc.msg}") from exc
-
-    if mode == "boolean":
-        _require_boolean_top_level(tree.body, expression)
-        return _emit_boolean(tree.body, allowed_columns)
-    return _emit_numeric(tree.body, allowed_columns)
+    except RecursionError:
+        raise ValueError("expression is too deeply nested") from None
 
 
 def apply(

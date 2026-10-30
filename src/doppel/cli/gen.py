@@ -17,8 +17,11 @@ from rich.table import Table as _Table
 from doppel.cli import labels as cli_labels
 from doppel.cli._common import (
     ConnectionTimeoutOpt,
+    HashSaltOpt,
+    NullValuesOpt,
     compute_quality_summary,
     fit_progress,
+    parse_null_values,
     print_quality_summary,
     print_repair_summary,
     resolve_sink,
@@ -41,7 +44,7 @@ from doppel.synth.multi_where import (
     resolve_where_table,
 )
 from doppel.synth.seed import Rng
-from doppel.text_policy import TextPolicy
+from doppel.text_policy import TextPolicy, resolve_hash_salt
 from doppel.text_policy import apply as apply_text_policy
 
 console = Console()
@@ -122,11 +125,13 @@ def run(
         ),
     ),
     connection_timeout: ConnectionTimeoutOpt = 300,
+    null_values: NullValuesOpt = None,
     text_policy: TextPolicy = typer.Option(
         TextPolicy.SAMPLE,
         "--text-policy",
         help="How to handle free-text columns in output: sample, hash, fake, or drop.",
     ),
+    hash_salt: HashSaltOpt = None,
     no_quality: bool = typer.Option(
         False,
         "--no-quality",
@@ -203,8 +208,10 @@ def run(
             rows_per_table,
             where,
             max_oversample,
+            hash_salt=hash_salt,
             password_cmd=password_cmd,
             connection_timeout=connection_timeout,
+            null_values=parse_null_values(null_values),
         )
         return
 
@@ -218,6 +225,7 @@ def run(
         query=sql_query,
         password_cmd=password_cmd,
         connection_timeout=connection_timeout,
+        null_values=null_values,
     )
     sink_spec = resolve_sink(output)
     reject_sink_matching_source(source_spec, sink_spec)
@@ -234,6 +242,7 @@ def run(
         explain,
         where,
         max_oversample,
+        hash_salt=hash_salt,
         connection_timeout=connection_timeout,
     )
 
@@ -252,6 +261,7 @@ def _run_single(
     where: str | None,
     max_oversample: float,
     *,
+    hash_salt: str | None = None,
     connection_timeout: int = 300,
 ) -> None:
     from doppel.schema import toml as schema_toml_mod
@@ -302,6 +312,7 @@ def _run_single(
                     where=where,
                     max_oversample=max_oversample,
                     text_policy=text_policy,
+                    hash_salt=hash_salt,
                     connection_timeout=connection_timeout,
                 ),
                 sample_fit=_sample_fit,
@@ -382,8 +393,10 @@ def _run_multi(
     where: str | None,
     max_oversample: float,
     *,
+    hash_salt: str | None = None,
     password_cmd: str | None = None,
     connection_timeout: int = 300,
+    null_values: tuple[str, ...] = ("",),
 ) -> None:
     console.print(f"[dim]loading multi-table schema[/] {schema_path}")
     try:
@@ -393,6 +406,7 @@ def _run_multi(
             schema_path.parent,
             password_cmd=password_cmd,
             connection_timeout=connection_timeout,
+            null_values=null_values,
         )
     except (ValidationError, ValueError) as exc:
         raise typer.BadParameter(str(exc)) from exc
@@ -452,6 +466,7 @@ def _run_multi(
 
     output_dir.mkdir(parents=True, exist_ok=True)
     pii_rng = Rng.from_seed(seed)
+    run_salt = resolve_hash_salt(hash_salt)
     for name, out_table in out_dataset.tables.items():
         spec = schema.tables.get(name)
         # `.file` may be absent (SQL-only multi-table); default to .csv when unknown.
@@ -468,7 +483,11 @@ def _run_multi(
             detections, order = pii_by_table[name]
             out_df = restore_pii(out_df, detections, order, pii_rng.spawn())
         out_df = apply_text_policy(
-            out_df, original_columns[name], text_policy, Rng.from_seed(seed).spawn()
+            out_df,
+            original_columns[name],
+            text_policy,
+            Rng.from_seed(seed).spawn(),
+            salt=run_salt,
         )
         sink_write(out_df, FilePath(path=dest))
         console.print(f"[green]ok[/] {name}: {out_df.height} rows -> {dest}")

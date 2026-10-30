@@ -91,21 +91,33 @@ def test_normalise_strings_strips_whitespace() -> None:
 
 def test_normalise_strings_converts_question_mark_to_null() -> None:
     df = pl.DataFrame({"workclass": [" Private", " ?", "State-gov", "?", None]})
-    result = _normalise_strings(df)
+    result = _normalise_strings(df, ["?"])
     assert result["workclass"].null_count() == 3  # " ?", "?", None → all null
     non_null = result["workclass"].drop_nulls().to_list()
     assert set(non_null) == {"Private", "State-gov"}
 
 
-@pytest.mark.parametrize(
-    "sentinel",
-    ["?", "NA", "N/A", "na", "n/a", "none", "None", "NULL", "null", ""],
-)
-def test_normalise_strings_null_sentinels(sentinel: str) -> None:
-    df = pl.DataFrame({"col": [sentinel, "real_value"]})
+@pytest.mark.parametrize("token", ["?", "NA", "N/A", "none", "None", "NULL", "null"])
+def test_normalise_strings_keeps_tokens_by_default(token: str) -> None:
+    df = pl.DataFrame({"col": [token, "real_value", "", " "]})
     result = _normalise_strings(df)
-    assert result["col"].null_count() == 1
-    assert result["col"].drop_nulls().to_list() == ["real_value"]
+    assert result["col"].to_list() == [token, "real_value", None, None]
+
+
+@pytest.mark.parametrize("token", ["?", "NA", "N/A", "none", "NULL"])
+def test_normalise_strings_reads_requested_tokens_as_null(token: str) -> None:
+    df = pl.DataFrame({"col": [token, "real_value", ""]})
+    result = _normalise_strings(df, [token])
+    assert result["col"].to_list() == [None, "real_value", None]
+
+
+def test_csv_reader_keeps_region_na(tmp_path: Path) -> None:
+    from doppel.sources.file import read
+
+    csv_path = tmp_path / "regions.csv"
+    csv_path.write_text("region,seats\nNA,1\nEU,2\nNA,3\n,4\n")
+    assert read(csv_path)["region"].to_list() == ["NA", "EU", "NA", None]
+    assert read(csv_path, null_values=("NA",))["region"].to_list() == [None, "EU", None, None]
 
 
 def test_csv_reader_strips_whitespace(tmp_path: Path) -> None:
@@ -114,7 +126,7 @@ def test_csv_reader_strips_whitespace(tmp_path: Path) -> None:
 
     csv_path = tmp_path / "spaced.csv"
     csv_path.write_text("name,value\n Private,10\n ?,20\n State-gov,30\n")
-    df = read(csv_path)
+    df = read(csv_path, null_values=("?",))
     assert df["name"].null_count() == 1  # " ?" → null
     assert "Private" in df["name"].drop_nulls().to_list()
     assert "State-gov" in df["name"].drop_nulls().to_list()
@@ -151,7 +163,7 @@ def test_normalise_strings_does_not_promote_mixed_columns() -> None:
 
 def test_normalise_strings_preserves_nulls_when_promoting() -> None:
     df = pl.DataFrame({"age": [" 39", "?", " 50", None]})
-    result = _normalise_strings(df)
+    result = _normalise_strings(df, ["?"])
     assert result["age"].dtype == pl.Int64
     assert result["age"].null_count() == 2  # "?" → null, explicit null → null
     assert result["age"].drop_nulls().to_list() == [39, 50]

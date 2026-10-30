@@ -9,7 +9,7 @@ from pydantic import ValidationError
 from rich.console import Console
 
 from doppel.cli import labels as cli_labels
-from doppel.cli._common import ConnectionTimeoutOpt, resolve_source
+from doppel.cli._common import ConnectionTimeoutOpt, NullValuesOpt, resolve_source
 from doppel.schema import toml as schema_toml
 from doppel.schema.infer import infer_table
 from doppel.sources import read as source_read
@@ -51,6 +51,7 @@ def infer(
         help='Shell command whose stdout is the SQL password (e.g. "op read op://vault/db/pw").',
     ),
     connection_timeout: ConnectionTimeoutOpt = 300,
+    null_values: NullValuesOpt = None,
 ) -> None:
     source_spec = resolve_source(
         input_path,
@@ -58,6 +59,7 @@ def infer(
         query=sql_query,
         password_cmd=password_cmd,
         connection_timeout=connection_timeout,
+        null_values=null_values,
     )
     source_label = cli_labels.source_label(source_spec)
     console.print(f"[dim]reading[/] {source_label}")
@@ -104,6 +106,7 @@ def check(
         help="Shell command whose stdout is the SQL password.",
     ),
     connection_timeout: ConnectionTimeoutOpt = 300,
+    null_values: NullValuesOpt = None,
 ) -> None:
     source_spec = resolve_source(
         input_path,
@@ -111,6 +114,7 @@ def check(
         query=sql_query,
         password_cmd=password_cmd,
         connection_timeout=connection_timeout,
+        null_values=null_values,
     )
     source_label = cli_labels.source_label(source_spec)
     console.print(f"[dim]reading[/] {source_label}")

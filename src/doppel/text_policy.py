@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import re
+import secrets
 from enum import StrEnum
 
 import polars as pl
@@ -30,14 +31,20 @@ def apply(
     policy: TextPolicy,
     rng: Rng,
     *,
-    salt: str = "doppel",
+    salt: str | None = None,
 ) -> pl.DataFrame:
+    """Apply `policy` to the TEXT columns of `df`.
+
+    `--text-policy hash` pseudonymises: without a `salt`, each call draws a random
+    one, so hashes differ between runs and cannot be reversed with a dictionary.
+    Pass a fixed `salt` for repeatable hashes."""
     text_columns = [c for c in columns if c.type is ColumnType.TEXT and c.name in df.columns]
     if not text_columns or policy is TextPolicy.SAMPLE:
         return df
     if policy is TextPolicy.DROP:
         return df.drop([c.name for c in text_columns])
 
+    salt = resolve_hash_salt(salt)
     out = df
     for col in text_columns:
         series = out[col.name]
@@ -46,6 +53,11 @@ def apply(
         elif policy is TextPolicy.FAKE:
             out = out.with_columns(_fake_series(series, col.name, rng.spawn()).alias(col.name))
     return out
+
+
+def resolve_hash_salt(salt: str | None) -> str:
+    """Return `salt`, or a fresh random salt when it is None."""
+    return secrets.token_hex(16) if salt is None else salt
 
 
 def _hash_series(series: pl.Series, *, salt: str) -> pl.Series:

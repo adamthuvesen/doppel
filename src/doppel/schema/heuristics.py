@@ -14,10 +14,6 @@ def is_integer_dtype(dtype: pl.DataType) -> bool:
     return str(dtype) in INTEGER_DTYPE_NAMES
 
 
-def is_float_dtype(dtype: pl.DataType) -> bool:
-    return str(dtype) in FLOAT_DTYPE_NAMES
-
-
 def is_binary_flag(series: pl.Series) -> bool:
     """True only if the column actually contains both 0 and 1 (not all-0 / all-1)."""
     values = set(series.drop_nulls().unique().to_list())
@@ -39,7 +35,6 @@ __all__ = [
     "FLOAT_DTYPE_NAMES",
     "INTEGER_DTYPE_NAMES",
     "is_binary_flag",
-    "is_float_dtype",
     "is_integer_dtype",
     "looks_like_count_column",
 ]

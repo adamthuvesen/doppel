@@ -12,17 +12,11 @@ class WarehouseConnectionError(RuntimeError):
     contains the redacted URI (`:***@`); never the raw password."""
 
 
-class UnsupportedSinkError(ValueError):
-    """Raised when a sink URI scheme is not supported (e.g. Snowflake/Postgres
-    writes, which doppel deliberately does not implement)."""
-
-
 class RowCountProbeError(RuntimeError):
     """Raised when a row-count probe against the warehouse fails."""
 
 
 __all__ = [
     "RowCountProbeError",
-    "UnsupportedSinkError",
     "WarehouseConnectionError",
 ]

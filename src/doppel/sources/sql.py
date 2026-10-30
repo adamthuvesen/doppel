@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import threading
 import warnings
-from typing import TYPE_CHECKING, Any, cast
+from typing import Any, cast
 
 import polars as pl
 
@@ -24,9 +24,6 @@ from doppel.sources.spec import (
     redact_text,
     table_name_parts,
 )
-
-if TYPE_CHECKING:
-    pass
 
 ROW_COUNT_THRESHOLD = 1_000_000
 # Fraction samples (Postgres BERNOULLI, Snowflake SYSTEM) return approximate row

@@ -123,6 +123,8 @@ Common flags:
 | `--where EXPR` | Keep generated rows matching a boolean expression. Supports `== != < <= > >=` plus `and` / `or`. |
 | `--max-oversample N` | Raise this when `--where` or constraints are rare. Default: `4`. |
 | `--text-policy sample|hash|fake|drop` | Handle free-text columns. `fake` requires `[pii]`. |
+| `--hash-salt VALUE` | Salt for `--text-policy hash`. Without it each run uses a random salt. |
+| `--null-values NA,?` | File sources: extra string values to read as NULL. Only the empty string is NULL by default. |
 | `--schema PATH` | Override types, declare keys, and add constraints. |
 | `--explain` | Print per-column modeling choices after fit. |
 

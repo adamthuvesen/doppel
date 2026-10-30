@@ -25,7 +25,7 @@ def read(
     if isinstance(spec, FilePath):
         from doppel.sources import file as _file
 
-        return _file.read(spec.path)
+        return _file.read(spec.path, null_values=spec.null_values)
     # Only remaining variant is DatabaseUri (tagged union exhaustiveness).
     from doppel.sources import sql as _sql
 

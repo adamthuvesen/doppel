@@ -22,6 +22,7 @@ import uuid
 from collections import defaultdict
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from typing import cast
 
 import numpy as np
 import polars as pl
@@ -616,7 +617,7 @@ def _build_series(
 ) -> pl.Series:
     if col.type is ColumnType.DATETIME:
         # CART regressor leaf-samples produce floats; coerce to Int64 epoch before recomposition.
-        coerced: list[int | None] = [None if v is None else int(v) for v in values]  # type: ignore[arg-type]
+        coerced: list[int | None] = [None if v is None else int(cast("float", v)) for v in values]
         return pl.Series(col.name, coerced, dtype=pl.Int64)
     if col.type is ColumnType.NUMERIC:
         series = pl.Series(col.name, values, dtype=pl.Float64)

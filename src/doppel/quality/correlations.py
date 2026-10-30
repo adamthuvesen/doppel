@@ -123,8 +123,7 @@ def _cramers_v(a: pl.Series, b: pl.Series) -> float:
     if matrix.size == 0 or matrix.shape[0] < 2 or matrix.shape[1] < 2:
         return 0.0
     # scipy returns a tuple-shaped result; [0] is the chi-squared statistic.
-    chi2_stat: float = chi2_contingency(matrix, correction=False)[0]  # type: ignore[assignment]
-    chi2 = float(chi2_stat)
+    chi2 = float(chi2_contingency(matrix, correction=False)[0])
     n = float(matrix.sum())
     denom = n * (min(matrix.shape) - 1)
     if denom <= 0:

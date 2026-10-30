@@ -293,7 +293,8 @@ def _quality_rgb(fraction: float) -> tuple[int, int, int]:
     else:
         t = f / 0.5
         a, b = bad, mid
-    return tuple(int(a[i] + (b[i] - a[i]) * t) for i in range(3))  # type: ignore[return-value]
+    red, green, blue = (int(a[i] + (b[i] - a[i]) * t) for i in range(3))
+    return (red, green, blue)
 
 
 def _rgb(c: tuple[int, int, int]) -> str:

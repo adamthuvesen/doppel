@@ -66,7 +66,7 @@ def save(
                 "synth.pickle",
                 pickle.dumps(synth, protocol=pickle.HIGHEST_PROTOCOL),
             )
-        os.replace(tmp_path, path)
+        tmp_path.replace(path)
     except BaseException:
         tmp_path.unlink(missing_ok=True)
         raise

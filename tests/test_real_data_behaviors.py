@@ -11,11 +11,11 @@ import polars as pl
 import pytest
 
 from doppel.schema.infer import (
-    _looks_like_key_name,  # type: ignore[reportPrivateUsage]
+    _looks_like_key_name,
     infer_table,
 )
 from doppel.schema.types import ColumnType
-from doppel.sources.file import _normalise_strings  # type: ignore[reportPrivateUsage]
+from doppel.sources.file import _normalise_strings
 
 # ---------------------------------------------------------------------------
 # CamelCase / PascalCase key column detection
@@ -190,7 +190,7 @@ def test_detect_ordered_pairs_finds_datetime_pair() -> None:
     table = infer_table("trip", df)
     synth = CartSynthesizer()
     synth.fit(Dataset.single(table), Rng.from_seed(0))
-    assert ("pickup", "dropoff") in synth._ordered_pairs  # type: ignore[reportPrivateUsage]
+    assert ("pickup", "dropoff") in synth._ordered_pairs
 
 
 def test_detect_ordered_pairs_finds_reversed_datetime_pair() -> None:
@@ -209,7 +209,7 @@ def test_detect_ordered_pairs_finds_reversed_datetime_pair() -> None:
     table = infer_table("trip", df)
     synth = CartSynthesizer()
     synth.fit(Dataset.single(table), Rng.from_seed(0))
-    assert ("pickup", "dropoff") in synth._ordered_pairs  # type: ignore[reportPrivateUsage]
+    assert ("pickup", "dropoff") in synth._ordered_pairs
 
 
 def test_ordered_pair_enforcement_eliminates_violations() -> None:
@@ -254,7 +254,7 @@ def test_numeric_rate_count_columns_are_not_auto_ordered() -> None:
     table = infer_table("org_features", df)
     synth = CartSynthesizer()
     synth.fit(Dataset.single(table), Rng.from_seed(0))
-    assert synth._ordered_pairs == []  # type: ignore[reportPrivateUsage]
+    assert synth._ordered_pairs == []
 
     out = synth.sample(200, Rng.from_seed(1)).only().data
     assert out is not None

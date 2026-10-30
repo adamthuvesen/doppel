@@ -1,7 +1,5 @@
 """CART synthesizer end-to-end: fit → sample preserves types, schema, and rough fidelity."""
 
-# pyright: reportPrivateUsage=false
-
 from __future__ import annotations
 
 import polars as pl
@@ -9,7 +7,7 @@ import polars as pl
 from doppel.dataset import Dataset
 from doppel.schema.infer import infer_table
 from doppel.schema.types import ColumnType
-from doppel.synth.cart import (  # type: ignore[reportPrivateUsage]
+from doppel.synth.cart import (
     CartSynthesizer,
     _CountBound,
     _detect_missing_flags,

@@ -131,8 +131,7 @@ def _ks_int_series(real: pl.Series, synth: pl.Series) -> float:
         return float("nan")
     real_arr = real.cast(pl.Float64).to_numpy()
     synth_arr = synth.cast(pl.Float64).to_numpy()
-    statistic: float = ks_2samp(real_arr, synth_arr, method="asymp")[0]  # type: ignore[assignment]
-    return float(statistic)
+    return float(ks_2samp(real_arr, synth_arr, method="asymp")[0])
 
 
 def _score_column(col: Column, real: pl.Series, synth: pl.Series) -> MarginalScore:
@@ -173,8 +172,7 @@ def _ks(col: Column, real: pl.Series, synth: pl.Series) -> float:
     # Use asymptotic method — exact is prohibitively slow for large samples and
     # emits a RuntimeWarning when it falls back anyway. Asymp is fine for quality
     # metrics (we want the statistic, not rigorous p-values).
-    statistic: float = ks_2samp(real_arr, synth_arr, method="asymp")[0]  # type: ignore[assignment]
-    return float(statistic)
+    return float(ks_2samp(real_arr, synth_arr, method="asymp")[0])
 
 
 def _finite(arr: np.ndarray) -> np.ndarray:

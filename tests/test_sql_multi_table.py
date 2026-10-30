@@ -14,7 +14,7 @@ import pytest
 from pydantic import ValidationError
 from typer.testing import CliRunner
 
-from doppel.cli import app  # type: ignore[attr-defined]
+from doppel.cli import app
 from doppel.schema import multi as multi_schema
 
 

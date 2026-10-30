@@ -15,7 +15,7 @@ import polars as pl
 import pytest
 from typer.testing import CliRunner
 
-from doppel.cli import app  # type: ignore[attr-defined]
+from doppel.cli import app
 
 
 @pytest.fixture

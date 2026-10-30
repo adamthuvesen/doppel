@@ -70,7 +70,7 @@ def test_safe_pickle_refuses_disallowed_stdlib_classes(obj: bytes) -> None:
 
 
 def test_safe_pickle_refuses_non_artifact_doppel_globals() -> None:
-    from doppel.sources.spec import _resolve_password_cmd  # type: ignore[reportPrivateUsage]
+    from doppel.sources.spec import _resolve_password_cmd
 
     payload = pickle.dumps(_resolve_password_cmd)
     with pytest.raises(UnsafeArtifactError, match="not in doppel artifact allowlist"):

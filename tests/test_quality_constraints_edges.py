@@ -1,13 +1,14 @@
 """Behavior tests for quality, constraints, nullable encoding, and multi-table edges."""
-# pyright: reportPrivateUsage=false
 
 from __future__ import annotations
 
 from pathlib import Path
+from typing import cast
 
 import numpy as np
 import polars as pl
 import pytest
+from sklearn.neighbors import NearestNeighbors
 
 from doppel.constraints.dsl import InequalityConstraint, RangeConstraint
 from doppel.constraints.reject import (
@@ -67,7 +68,7 @@ def test_dcr_batches_when_progress_is_none() -> None:
             return np.zeros((x.shape[0], 1)), None
 
     out = priv._kneighbors_batched(
-        _SpyNN(),  # type: ignore[arg-type]
+        cast("NearestNeighbors", _SpyNN()),
         np.zeros((10, 2)),
         batch_size=3,
         progress=None,
@@ -229,7 +230,9 @@ def test_multi_table_fk_preserves_int32_dtype() -> None:
     synth = HierarchicalSynthesizer()
     synth.fit(dataset, Rng.from_seed(0))
     out = synth.sample({"users": 3}, Rng.from_seed(0))
-    fk_dtype = out.tables["orders"].data["user_id"].dtype  # type: ignore[index]
+    orders = out.tables["orders"].data
+    assert orders is not None
+    fk_dtype = orders["user_id"].dtype
     assert fk_dtype == pl.Int32, f"expected Int32 FK dtype preserved, got {fk_dtype}"
 
 

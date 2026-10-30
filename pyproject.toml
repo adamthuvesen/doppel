@@ -43,7 +43,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-pii = ["presidio-analyzer>=2.2.362", "faker>=40.54", "spacy>=3.8.18"]
+pii = ["presidio-analyzer>=2.2.362", "faker>=40.54", "spacy>=3.8.18", "en-core-web-lg"]
 sql = ["connectorx>=0.4.6"]
 all = ["doppeldata[pii,sql]"]
 
@@ -56,12 +56,17 @@ Issues = "https://github.com/adamthuvesen/doppel/issues"
 
 [dependency-groups]
 dev = [
-    "pytest>=8.3",
-    "pytest-cov>=5.0",
-    "ruff>=0.6",
-    "pyright>=1.1.380",
+    "pytest>=9.0",
+    "pytest-cov>=7.0",
+    "ruff==0.17.4",
+    "basedpyright==1.40.2",
     "pglast>=8.7",
+    "scipy-stubs>=1.18.1.1",
 ]
+
+[tool.uv.sources]
+# Not on PyPI: spaCy publishes models as release wheels. Locking the URL keeps the model in uv.lock.
+en-core-web-lg = { url = "https://github.com/explosion/spacy-models/releases/download/en_core_web_lg-3.8.0/en_core_web_lg-3.8.0-py3-none-any.whl" }
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/doppel"]
@@ -87,6 +92,8 @@ select = [
     "N",      # pep8-naming
     "ANN",    # flake8-annotations (lite)
     "C4",     # flake8-comprehensions
+    "PTH",    # flake8-use-pathlib
+    "PGH003", # a type ignore must name its rule
 ]
 ignore = [
     "E501",   # handled by formatter
@@ -105,14 +112,23 @@ extend-immutable-calls = ["typer.Argument", "typer.Option"]
 quote-style = "double"
 indent-style = "space"
 
-[tool.pyright]
+[tool.basedpyright]
 include = ["src", "tests"]
 pythonVersion = "3.14"
 typeCheckingMode = "strict"
+enableTypeIgnoreComments = false
+reportUnnecessaryTypeIgnoreComment = "error"
+reportIgnoreCommentWithoutRule = "error"
 reportMissingTypeStubs = false
 reportUnknownMemberType = false
 reportUnknownVariableType = false
 reportUnknownArgumentType = false
+reportUnknownParameterType = false
+reportUnknownLambdaType = false
+executionEnvironments = [
+    { root = "tests", extraPaths = ["src"], reportMissingParameterType = false, reportPrivateUsage = false },
+    { root = "src" },
+]
 
 [tool.pytest.ini_options]
 minversion = "8.0"

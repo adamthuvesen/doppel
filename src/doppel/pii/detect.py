@@ -66,7 +66,7 @@ def detect(
     candidates = [c for c in columns if c.name in df.columns and _is_candidate(c, df)]
     if not candidates:
         return []
-    analyzer: Any = _analyzer()
+    analyzer: Any = analyzer_engine()
 
     out: list[PIIDetection] = []
     for col in candidates:
@@ -102,9 +102,41 @@ def _is_candidate(column: Column, df: pl.DataFrame) -> bool:
     return column.type is ColumnType.CATEGORICAL and df[column.name].dtype == pl.String
 
 
-@lru_cache(maxsize=1)
-def _analyzer() -> Any:
-    """Cache the Presidio AnalyzerEngine — initialisation pulls a spaCy model and is slow."""
-    from presidio_analyzer import AnalyzerEngine
+SPACY_MODEL = "en_core_web_lg"
+SPACY_MODEL_INSTALL_COMMAND = "uv sync --all-extras"
 
-    return AnalyzerEngine()
+
+class PIIUnavailableError(RuntimeError):
+    """PII detection cannot run because the pinned spaCy model is not installed."""
+
+
+def spacy_model_available() -> bool:
+    try:
+        import spacy.util
+    except ImportError:
+        return False
+    return bool(spacy.util.is_package(SPACY_MODEL))
+
+
+@lru_cache(maxsize=1)
+def analyzer_engine() -> Any:
+    """Cache the Presidio AnalyzerEngine. Loading the spaCy model is slow.
+
+    Presidio downloads a missing model with a pip subprocess. The model is locked in
+    uv.lock instead, so a missing model is an error and nothing is downloaded.
+    """
+    from presidio_analyzer import AnalyzerEngine
+    from presidio_analyzer.nlp_engine import NlpEngineProvider
+
+    if not spacy_model_available():
+        raise PIIUnavailableError(
+            f"PII detection needs the spaCy model {SPACY_MODEL}, which is not installed. "
+            f"Install it with: {SPACY_MODEL_INSTALL_COMMAND}"
+        )
+    nlp_engine = NlpEngineProvider(
+        nlp_configuration={
+            "nlp_engine_name": "spacy",
+            "models": [{"lang_code": "en", "model_name": SPACY_MODEL}],
+        }
+    ).create_engine()
+    return AnalyzerEngine(nlp_engine=nlp_engine, supported_languages=["en"])

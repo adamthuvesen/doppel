@@ -10,7 +10,9 @@ import polars as pl
 from doppel.constraints.engine import ConstraintReport
 from doppel.dataset import Table
 from doppel.pii.detect import PIIDetection
+from doppel.pipeline.quality_summary import QualitySummary
 from doppel.schema.toml import SchemaToml
+from doppel.sinks.spec import SinkSpec
 from doppel.sources.spec import SourceSpec
 from doppel.synth.cart import CartSynthesizer
 from doppel.text_policy import TextPolicy
@@ -28,6 +30,8 @@ class SingleTableGenerateConfig:
     text_policy: TextPolicy = TextPolicy.SAMPLE
     hash_salt: str | None = None
     connection_timeout: int = 300
+    sink_spec: SinkSpec | None = None
+    quality: bool = False
 
 
 @dataclass(frozen=True)
@@ -40,6 +44,7 @@ class SingleTableGenerateResult:
     constraint_report: ConstraintReport | None
     fit_seconds: float
     sample_seconds: float
+    quality: QualitySummary | None = None
 
 
 @dataclass(frozen=True)

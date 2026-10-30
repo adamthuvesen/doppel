@@ -73,16 +73,13 @@ def test_fit_detects_pii_when_presidio_is_installed_without_faker(
     monkeypatch.setattr(pii.importlib.util, "find_spec", find_spec)
     monkeypatch.setattr("doppel.pii.detect.detect", detect_pii)
 
-    fit_module = importlib.import_module("doppel.cli.fit")
-
-    assert fit_module._detect_pii_if_available(_text_table()) == [detection]
+    assert pii.detect_pii_if_available(_text_table()) == [detection]
 
 
 def test_fit_warns_that_pii_was_not_checked_without_extra(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    fit_module = importlib.import_module("doppel.cli.fit")
-    monkeypatch.setattr(fit_module, "pii_detection_available", lambda: False)
+    monkeypatch.setattr(pii, "pii_detection_available", lambda: False)
     csv = tmp_path / "src.csv"
     pl.DataFrame({"id": list(range(30)), "v": [i % 5 for i in range(30)]}).write_csv(csv)
 

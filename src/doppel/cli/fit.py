@@ -3,39 +3,19 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import TYPE_CHECKING
 
 import typer
 from rich.console import Console
 
-from doppel.artifact import ArtifactError
 from doppel.artifact import load as load_artifact
 from doppel.artifact import save as save_artifact
 from doppel.cli import labels as cli_labels
-from doppel.cli._common import (
-    ConnectionTimeoutOpt,
-    HashSaltOpt,
-    NullValuesOpt,
-    fit_progress,
-    print_repair_summary,
-    resolve_source,
-    sample_frame,
-)
-from doppel.constraints.engine import synthesize_with_constraints
-from doppel.dataset import Dataset
-from doppel.pipeline.fit_rows import AUTO_FIT_CAP, AUTO_FIT_MULTIPLIER
-from doppel.pipeline.pii import pii_detection_available
-from doppel.pipeline.prepare import build_training_table, read_source_dataframe
-from doppel.sinks import write as sink_write
+from doppel.cli.display import fit_progress, print_repair_summary
+from doppel.cli.options import ConnectionTimeoutOpt, HashSaltOpt, NullValuesOpt, resolve_source
+from doppel.pipeline.fitted import FitConfig, SampleConfig, fit_single_table, sample_fitted
+from doppel.pipeline.prepare import sample_frame, table_name_for_source
 from doppel.sinks.spec import parse_sink_spec
-from doppel.synth.cart import CartSynthesizer
-from doppel.synth.seed import Rng
 from doppel.text_policy import TextPolicy
-from doppel.text_policy import apply as apply_text_policy
-
-if TYPE_CHECKING:
-    from doppel.dataset import Table
-    from doppel.pii.detect import PIIDetection
 
 console = Console()
 
@@ -99,44 +79,34 @@ def fit(
         connection_timeout=connection_timeout,
         null_values=null_values,
     )
-    source_label = cli_labels.source_label(source_spec)
-    console.print(f"[dim]reading[/] {source_label}")
-    fit_cap_hint = AUTO_FIT_CAP // AUTO_FIT_MULTIPLIER
-    _full_df, fit_df = read_source_dataframe(
-        source_spec,
-        fit_rows=fit_rows,
-        requested_rows=fit_cap_hint,
-        seed=seed,
-        connection_timeout=connection_timeout,
-        sample_fit=lambda df, n: sample_frame(df, n, seed=seed, console=console, label="fit"),
-        notify_fit_cap=lambda msg: console.print(f"[dim]fit-rows:[/] {msg}"),
-    )
-    console.print(f"[dim]inferring schema for[/] {fit_df.height} rows x {fit_df.width} columns")
-
+    console.print(f"[dim]reading[/] {cli_labels.source_label(source_spec)}")
     if schema is not None:
         console.print(f"[dim]applying schema[/] {schema}")
-    prepared = build_training_table(fit_df, source_spec, schema)
-    table = prepared.table
-    schema_toml = prepared.schema_toml
-
-    pii_detected = _detect_pii_if_available(table)
-    if pii_detected:
-        labels = ", ".join(f"{d.name}={d.entity_type}" for d in pii_detected)
-        raise typer.BadParameter(
-            "detected PII in source data "
-            f"({labels}). `doppel fit` would store a reusable artifact, so it refuses "
-            "detected PII for now. Use `doppel gen` for one-shot PII replacement."
+    console.print(f"[dim]fitting CART synthesizer on[/] {table_name_for_source(source_spec)!r}")
+    with fit_progress(console) as cb:
+        result = fit_single_table(
+            FitConfig(
+                source_spec=source_spec,
+                seed=seed,
+                fit_rows=fit_rows,
+                schema_path=schema,
+                connection_timeout=connection_timeout,
+            ),
+            sample_fit=lambda df, n: sample_frame(df, n, seed=seed, label="fit", notify=_dim),
+            fit_progress=cb,
+            notify_fit_cap=lambda msg: console.print(f"[dim]fit-rows:[/] {msg}"),
+            notify_pii_unchecked=lambda: console.print(
+                "[yellow]warn[/]: PII not checked: the optional [pii] extra is not installed"
+            ),
         )
 
-    dataset = Dataset.single(table)
-
-    console.print(f"[dim]fitting CART synthesizer on[/] {table.name!r}")
-    synth = CartSynthesizer()
-    with fit_progress(console) as cb:
-        synth.fit(dataset, Rng.from_seed(seed), progress=cb)
-
     console.print(f"[dim]writing artifact[/] {output}")
-    save_artifact(synth, output, training_row_count=fit_df.height, schema_toml=schema_toml)
+    save_artifact(
+        result.synth,
+        output,
+        training_row_count=result.training_row_count,
+        schema_toml=result.schema_toml,
+    )
     console.print(f"[green]ok[/] saved fitted artifact -> {output}")
 
 
@@ -173,51 +143,33 @@ def sample(
 ) -> None:
     sink_spec = parse_sink_spec(output)
     console.print(f"[dim]loading[/] {artifact}")
-    try:
-        synth, manifest, schema_toml = load_artifact(artifact)
-    except ArtifactError as exc:
-        raise typer.BadParameter(str(exc)) from exc
+    synth, manifest, schema_toml = load_artifact(artifact)
     console.print(
         f"[dim]artifact[/] {manifest.synthesizer_class!r} fit on "
         f"{manifest.training_row_count} rows x {manifest.training_column_count} cols "
         f"(table {manifest.table_name!r}, doppel {manifest.doppel_version})"
     )
-
     console.print(f"[dim]sampling[/] {rows} rows")
-    if schema_toml is not None and schema_toml.constraints:
-        console.print(
-            f"[dim]applying[/] {len(schema_toml.constraints)} constraints from embedded schema"
-        )
-        try:
-            out_ds, _ = synthesize_with_constraints(
-                synth, schema_toml.constraints, rows, Rng.from_seed(seed)
-            )
-        except ValueError as exc:
-            raise typer.BadParameter(str(exc)) from exc
-    else:
-        out_ds = synth.sample(rows, Rng.from_seed(seed))
-    print_repair_summary(console, synth.last_repair_summary)
-    out_df = out_ds.only().data
-    assert out_df is not None
-    out_df = apply_text_policy(
-        out_df, synth.original_columns, text_policy, Rng.from_seed(seed).spawn(), salt=hash_salt
+    result = sample_fitted(
+        SampleConfig(
+            rows=rows,
+            sink_spec=sink_spec,
+            seed=seed,
+            text_policy=text_policy,
+            hash_salt=hash_salt,
+        ),
+        synth,
+        schema_toml,
     )
+    if result.constraint_count:
+        console.print(f"[dim]applied[/] {result.constraint_count} constraints from embedded schema")
+    print_repair_summary(console, result.repair_summary)
     if text_policy is not TextPolicy.SAMPLE:
         console.print(f"[dim]text policy[/] {text_policy.value}")
-
+    out_df = result.out_df
     sink_label = cli_labels.sink_label(sink_spec)
-    console.print(f"[dim]writing[/] {sink_label}")
-    sink_write(out_df, sink_spec)
     console.print(f"[green]ok[/] wrote {out_df.height} rows x {out_df.width} cols -> {sink_label}")
 
 
-def _detect_pii_if_available(table: Table) -> list[PIIDetection]:
-    """Return detected PII columns when Presidio is installed."""
-    if not pii_detection_available():
-        console.print("[yellow]warn[/]: PII not checked: the optional [pii] extra is not installed")
-        return []
-    if table.data is None:
-        return []
-    from doppel.pii.detect import detect as detect_pii
-
-    return detect_pii(table.data, table.columns)
+def _dim(message: str) -> None:
+    console.print(f"[dim]{message}[/]")

@@ -331,12 +331,12 @@ def test_gen_quality_uses_full_real_for_comparison(tmp_path: Path) -> None:
 
 
 # -----------------------------------------------------------------------------
-# Conditional-path nonnull_pool is populated so leaf-miss fallback is safe.
+# Conditional-path nonnull_pool is populated, so --explain reports its size.
 # -----------------------------------------------------------------------------
 
 
 def test_cart_synth_populates_nonnull_pool_on_conditional_path() -> None:
-    """Leaf-miss fallback has observed values to sample from."""
+    """The conditional path keeps every observed value in its pool."""
     df = pl.DataFrame(
         {
             "x": list(range(40)),

@@ -133,10 +133,10 @@ ignore = [
 "urllib.request".msg = "Network clients are banned in src. There is no owner file."
 "requests".msg = "Network clients are banned in src. There is no owner file."
 "httpx".msg = "Network clients are banned in src. There is no owner file."
-"pickle".msg = "Unsafe loading is banned outside src/doppel/artifact/."
-"marshal".msg = "Unsafe loading is banned outside src/doppel/artifact/."
-"joblib".msg = "Unsafe loading is banned outside src/doppel/artifact/."
-"numpy.load".msg = "Unsafe loading is banned outside src/doppel/artifact/."
+"pickle".msg = "Code-executing deserialisation is banned. Artifacts are JSON plus a plain npz."
+"marshal".msg = "Code-executing deserialisation is banned. Artifacts are JSON plus a plain npz."
+"joblib".msg = "Code-executing deserialisation is banned. Artifacts are JSON plus a plain npz."
+"numpy.load".msg = "numpy.load is banned outside artifact/load.py, which calls it with allow_pickle=False."
 "random".msg = "Nondeterminism is banned. All randomness comes from doppel.synth.seed.Rng (owner: synth/seed.py)."
 "uuid.uuid4".msg = "Nondeterminism is banned. All randomness comes from doppel.synth.seed.Rng (owner: synth/seed.py)."
 "uuid.uuid1".msg = "Nondeterminism is banned. All randomness comes from doppel.synth.seed.Rng (owner: synth/seed.py)."
@@ -150,7 +150,7 @@ ignore = [
 
 [tool.ruff.lint.per-file-ignores]
 "src/doppel/sources/spec.py" = ["TID251"]  # --password-cmd runs a subprocess
-"src/doppel/artifact/**" = ["TID251"]  # reads the pickled artifact
+"src/doppel/artifact/load.py" = ["TID251"]  # numpy.load(..., allow_pickle=False)
 "src/doppel/synth/seed.py" = ["TID251"]  # the one numpy.random.Generator
 "src/doppel/text_policy.py" = ["TID251"]  # secrets for the hash salt
 "src/doppel/sources/sql.py" = ["TID251"]  # duckdb

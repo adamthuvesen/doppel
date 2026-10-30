@@ -10,44 +10,33 @@ from pathlib import Path
 
 import polars as pl
 import typer
-from pydantic import ValidationError
 from rich.console import Console
 from rich.table import Table as _Table
 
 from doppel.cli import labels as cli_labels
-from doppel.cli._common import (
+from doppel.cli.display import fit_progress, print_quality_summary, print_repair_summary
+from doppel.cli.options import (
     ConnectionTimeoutOpt,
     HashSaltOpt,
     NullValuesOpt,
-    compute_quality_summary,
-    fit_progress,
     parse_null_values,
-    print_quality_summary,
-    print_repair_summary,
+    parse_rows_per_table,
     resolve_source,
-    sample_frame,
 )
+from doppel.constraints.dsl import Constraint
 from doppel.constraints.engine import ConstraintReport
-from doppel.constraints.multi_where import (
-    apply_where_to_sampled_dataset,
-    resolve_where_table,
-)
 from doppel.dataset import Table
 from doppel.pii.detect import PIIDetection
-from doppel.pipeline.pii import strip_pii_if_available
-from doppel.pipeline.prepare import table_name_for_source
-from doppel.pipeline.single_table import generate_single_table
-from doppel.pipeline.sink_guard import reject_sink_matching_source
+from doppel.pipeline.multi_table import MultiTableGenerateConfig, generate_multi_table
+from doppel.pipeline.prepare import sample_frame, table_name_for_source
+from doppel.pipeline.single_table import generate_single_table, run_summary_payload
 from doppel.pipeline.types import SingleTableGenerateConfig
 from doppel.pipeline.where import merge_where_into_constraints
 from doppel.schema import multi as multi_schema
-from doppel.sinks.spec import SinkSpec, parse_sink_spec
-from doppel.sources.spec import DatabaseUri, FilePath
+from doppel.schema import toml as schema_toml_mod
+from doppel.sinks.spec import parse_sink_spec
 from doppel.synth.cart import CartSynthesizer
-from doppel.synth.hierarchy import HierarchicalSynthesizer
-from doppel.synth.seed import Rng
-from doppel.text_policy import TextPolicy, resolve_hash_salt
-from doppel.text_policy import apply as apply_text_policy
+from doppel.text_policy import TextPolicy
 
 console = Console()
 
@@ -192,20 +181,21 @@ def run(
                 "--table / --query apply only to single-table URI sources; multi-table "
                 "SQL is configured per-table in schema.toml"
             )
-        output_path = Path(output)
         _run_multi(
-            schema,
-            output_path,
-            rows,
-            seed,
-            text_policy,
-            rows_per_table,
-            where,
-            max_oversample,
-            hash_salt=hash_salt,
-            password_cmd=password_cmd,
-            connection_timeout=connection_timeout,
-            null_values=parse_null_values(null_values),
+            MultiTableGenerateConfig(
+                schema_path=schema,
+                output_dir=Path(output),
+                rows=rows,
+                seed=seed,
+                rows_per_table=parse_rows_per_table(rows_per_table),
+                where=where,
+                max_oversample=max_oversample,
+                text_policy=text_policy,
+                hash_salt=hash_salt,
+                password_cmd=password_cmd,
+                connection_timeout=connection_timeout,
+                null_values=parse_null_values(null_values),
+            )
         )
         return
 
@@ -221,67 +211,47 @@ def run(
         connection_timeout=connection_timeout,
         null_values=null_values,
     )
-    sink_spec = parse_sink_spec(output)
-    reject_sink_matching_source(source_spec, sink_spec)
     _run_single(
-        source_spec,
-        sink_spec,
-        rows,
-        schema,
-        seed,
-        fit_rows,
-        text_policy,
-        no_quality,
-        json_summary,
-        explain,
-        where,
-        max_oversample,
-        hash_salt=hash_salt,
-        connection_timeout=connection_timeout,
+        SingleTableGenerateConfig(
+            source_spec=source_spec,
+            rows=rows,
+            seed=seed,
+            fit_rows=fit_rows,
+            schema_path=schema,
+            where=where,
+            max_oversample=max_oversample,
+            text_policy=text_policy,
+            hash_salt=hash_salt,
+            connection_timeout=connection_timeout,
+            sink_spec=parse_sink_spec(output),
+            quality=not no_quality,
+        ),
+        json_summary=json_summary,
+        explain=explain,
     )
 
 
 def _run_single(
-    source_spec: FilePath | DatabaseUri,
-    sink_spec: SinkSpec,
-    rows: int,
-    schema: Path | None,
-    seed: int | None,
-    fit_rows: int | None,
-    text_policy: TextPolicy,
-    no_quality: bool,
-    json_summary: Path | None,
-    explain: bool,
-    where: str | None,
-    max_oversample: float,
-    *,
-    hash_salt: str | None = None,
-    connection_timeout: int = 300,
+    config: SingleTableGenerateConfig, *, json_summary: Path | None, explain: bool
 ) -> None:
-    from doppel.schema import toml as schema_toml_mod
-    from doppel.sinks import write as sink_write
-
-    source_label = cli_labels.source_label(source_spec)
+    assert config.sink_spec is not None
+    source_label = cli_labels.source_label(config.source_spec)
+    sink_label = cli_labels.sink_label(config.sink_spec)
     console.print(f"[dim]reading[/] {source_label}")
 
-    if schema is not None:
-        console.print(f"[dim]applying schema[/] {schema}")
-        try:
-            schema_toml = schema_toml_mod.load(schema)
-        except (ValidationError, ValueError) as exc:
-            raise typer.BadParameter(str(exc)) from exc
-        n_constraints = len(merge_where_into_constraints(schema_toml.constraints, where))
-    else:
-        n_constraints = len(merge_where_into_constraints([], where))
-
+    declared: list[Constraint] = []
+    if config.schema_path is not None:
+        console.print(f"[dim]applying schema[/] {config.schema_path}")
+        declared = schema_toml_mod.load(config.schema_path).constraints
+    n_constraints = len(merge_where_into_constraints(declared, config.where))
     if n_constraints:
         console.print(
             f"[dim]applying[/] {n_constraints} constraints via reject-resample "
-            f"(max-oversample={max_oversample:g}x)"
+            f"(max-oversample={config.max_oversample:g}x)"
         )
 
     def _sample_fit(df: pl.DataFrame, n: int | None) -> pl.DataFrame:
-        sampled = sample_frame(df, n, seed=seed, console=console, label="fit")
+        sampled = sample_frame(df, n, seed=config.seed, label="fit", notify=_dim)
         console.print(
             f"[dim]inferring schema for[/] {sampled.height} rows x {sampled.width} columns"
         )
@@ -291,232 +261,68 @@ def _run_single(
         labels = ", ".join(f"{d.name}={d.entity_type}({d.confidence:.0%})" for d in detections)
         console.print(f"[yellow]pii[/]: detected {labels}")
 
-    try:
-        with fit_progress(console) as cb:
-            console.print(
-                f"[dim]fitting CART synthesizer on[/] {table_name_for_source(source_spec)!r}"
-            )
-            result = generate_single_table(
-                SingleTableGenerateConfig(
-                    source_spec=source_spec,
-                    rows=rows,
-                    seed=seed,
-                    fit_rows=fit_rows,
-                    schema_path=schema,
-                    where=where,
-                    max_oversample=max_oversample,
-                    text_policy=text_policy,
-                    hash_salt=hash_salt,
-                    connection_timeout=connection_timeout,
-                ),
-                sample_fit=_sample_fit,
-                fit_progress=cb,
-                on_constraint_iteration=_progress_callback(where),
-                notify_fit_cap=lambda msg: console.print(f"[dim]fit-rows:[/] {msg}"),
-                notify_where_support=lambda msg: console.print(f"[yellow]warn[/]: {msg}"),
-                on_pii_detected=_on_pii_detected,
-            )
-    except ValueError as exc:
-        raise typer.BadParameter(str(exc)) from exc
+    with fit_progress(console) as cb:
+        console.print(
+            f"[dim]fitting CART synthesizer on[/] {table_name_for_source(config.source_spec)!r}"
+        )
+        result = generate_single_table(
+            config,
+            sample_fit=_sample_fit,
+            fit_progress=cb,
+            on_constraint_iteration=_progress_callback(config.where),
+            notify_fit_cap=lambda msg: console.print(f"[dim]fit-rows:[/] {msg}"),
+            notify_where_support=lambda msg: console.print(f"[yellow]warn[/]: {msg}"),
+            on_pii_detected=_on_pii_detected,
+        )
 
     if result.pii_detected:
         pii_labels = ", ".join(
             f"{d.name}={d.entity_type}({d.confidence:.0%})" for d in result.pii_detected
         )
         console.print(f"[dim]regenerating PII[/]: {pii_labels}")
-
     if explain:
         _print_explain(result.synth, result.table)
-
     if result.constraint_report is not None:
         _print_constraint_summary(result.constraint_report)
-
     print_repair_summary(console, result.synth.last_repair_summary)
-
-    if text_policy is not TextPolicy.SAMPLE:
-        console.print(f"[dim]text policy[/] {text_policy.value}")
+    if config.text_policy is not TextPolicy.SAMPLE:
+        console.print(f"[dim]text policy[/] {config.text_policy.value}")
 
     out_df = result.out_df
-    sink_label = cli_labels.sink_label(sink_spec)
-    console.print(f"[dim]writing[/] {sink_label}")
-    sink_write(out_df, sink_spec)
     console.print(f"[green]ok[/] wrote {out_df.height} rows x {out_df.width} cols -> {sink_label}")
-
-    quality_dict: dict[str, object] | None = None
-    if not no_quality:
-        summary = compute_quality_summary(
-            result.real_df, out_df, result.table.columns, sample_seed=seed or 0
-        )
-        print_quality_summary(console, summary)
-        quality_dict = {
-            "avg_marginal": summary.avg_marginal,
-            "corr_frobenius": summary.corr_frobenius,
-            "dcr_p5": summary.dcr_p5,
-            "text_leaks": [
-                {"column": leak.column, "verbatim_rate": leak.verbatim_rate}
-                for leak in summary.text_leaks
-            ],
-        }
+    if result.quality is not None:
+        print_quality_summary(console, result.quality)
 
     if json_summary is not None:
-        payload = {
-            "input_path": source_label,
-            "output_path": sink_label,
-            "rows_requested": rows,
-            "rows_written": out_df.height,
-            "cols_written": out_df.width,
-            "fit_seconds": round(result.fit_seconds, 3),
-            "sample_seconds": round(result.sample_seconds, 3),
-            "seed": seed,
-            "text_policy": text_policy.value,
-            "pii_columns_regenerated": [d.name for d in result.pii_detected],
-            "quality": quality_dict,
-        }
+        payload = run_summary_payload(
+            config, result, input_label=source_label, output_label=sink_label
+        )
         json_summary.parent.mkdir(parents=True, exist_ok=True)
         json_summary.write_text(json.dumps(payload, indent=2, default=str), encoding="utf-8")
         console.print(f"[green]ok[/] wrote JSON summary -> {json_summary}")
 
 
-def _run_multi(
-    schema_path: Path,
-    output_dir: Path,
-    rows: int,
-    seed: int | None,
-    text_policy: TextPolicy,
-    rows_per_table: str | None,
-    where: str | None,
-    max_oversample: float,
-    *,
-    hash_salt: str | None = None,
-    password_cmd: str | None = None,
-    connection_timeout: int = 300,
-    null_values: tuple[str, ...] = ("",),
-) -> None:
-    console.print(f"[dim]loading multi-table schema[/] {schema_path}")
-    try:
-        schema = multi_schema.load(schema_path)
-        dataset = multi_schema.to_dataset(
-            schema,
-            schema_path.parent,
-            password_cmd=password_cmd,
-            connection_timeout=connection_timeout,
-            null_values=null_values,
-        )
-    except (ValidationError, ValueError) as exc:
-        raise typer.BadParameter(str(exc)) from exc
-    console.print(f"[dim]read[/] {len(dataset.tables)} tables, {len(dataset.edges)} FK edges")
+def _run_multi(config: MultiTableGenerateConfig) -> None:
+    console.print(f"[dim]loading multi-table schema[/] {config.schema_path}")
 
-    where_table: str | None = None
-    if where is not None:
-        try:
-            where_table = resolve_where_table(where, dataset)
-        except ValueError as exc:
-            raise typer.BadParameter(str(exc)) from exc
+    def _on_pii_detected(table_name: str, detections: list[PIIDetection]) -> None:
+        labels = ", ".join(f"{d.name}={d.entity_type}" for d in detections)
+        console.print(f"[yellow]pii[/]: {table_name}: detected {labels}")
+
+    result = generate_multi_table(
+        config,
+        notify=_dim,
+        notify_where_scope=lambda msg: console.print(f"[yellow]note[/]: {msg}"),
+        on_pii_detected=_on_pii_detected,
+    )
+    for written in result.tables:
         console.print(
-            "[yellow]note[/]: --where applies to the named table only; "
-            "child distributions in other tables are unconditional."
+            f"[green]ok[/] {written.name}: {written.out_df.height} rows -> {written.path}"
         )
 
-    original_columns = {name: table.columns for name, table in dataset.tables.items()}
-    pii_by_table: dict[str, tuple[list[PIIDetection], list[str]]] = {}
-    for name, table in dataset.tables.items():
-        keys = {e.child_column for e in dataset.edges if e.child_table == name}
-        keys |= {e.parent_column for e in dataset.edges if e.parent_table == name}
-        if table.primary_key is not None:
-            keys.add(table.primary_key)
-        detections, stripped, order = strip_pii_if_available(table, keep=keys)
-        if detections:
-            labels = ", ".join(f"{d.name}={d.entity_type}" for d in detections)
-            console.print(f"[yellow]pii[/]: {name}: detected {labels}")
-            pii_by_table[name] = (detections, order)
-            dataset.tables[name] = stripped
 
-    console.print("[dim]fitting hierarchical synthesizer[/]")
-    synth = HierarchicalSynthesizer()
-    synth.fit(dataset, Rng.from_seed(seed))
-
-    parents = {e.child_table for e in dataset.edges}
-    roots = [name for name in dataset.tables if name not in parents]
-    overrides = _parse_rows_per_table(rows_per_table, set(roots))
-    rows_per_root = {name: overrides.get(name, rows) for name in roots}
-    console.print(f"[dim]sampling roots[/]: {rows_per_root}")
-    out_dataset = synth.sample(rows_per_root, Rng.from_seed(seed))
-
-    if where is not None and where_table is not None:
-        try:
-            out_dataset = apply_where_to_sampled_dataset(
-                out_dataset,
-                where_table,
-                where,
-                rows_per_root,
-                synth,
-                Rng.from_seed(seed),
-                max_factor=max_oversample,
-            )
-        except ValueError as exc:
-            raise typer.BadParameter(str(exc)) from exc
-
-    from doppel.sinks import write as sink_write
-
-    output_dir.mkdir(parents=True, exist_ok=True)
-    pii_rng = Rng.from_seed(seed)
-    run_salt = resolve_hash_salt(hash_salt)
-    for name, out_table in out_dataset.tables.items():
-        spec = schema.tables.get(name)
-        # `.file` may be absent (SQL-only multi-table); default to .csv when unknown.
-        if spec is not None and spec.file and spec.file.strip():
-            suffix = Path(spec.file).suffix
-        else:
-            suffix = ".csv"
-        dest = output_dir / f"{name}{suffix}"
-        assert out_table.data is not None
-        out_df = out_table.data
-        if name in pii_by_table:
-            from doppel.pii.text import restore as restore_pii
-
-            detections, order = pii_by_table[name]
-            out_df = restore_pii(out_df, detections, order, pii_rng.spawn())
-        out_df = apply_text_policy(
-            out_df,
-            original_columns[name],
-            text_policy,
-            Rng.from_seed(seed).spawn(),
-            salt=run_salt,
-        )
-        sink_write(out_df, FilePath(path=dest))
-        console.print(f"[green]ok[/] {name}: {out_df.height} rows -> {dest}")
-
-
-def _parse_rows_per_table(raw: str | None, root_names: set[str]) -> dict[str, int]:
-    """Parse `--rows-per-table name=N,other=M` into a dict, validating against known roots."""
-    if raw is None:
-        return {}
-    out: dict[str, int] = {}
-    for pair in raw.split(","):
-        pair = pair.strip()
-        if not pair:
-            continue
-        if "=" not in pair:
-            raise typer.BadParameter(f"--rows-per-table item {pair!r} must be in `name=N` form")
-        name, _, count_str = pair.partition("=")
-        name = name.strip()
-        if name not in root_names:
-            raise typer.BadParameter(
-                f"--rows-per-table references unknown root table {name!r}; "
-                f"known roots: {sorted(root_names)}"
-            )
-        try:
-            count = int(count_str.strip())
-        except ValueError as exc:
-            raise typer.BadParameter(
-                f"--rows-per-table count for {name!r} must be an integer, got {count_str!r}"
-            ) from exc
-        if count < 1:
-            raise typer.BadParameter(
-                f"--rows-per-table count for {name!r} must be >= 1, got {count}"
-            )
-        out[name] = count
-    return out
+def _dim(message: str) -> None:
+    console.print(f"[dim]{message}[/]")
 
 
 def _is_multi_table_file(path: Path) -> bool:

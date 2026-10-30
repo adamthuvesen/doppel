@@ -6,6 +6,7 @@ import typer
 
 from doppel import __version__
 from doppel.cli import artifact, diff, doctor, fit, gen, schema
+from doppel.cli.error_exits import map_errors
 
 app = typer.Typer(
     name="doppel",
@@ -15,10 +16,18 @@ app = typer.Typer(
     rich_markup_mode="rich",
 )
 
-app.command("gen", help="Generate synthetic data from an input dataset in one shot.")(gen.run)
-app.command("fit", help="Fit a synthesizer and save it as a reusable artifact.")(fit.fit)
-app.command("sample", help="Sample from a previously fitted synthesizer artifact.")(fit.sample)
-app.command("diff", help="Compare real vs. synthetic data and produce a quality report.")(diff.run)
+app.command("gen", help="Generate synthetic data from an input dataset in one shot.")(
+    map_errors(gen.run)
+)
+app.command("fit", help="Fit a synthesizer and save it as a reusable artifact.")(
+    map_errors(fit.fit)
+)
+app.command("sample", help="Sample from a previously fitted synthesizer artifact.")(
+    map_errors(fit.sample)
+)
+app.command("diff", help="Compare real vs. synthetic data and produce a quality report.")(
+    map_errors(diff.run)
+)
 app.add_typer(schema.app, name="schema", help="Inspect, infer, or validate a dataset schema.")
 app.add_typer(artifact.app, name="artifact", help="Introspect fitted `.doppel` artifact files.")
 app.command("doctor", help="Check environment, installed extras, and dependency versions.")(

@@ -67,7 +67,7 @@ out_df = restore_pii(..., Rng.from_seed(config.seed), ...)
 
 Each call roots an independent seed-tree at the same seed:
 
-1. **fit** RNG drives sklearn estimators and null-mask resampling.
+1. **fit** RNG drives sklearn estimators and the shuffle of every value pool.
 2. **sample** RNG drives leaf-sampling and is unaffected by anything fit did.
 3. **PII restore** RNG drives Faker.
 

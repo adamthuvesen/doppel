@@ -1,15 +1,23 @@
-"""Manifest for `.doppel` artifacts — versioned metadata sitting next to the pickled synthesizer."""
+"""Manifest for `.doppel` artifacts, and the names of the members next to it."""
 
 from __future__ import annotations
 
 from datetime import UTC, datetime
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
-ARTIFACT_VERSION = "doppel-artifact-v1"
+ARTIFACT_VERSION = "doppel-artifact-v2"
+
+MANIFEST_MEMBER = "manifest.json"
+MODEL_MEMBER = "model.json"
+ARRAYS_MEMBER = "arrays.npz"
+SCHEMA_JSON_MEMBER = "schema.json"
+SCHEMA_TOML_MEMBER = "schema.toml"
 
 
 class Manifest(BaseModel):
+    model_config = ConfigDict(strict=True, extra="forbid")
+
     version: str = ARTIFACT_VERSION
     synthesizer_class: str  # "cart"
     doppel_version: str

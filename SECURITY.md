@@ -12,30 +12,46 @@ files. Two trust boundaries:
 
 ### 1. `.doppel` artifact files
 
-A `.doppel` artifact is a gzipped tar of a manifest, an optional schema, and a pickled
-fitted synthesizer. A crafted pickle payload can execute arbitrary code on load.
+A `.doppel` artifact (format `doppel-artifact-v2`) is a gzipped tar of data only. It
+holds no pickle and no other executable payload:
+
+| Member | Content | Parsed by |
+| --- | --- | --- |
+| `manifest.json` | version, table name, row and column counts | strict Pydantic model |
+| `model.json` | columns, dtypes, null rates, repair rules | strict Pydantic models ([src/doppel/synth/cart_state.py](src/doppel/synth/cart_state.py)) |
+| `arrays.npz` | value pools, encoder categories, decision-tree arrays | `numpy.load(..., allow_pickle=False)` |
+| `schema.json` | column metadata, for people to read | not read at load |
+| `schema.toml` | optional embedded schema | `tomllib` and Pydantic |
+
+Each decision tree is stored as five arrays (children, split feature, threshold, and
+the missing-value direction). doppel walks those arrays itself
+([src/doppel/synth/tree.py](src/doppel/synth/tree.py)), so loading never builds an
+sklearn object.
 
 **Mitigations:**
 
-- Pickle is deserialised through a **restricted unpickler**
-  ([src/doppel/artifact/safe_pickle.py](src/doppel/artifact/safe_pickle.py)) that
-  refuses every global outside an exact `(module, name)` allowlist: the sklearn
-  tree classes, numpy array and dtype reconstructors, polars dtypes, the doppel model
-  classes, and narrow builtins. It allows no whole module and no dotted name, so
-  gadgets such as `numpy.load(..., allow_pickle=True)` or `("sklearn", "os.system")`
-  are refused, as are `os.system` / `subprocess.Popen` / `builtins.eval`.
-- Manifest is Pydantic-validated and version-checked **before** the pickle is read.
-- Tar extraction uses `getmember` + `extractfile` only — no `tarfile.extractall`, so
-  tarbomb / `..` path traversal is closed.
+- The loader refuses an unknown member, a duplicate member, a member that is not a
+  regular file, a member past its size cap, and an artifact past its total cap
+  (512 MiB). An artifact that holds `synth.pickle` (the old v1 format) is refused
+  before any member is parsed. `doppel sample` exits 2 with a message that says to refit.
+- `allow_pickle=False` makes numpy refuse an object array, so an `.npz` cannot carry
+  a pickle either.
+- Every array is checked for dtype and shape, and every tree is checked to be a
+  finite binary tree whose feature indexes fit the model. A tampered artifact fails
+  at load, not halfway through sampling.
+- `pickle`, `marshal`, and `joblib` are banned in `src/` by ruff (`TID251`), and
+  `tests/test_artifact.py` checks that no source module imports them. Only
+  `artifact/load.py` may call `numpy.load`.
+- The tar is read member by member with `extractfile`. Nothing is extracted to disk,
+  so tarbomb and `..` path traversal do not apply.
 
 **What you should still do:**
 
-- Only load `.doppel` files from trusted sources. The restricted unpickler reduces
-  risk but doesn't eliminate it — a novel exploit chain inside an allowed class is
-  still possible.
-- For an artifact from an unknown source, inspect the manifest first:
-  `tar -xzOf model.doppel manifest.json | jq`. Or use `doppel artifact info <file>`,
-  which never invokes the unpickler.
+- Treat a `.doppel` file as the source data itself (see section 3). Loading an
+  untrusted artifact cannot run code, but it can still make doppel produce whatever
+  values the artifact holds.
+- `doppel artifact info <file>` shows the manifest and member sizes without
+  rebuilding the model.
 
 ### 2. SQL connectors and credentials
 
@@ -92,6 +108,13 @@ doppel's privacy posture is **heuristic**, not formal:
   and a per-column verbatim-text fraction so you can spot row-level memorisation.
 - No differential privacy. If you need a formal privacy guarantee, doppel is not
   the right tool.
+- **A `.doppel` artifact is as sensitive as its source.** Sampling draws real values
+  from per-column pools, so the artifact holds the real non-null values of every
+  modelled column (the leaf pools, the encoder categories, and any constant). doppel
+  shuffles every pool at fit time with the seeded `Rng`, so the arrays no longer line
+  up row by row and the source table cannot be rebuilt by reading the columns side by
+  side. Each column's values are still there. Store and share a `.doppel` file under
+  the same rules as the source data.
 
 ### 3. Constraint expression evaluator
 

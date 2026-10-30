@@ -1,8 +1,9 @@
-"""Save a fitted synthesizer to a `.doppel` artifact (gzipped tar with manifest + schema + pickle).
+"""Save a fitted synthesizer to a `.doppel` artifact: a gzipped tar of JSON and one `.npz`.
 
-If a `SchemaToml` is supplied, it is embedded as `schema.toml` so `doppel sample` can
-honour declared constraints without the user re-passing them. `schema.json` always
-captures the inferred-or-merged column metadata for human inspection.
+Members: `manifest.json`, `model.json` (the synthesizer structure), `arrays.npz` (its
+values and trees), `schema.json` (column metadata for human inspection), and, when a
+`SchemaToml` is supplied, `schema.toml`, so `doppel sample` can apply declared
+constraints without the user passing them again.
 
 Write is atomic: we go through a sibling tempfile and `os.replace` only on success, so a
 failed save can never leave a truncated `.doppel` at the destination path.
@@ -13,16 +14,24 @@ from __future__ import annotations
 import io
 import json
 import os
-import pickle
 import tarfile
 import tempfile
 from dataclasses import asdict
 from pathlib import Path
 
+import numpy as np
 import tomli_w
 
 from doppel import __version__
-from doppel.artifact.manifest import Manifest
+from doppel.artifact.load import ArtifactError
+from doppel.artifact.manifest import (
+    ARRAYS_MEMBER,
+    MANIFEST_MEMBER,
+    MODEL_MEMBER,
+    SCHEMA_JSON_MEMBER,
+    SCHEMA_TOML_MEMBER,
+    Manifest,
+)
 from doppel.schema.toml import SchemaToml, to_payload
 from doppel.synth.cart import CartSynthesizer
 
@@ -36,6 +45,12 @@ def save(
 ) -> None:
     if not synth.is_fitted:
         raise ValueError("synthesizer must be fitted before saving")
+    try:
+        state, arrays = synth.to_state()
+    except ValueError as exc:
+        raise ArtifactError(f"cannot save this synthesizer: {exc}") from exc
+    arrays_buffer = io.BytesIO()
+    np.savez(arrays_buffer, allow_pickle=False, **arrays)
 
     manifest = Manifest(
         synthesizer_class="cart",
@@ -57,15 +72,12 @@ def save(
     tmp_path = Path(tmp_name)
     try:
         with tarfile.open(tmp_path, "w:gz") as tar:
-            _add_text(tar, "manifest.json", manifest.model_dump_json(indent=2))
-            _add_text(tar, "schema.json", json.dumps(schema_payload, indent=2, default=str))
+            _add_text(tar, MANIFEST_MEMBER, manifest.model_dump_json(indent=2))
+            _add_text(tar, MODEL_MEMBER, state.model_dump_json())
+            _add_bytes(tar, ARRAYS_MEMBER, arrays_buffer.getvalue())
+            _add_text(tar, SCHEMA_JSON_MEMBER, json.dumps(schema_payload, indent=2, default=str))
             if schema_toml is not None:
-                _add_text(tar, "schema.toml", tomli_w.dumps(to_payload(schema_toml)))
-            _add_bytes(
-                tar,
-                "synth.pickle",
-                pickle.dumps(synth, protocol=pickle.HIGHEST_PROTOCOL),
-            )
+                _add_text(tar, SCHEMA_TOML_MEMBER, tomli_w.dumps(to_payload(schema_toml)))
         tmp_path.replace(path)
     except BaseException:
         tmp_path.unlink(missing_ok=True)

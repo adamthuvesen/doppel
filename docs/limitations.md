@@ -16,6 +16,10 @@ Design choices, not bugs — don't "fix" these without scope agreement.
 - **`fit` refuses detected PII.** The artifact format doesn't yet carry detection
   metadata for round-trip regeneration. Use `gen` for one-shot PII regeneration.
 - **No differential privacy.** There is no `--epsilon` or formal privacy budget.
+- **A `.doppel` artifact holds real values.** It stores the real non-null values of
+  every modelled column, because sampling draws from them. The pools are shuffled at
+  fit time, so rows cannot be rejoined across columns, but the artifact is as
+  sensitive as its source. See [SECURITY.md](../SECURITY.md).
 
 Integer + float subtypes now round-trip — Int32/Int64/UInt*/Float32/Float64 all
 preserved via `_INTEGER_DTYPE_NAMES`/`_FLOAT_DTYPE_NAMES` in `synth/cart.py`.

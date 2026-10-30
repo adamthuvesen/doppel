@@ -9,7 +9,7 @@ from pydantic import ValidationError
 from rich.console import Console
 
 from doppel.cli import labels as cli_labels
-from doppel.cli._common import ConnectionTimeoutOpt, NullValuesOpt, resolve_source
+from doppel.cli.options import ConnectionTimeoutOpt, NullValuesOpt, resolve_source
 from doppel.pipeline.prepare import table_name_for_source
 from doppel.schema import toml as schema_toml
 from doppel.schema.infer import infer_table

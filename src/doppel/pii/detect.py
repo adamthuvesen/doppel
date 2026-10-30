@@ -4,9 +4,11 @@ Heuristic: sample each candidate column, run Presidio's analyzer on each value, 
 detected entity types. If a dominant entity type covers more than `min_confidence` of
 the non-null sample, mark the entire column as that PII type. Otherwise leave as TEXT.
 
-Stripping happens before the synthesizer ever sees the data — the model never trains on
-real emails / names / phone numbers, so the `.doppel` artifact carries no PII. Fake values
-are regenerated at sample time via Faker (see `doppel.pii.fake`).
+Stripping happens before the synthesizer sees the data, so `gen` never trains on the
+detected columns. Fake values are regenerated at sample time via Faker (see
+`doppel.pii.fake`). Detection is heuristic, and every column it does not flag is
+modelled from real values: a `.doppel` artifact holds real values from every modelled
+column and is as sensitive as its source.
 """
 
 from __future__ import annotations

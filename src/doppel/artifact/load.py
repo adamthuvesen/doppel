@@ -1,29 +1,53 @@
-"""Load a `.doppel` artifact: validate manifest, then unpickle the synthesizer.
+"""Load a `.doppel` artifact: validate the container, then rebuild the synthesizer from data.
 
-The pickle blob is deserialised through `safe_pickle.safe_loads`, which refuses any
-global outside an exact `(module, name)` allowlist. This blocks the standard pickle-RCE vector: a crafted `__reduce__` payload
-calling `os.system` or similar will raise `UnsafeArtifactError` before any code runs.
+The artifact holds JSON and one `.npz` of plain arrays. Strict Pydantic models parse the
+JSON, and `numpy.load(..., allow_pickle=False)` reads the arrays, so loading never
+deserialises code. A member that is unknown, duplicated, too large, or a pickle from the
+old format is refused before anything is parsed.
 
-`inspect_artifact()` is a manifest-only variant that never touches the pickle, used by
-`doppel artifact info` to surface metadata without paying the deserialisation cost or
-risk.
+`inspect_artifact()` reads only the manifest and the embedded schema. `doppel artifact info`
+uses it to show metadata without rebuilding the model.
 """
 
 from __future__ import annotations
 
+import io
 import tarfile
 import tomllib
+import zipfile
 from dataclasses import dataclass
 from pathlib import Path
 
-from doppel.artifact.manifest import ARTIFACT_VERSION, Manifest
-from doppel.artifact.safe_pickle import UnsafeArtifactError, safe_loads
+import numpy as np
+from numpy.lib.npyio import NpzFile
+from pydantic import ValidationError
+
+from doppel.artifact.manifest import (
+    ARRAYS_MEMBER,
+    ARTIFACT_VERSION,
+    MANIFEST_MEMBER,
+    MODEL_MEMBER,
+    SCHEMA_JSON_MEMBER,
+    SCHEMA_TOML_MEMBER,
+    Manifest,
+)
 from doppel.schema.toml import SchemaToml
 from doppel.synth.cart import CartSynthesizer
+from doppel.synth.cart_state import StoredCart
 
-_MAX_MANIFEST_BYTES = 1024 * 1024
-_MAX_SCHEMA_BYTES = 5 * 1024 * 1024
-_MAX_PICKLE_BYTES = 512 * 1024 * 1024
+_MIB = 1024 * 1024
+_MEMBER_LIMITS: dict[str, int] = {
+    MANIFEST_MEMBER: _MIB,
+    MODEL_MEMBER: 64 * _MIB,
+    ARRAYS_MEMBER: 512 * _MIB,
+    SCHEMA_JSON_MEMBER: 5 * _MIB,
+    SCHEMA_TOML_MEMBER: 5 * _MIB,
+}
+_REQUIRED_MEMBERS = (MANIFEST_MEMBER, MODEL_MEMBER, ARRAYS_MEMBER)
+_MAX_TOTAL_BYTES = 512 * _MIB
+_MAX_ARRAYS = 65_536
+_OLD_PICKLE_MEMBER = "synth.pickle"
+_NPZ_ERRORS = (ValueError, OSError, EOFError, zipfile.BadZipFile)
 
 
 class ArtifactError(ValueError):
@@ -32,115 +56,144 @@ class ArtifactError(ValueError):
 
 @dataclass(frozen=True)
 class ArtifactInfo:
-    """Metadata-only view of a `.doppel` artifact. Does not unpickle the synthesizer."""
+    """Metadata-only view of a `.doppel` artifact. Does not rebuild the synthesizer."""
 
     path: Path
     file_size: int
     manifest: Manifest
     schema_toml: SchemaToml | None
-    pickle_size: int
+    model_size: int
+    arrays_size: int
 
 
 def inspect_artifact(path: Path) -> ArtifactInfo:
-    """Read manifest + schema + pickle size from an artifact without unpickling.
-
-    Manifest version is validated; the pickle blob is never deserialised.
-    """
-    file_size = path.stat().st_size
-    try:
-        with tarfile.open(path, "r:gz") as tar:
-            tar.extraction_filter = tarfile.data_filter
-            manifest = _read_manifest(tar)
-            _validate(manifest)
-            schema_blob = _read_optional(tar, "schema.toml", max_bytes=_MAX_SCHEMA_BYTES)
-            try:
-                pickle_member = tar.getmember("synth.pickle")
-            except KeyError as exc:
-                raise ArtifactError("artifact is missing required member 'synth.pickle'") from exc
-            pickle_size = pickle_member.size
-    except tarfile.TarError as exc:
-        raise ArtifactError(f"{path} is not a valid doppel artifact: {exc}") from exc
-
-    schema_toml: SchemaToml | None = None
-    if schema_blob is not None:
-        schema_toml = SchemaToml.model_validate(tomllib.loads(schema_blob.decode("utf-8")))
+    """Read the manifest, the embedded schema, and the member sizes. The model stays unread."""
+    payloads, sizes = _read_members(path, read={MANIFEST_MEMBER, SCHEMA_TOML_MEMBER})
     return ArtifactInfo(
         path=path,
-        file_size=file_size,
-        manifest=manifest,
-        schema_toml=schema_toml,
-        pickle_size=pickle_size,
+        file_size=path.stat().st_size,
+        manifest=_parse_manifest(payloads[MANIFEST_MEMBER]),
+        schema_toml=_parse_schema(payloads.get(SCHEMA_TOML_MEMBER)),
+        model_size=sizes[MODEL_MEMBER],
+        arrays_size=sizes[ARRAYS_MEMBER],
     )
 
 
 def load(path: Path) -> tuple[CartSynthesizer, Manifest, SchemaToml | None]:
+    payloads, _ = _read_members(path, read=set(_MEMBER_LIMITS))
+    manifest = _parse_manifest(payloads[MANIFEST_MEMBER])
+    try:
+        state = StoredCart.model_validate_json(payloads[MODEL_MEMBER])
+    except ValidationError as exc:
+        raise ArtifactError(f"{path}: {MODEL_MEMBER} is malformed: {exc}") from exc
+    arrays = _read_arrays(payloads[ARRAYS_MEMBER])
+    try:
+        synth = CartSynthesizer.from_state(state, arrays)
+    except ValueError as exc:
+        raise ArtifactError(f"{path}: the stored synthesizer is inconsistent: {exc}") from exc
+    return synth, manifest, _parse_schema(payloads.get(SCHEMA_TOML_MEMBER))
+
+
+def _read_members(path: Path, *, read: set[str]) -> tuple[dict[str, bytes], dict[str, int]]:
+    payloads: dict[str, bytes] = {}
+    sizes: dict[str, int] = {}
     try:
         with tarfile.open(path, "r:gz") as tar:
-            tar.extraction_filter = tarfile.data_filter
-            manifest = _read_manifest(tar)
-            _validate(manifest)
-            synth_blob = _read_member(tar, "synth.pickle", max_bytes=_MAX_PICKLE_BYTES)
-            schema_blob = _read_optional(tar, "schema.toml", max_bytes=_MAX_SCHEMA_BYTES)
-    except tarfile.TarError as exc:
+            for member in tar:
+                _check_member(member, sizes)
+                sizes[member.name] = member.size
+                if member.name in read:
+                    payloads[member.name] = _read_member(tar, member)
+    except (tarfile.TarError, EOFError, OSError) as exc:
         raise ArtifactError(f"{path} is not a valid doppel artifact: {exc}") from exc
+    for name in _REQUIRED_MEMBERS:
+        if name not in sizes:
+            raise ArtifactError(f"artifact is missing required member {name!r}")
+    return payloads, sizes
 
+
+def _check_member(member: tarfile.TarInfo, seen: dict[str, int]) -> None:
+    name = member.name
+    if name == _OLD_PICKLE_MEMBER:
+        raise ArtifactError(
+            "artifact holds a pickled synthesizer from an older doppel. doppel no longer "
+            "loads pickles; refit the model with `doppel fit`."
+        )
+    limit = _MEMBER_LIMITS.get(name)
+    if limit is None:
+        raise ArtifactError(f"artifact has unexpected member {name!r}")
+    if name in seen:
+        raise ArtifactError(f"artifact has member {name!r} more than once")
+    if not member.isfile():
+        raise ArtifactError(f"artifact member {name!r} is not a regular file")
+    if member.size > limit:
+        raise ArtifactError(
+            f"artifact member {name!r} is too large: {member.size} bytes (limit {limit} bytes)"
+        )
+    if sum(seen.values()) + member.size > _MAX_TOTAL_BYTES:
+        raise ArtifactError(
+            f"artifact is too large: more than {_MAX_TOTAL_BYTES} bytes across its members"
+        )
+
+
+def _read_member(tar: tarfile.TarFile, member: tarfile.TarInfo) -> bytes:
+    handle = tar.extractfile(member)
+    if handle is None:
+        raise ArtifactError(f"could not read member {member.name!r}")
+    limit = _MEMBER_LIMITS[member.name]
+    payload = handle.read(limit + 1)
+    if len(payload) > limit:
+        raise ArtifactError(
+            f"artifact member {member.name!r} is too large: more than {limit} bytes"
+        )
+    return payload
+
+
+def _parse_manifest(payload: bytes) -> Manifest:
     try:
-        synth = safe_loads(synth_blob)
-    except UnsafeArtifactError as exc:
-        raise ArtifactError(f"{path} contains a disallowed class: {exc}") from exc
-    if not isinstance(synth, CartSynthesizer):
-        raise ArtifactError(f"artifact contains {type(synth).__name__}, expected CartSynthesizer")
-
-    schema_toml: SchemaToml | None = None
-    if schema_blob is not None:
-        schema_toml = SchemaToml.model_validate(tomllib.loads(schema_blob.decode("utf-8")))
-    return synth, manifest, schema_toml
-
-
-def _read_manifest(tar: tarfile.TarFile) -> Manifest:
-    payload = _read_member(tar, "manifest.json", max_bytes=_MAX_MANIFEST_BYTES)
-    try:
-        return Manifest.model_validate_json(payload)
-    except ValueError as exc:
+        manifest = Manifest.model_validate_json(payload)
+    except ValidationError as exc:
         raise ArtifactError(f"manifest is malformed: {exc}") from exc
-
-
-def _validate(manifest: Manifest) -> None:
     if manifest.version != ARTIFACT_VERSION:
         raise ArtifactError(
             f"unsupported artifact version: {manifest.version!r} "
-            f"(this build of doppel reads {ARTIFACT_VERSION!r})"
+            f"(this build of doppel reads {ARTIFACT_VERSION!r}); refit the model with `doppel fit`"
         )
     if manifest.synthesizer_class != "cart":
         raise ArtifactError(
             f"unknown synthesizer_class {manifest.synthesizer_class!r} "
             "(this build only loads 'cart')"
         )
+    return manifest
 
 
-def _read_member(tar: tarfile.TarFile, name: str, *, max_bytes: int | None = None) -> bytes:
-    try:
-        member = tar.getmember(name)
-    except KeyError as exc:
-        raise ArtifactError(f"artifact is missing required member {name!r}") from exc
-    if max_bytes is not None and member.size > max_bytes:
-        raise ArtifactError(
-            f"artifact member {name!r} is too large: {member.size} bytes (limit {max_bytes} bytes)"
-        )
-    handle = tar.extractfile(member)
-    if handle is None:
-        raise ArtifactError(f"could not read member {name!r}")
-    if max_bytes is None:
-        return handle.read()
-    payload = handle.read(max_bytes + 1)
-    if len(payload) > max_bytes:
-        raise ArtifactError(f"artifact member {name!r} is too large: more than {max_bytes} bytes")
-    return payload
-
-
-def _read_optional(tar: tarfile.TarFile, name: str, *, max_bytes: int) -> bytes | None:
-    try:
-        tar.getmember(name)
-    except KeyError:
+def _parse_schema(payload: bytes | None) -> SchemaToml | None:
+    if payload is None:
         return None
-    return _read_member(tar, name, max_bytes=max_bytes)
+    try:
+        return SchemaToml.model_validate(tomllib.loads(payload.decode("utf-8")))
+    except ValueError as exc:
+        raise ArtifactError(f"{SCHEMA_TOML_MEMBER} is malformed: {exc}") from exc
+
+
+def _read_arrays(payload: bytes) -> dict[str, np.ndarray]:
+    try:
+        npz = np.load(io.BytesIO(payload), allow_pickle=False)
+    except _NPZ_ERRORS as exc:
+        raise ArtifactError(f"{ARRAYS_MEMBER} is not a plain npz archive: {exc}") from exc
+    if not isinstance(npz, NpzFile):
+        raise ArtifactError(f"{ARRAYS_MEMBER} is not an npz archive")
+    with npz:
+        if npz.zip is None:
+            raise ArtifactError(f"{ARRAYS_MEMBER} is closed")
+        entries = npz.zip.infolist()
+        if len(entries) > _MAX_ARRAYS:
+            raise ArtifactError(f"{ARRAYS_MEMBER} holds more than {_MAX_ARRAYS} arrays")
+        if sum(entry.file_size for entry in entries) > _MEMBER_LIMITS[ARRAYS_MEMBER]:
+            raise ArtifactError(f"{ARRAYS_MEMBER} expands past its size limit")
+        try:
+            return {name: npz[name] for name in npz.files}
+        except _NPZ_ERRORS as exc:
+            raise ArtifactError(
+                f"{ARRAYS_MEMBER} holds an array doppel cannot read: {exc}"
+            ) from exc

@@ -78,6 +78,14 @@ np.load("x")
 np.random.default_rng(0)
 uuid.uuid4()
 PY
+# artifact/load.py owns numpy.load. No file owns pickle.
+cat >"$pkg/artifact/planted_bans.py" <<'PY'
+import pickle
+
+import numpy as np
+
+np.load("x")
+PY
 cat >"$pkg/connectorx_planted.py" <<'PY'
 import importlib
 
@@ -109,6 +117,11 @@ banned=(
 for name in "${banned[@]}"; do
   if ! grep -qF "TID251 \`$name\` is banned" <<<"$ruff_output"; then
     fail "ruff did not ban the planted $name" "$ruff_output"
+  fi
+done
+for name in pickle numpy.load; do
+  if ! grep -F "artifact/planted_bans.py" <<<"$ruff_output" | grep -qF "TID251 \`$name\` is banned"; then
+    fail "ruff did not ban $name in artifact/ outside its owner file" "$ruff_output"
   fi
 done
 

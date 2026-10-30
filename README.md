@@ -167,8 +167,9 @@ doppel artifact info sales.doppel
 ```
 
 `doppel fit` refuses sources with detected PII. Use `doppel gen` for one-shot PII
-regeneration. `.doppel` artifacts contain pickled models; only load artifacts from
-sources you trust.
+regeneration. A `.doppel` file holds JSON and plain numpy arrays, not a pickle, so
+loading it cannot run code. It does hold real values from every modelled column, so
+keep it as private as the source data.
 
 ## SQL Sources
 
@@ -282,8 +283,9 @@ that are not detected as PII may copy real strings into the output. For text-hea
 datasets, choose an explicit text policy and check the result with `doppel diff`:
 `--text-policy hash|fake|drop`.
 
-`.doppel` files use a restricted unpickler with an allowlist, but they are still model
-artifacts from code. Only load files you trust. See [SECURITY.md](SECURITY.md).
+`.doppel` files hold JSON and plain numpy arrays, so loading one cannot run code. A
+`.doppel` file holds real values from every modelled column and is as sensitive as
+its source. See [SECURITY.md](SECURITY.md).
 
 ## Limitations
 

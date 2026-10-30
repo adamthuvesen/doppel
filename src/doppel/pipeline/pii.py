@@ -23,6 +23,21 @@ def pii_regeneration_available() -> bool:
     return pii_detection_available() and importlib.util.find_spec("faker") is not None
 
 
+def detect_pii_if_available(
+    table: Table, *, notify_unchecked: Callable[[], None] | None = None
+) -> list[PIIDetection]:
+    """Detect PII columns when Presidio is installed. Detection does not need Faker."""
+    if not pii_detection_available():
+        if notify_unchecked is not None:
+            notify_unchecked()
+        return []
+    if table.data is None:
+        return []
+    from doppel.pii.detect import detect as detect_pii
+
+    return detect_pii(table.data, table.columns)
+
+
 def strip_pii_if_available(
     table: Table,
     *,

@@ -22,6 +22,24 @@ def table_name_for_source(spec: SourceSpec) -> str:
     return spec.table or "query"
 
 
+def sample_frame(
+    df: pl.DataFrame,
+    rows: int | None,
+    *,
+    seed: int | None,
+    label: str,
+    notify: Callable[[str], None] | None = None,
+) -> pl.DataFrame:
+    """Return `rows` rows of `df`, drawn with `seed`, or `df` when it is not larger."""
+    if rows is None or rows >= df.height:
+        return df
+    if notify is not None:
+        notify(f"sampling {label} rows {rows} of {df.height}")
+    # Coerce None to 0 so the sampling step is reproducible across runs even when the
+    # user omitted --seed. Polars otherwise falls back to OS entropy here.
+    return df.sample(n=rows, seed=seed if seed is not None else 0, shuffle=True)
+
+
 def read_source_dataframe(
     source_spec: SourceSpec,
     *,

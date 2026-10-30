@@ -5,8 +5,6 @@ from __future__ import annotations
 import urllib.parse
 from pathlib import Path
 
-import typer
-
 from doppel.locations import quote_table_name
 from doppel.sinks.spec import DuckDbSink, SinkSpec
 from doppel.sources.spec import DatabaseUri, SourceSpec
@@ -23,7 +21,7 @@ def reject_sink_matching_source(source: SourceSpec, sink: SinkSpec) -> None:
         return
     source_table = quote_table_name("duckdb", source.table).lower()
     if source_table == quote_table_name("duckdb", sink.table).lower():
-        raise typer.BadParameter(
+        raise ValueError(
             f"output table {sink.table!r} is the source table; "
             "write to a different table or DuckDB file"
         )

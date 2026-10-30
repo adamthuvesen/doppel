@@ -41,7 +41,7 @@ A change isn't done until `just check` is green. CI runs the same recipe, plus a
 - **Polars nullable dtypes are the canonical NULL.** Don't mix `nan`/`None`/`pd.NA`. Use `encode_feature` ([src/doppel/schema/nullable.py](src/doppel/schema/nullable.py)) when handing a Series to sklearn — median for numerics, `__doppel_null__` for categoricals.
 - **CART never sees raw nanoseconds.** Datetime columns decompose to Int64 epoch-seconds before fitting and recompose at output; route new modeling paths through [src/doppel/schema/datetime.py](src/doppel/schema/datetime.py) `decompose`/`recompose`.
 - **`primary_key` auto-promotes to `ColumnType.KEY`** so the synthesizer generates unique values rather than modelling them. Preserve this in `apply_overrides` and `multi.to_dataset`.
-- **Pickle/artifact loading is allowlisted.** `.doppel` loads go through `artifact.safe_pickle.safe_loads`; add new classes explicitly and document why. See [SECURITY.md](SECURITY.md).
+- **Artifacts hold data, never code.** A `.doppel` is JSON (strict Pydantic, `synth/cart_state.py`) plus one `.npz` read with `allow_pickle=False`. `pickle`/`marshal`/`joblib` are banned everywhere. New synthesizer state goes into `CartSynthesizer.to_state`/`from_state`, with a format-version bump in `artifact/manifest.py`. See [SECURITY.md](SECURITY.md).
 - **No new dependencies without justification.** The stack is locked: Polars + DuckDB + sklearn + scipy + Pydantic + Typer + Rich + PyArrow + Presidio + Faker + tomli-w. Python is 3.14 and the spaCy model `en_core_web_lg` is locked in `uv.lock` (never downloaded at run time).
 - **No CHANGELOG file.** Git history + GitHub Releases carry change communication.
 - **FKs are never auto-detected at gen-time.** Heuristics live only in `schema infer`, which writes them to TOML for review; multi-table `gen`/`fit` requires an explicit `[[foreign_keys]]` block.
@@ -56,7 +56,7 @@ Before editing a subsystem, read the matching doc:
 
 - **Determinism / seeding** → [docs/determinism.md](docs/determinism.md)
 - **SQL warehouse connectors (DuckDB / Snowflake / Postgres)** → [docs/sql-connectors.md](docs/sql-connectors.md)
-- **Pickle / artifact safety, privacy posture** → [SECURITY.md](SECURITY.md)
+- **Artifact format and safety, privacy posture** → [SECURITY.md](SECURITY.md)
 - **Known limitations** → [docs/limitations.md](docs/limitations.md)
 
 If a doc disagrees with code, fix the doc in the same change.

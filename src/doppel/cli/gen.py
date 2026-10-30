@@ -28,11 +28,12 @@ from doppel.cli._common import (
 from doppel.constraints.engine import ConstraintReport
 from doppel.dataset import Table
 from doppel.pii.detect import PIIDetection
+from doppel.pipeline.pii import strip_pii_if_available
 from doppel.pipeline.single_table import generate_single_table
 from doppel.pipeline.types import SingleTableGenerateConfig
 from doppel.pipeline.where import merge_where_into_constraints
 from doppel.schema import multi as multi_schema
-from doppel.sources.spec import DatabaseUri, FilePath, SinkSpec
+from doppel.sources.spec import DatabaseUri, FilePath, SinkSpec, reject_sink_matching_source
 from doppel.synth.cart import CartSynthesizer
 from doppel.synth.hierarchy import HierarchicalSynthesizer
 from doppel.synth.multi_where import (
@@ -219,6 +220,7 @@ def run(
         connection_timeout=connection_timeout,
     )
     sink_spec = resolve_sink(output)
+    reject_sink_matching_source(source_spec, sink_spec)
     _run_single(
         source_spec,
         sink_spec,
@@ -407,6 +409,20 @@ def _run_multi(
             "child distributions in other tables are unconditional."
         )
 
+    original_columns = {name: table.columns for name, table in dataset.tables.items()}
+    pii_by_table: dict[str, tuple[list[PIIDetection], list[str]]] = {}
+    for name, table in dataset.tables.items():
+        keys = {e.child_column for e in dataset.edges if e.child_table == name}
+        keys |= {e.parent_column for e in dataset.edges if e.parent_table == name}
+        if table.primary_key is not None:
+            keys.add(table.primary_key)
+        detections, stripped, order = strip_pii_if_available(table, keep=keys)
+        if detections:
+            labels = ", ".join(f"{d.name}={d.entity_type}" for d in detections)
+            console.print(f"[yellow]pii[/]: {name}: detected {labels}")
+            pii_by_table[name] = (detections, order)
+            dataset.tables[name] = stripped
+
     console.print("[dim]fitting hierarchical synthesizer[/]")
     synth = HierarchicalSynthesizer()
     synth.fit(dataset, Rng.from_seed(seed))
@@ -435,6 +451,7 @@ def _run_multi(
     from doppel.sinks import write as sink_write
 
     output_dir.mkdir(parents=True, exist_ok=True)
+    pii_rng = Rng.from_seed(seed)
     for name, out_table in out_dataset.tables.items():
         spec = schema.tables.get(name)
         # `.file` may be absent (SQL-only multi-table); default to .csv when unknown.
@@ -444,8 +461,14 @@ def _run_multi(
             suffix = ".csv"
         dest = output_dir / f"{name}{suffix}"
         assert out_table.data is not None
+        out_df = out_table.data
+        if name in pii_by_table:
+            from doppel.pii.text import restore as restore_pii
+
+            detections, order = pii_by_table[name]
+            out_df = restore_pii(out_df, detections, order, pii_rng.spawn())
         out_df = apply_text_policy(
-            out_table.data, out_table.columns, text_policy, Rng.from_seed(seed).spawn()
+            out_df, original_columns[name], text_policy, Rng.from_seed(seed).spawn()
         )
         sink_write(out_df, FilePath(path=dest))
         console.print(f"[green]ok[/] {name}: {out_df.height} rows -> {dest}")

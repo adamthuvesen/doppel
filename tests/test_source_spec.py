@@ -151,6 +151,14 @@ def test_redact_uri_with_password() -> None:
     assert ":***@" in redacted
 
 
+@pytest.mark.parametrize("param", ["password", "pwd", "token", "Password"])
+def test_redact_uri_query_secrets(param: str) -> None:
+    redacted = redact_uri(f"postgres://user@host/db?sslmode=require&{param}=s3cret")
+    assert "s3cret" not in redacted
+    assert f"{param}=***" in redacted
+    assert "sslmode=require" in redacted
+
+
 def test_expand_env_vars_passes_through(monkeypatch: pytest.MonkeyPatch) -> None:
     # No ${} markers means unchanged.
     s = "snowflake://user@account/db/s?warehouse=WH"

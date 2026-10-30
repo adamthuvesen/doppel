@@ -77,6 +77,100 @@ def test_safe_pickle_refuses_non_artifact_doppel_globals() -> None:
         safe_loads(payload)
 
 
+def _global_call(module: str, name: str, *args: object) -> bytes:
+    """Pickle `module.name(*args)` through STACK_GLOBAL, as a crafted artifact would."""
+    body = pickle.dumps(args, protocol=4)[2:-1]
+    if body.startswith(pickle.FRAME):
+        body = body[9:]
+    return (
+        pickle.PROTO
+        + b"\x04"
+        + pickle.SHORT_BINUNICODE
+        + bytes([len(module)])
+        + module.encode()
+        + pickle.SHORT_BINUNICODE
+        + bytes([len(name)])
+        + name.encode()
+        + pickle.STACK_GLOBAL
+        + body
+        + pickle.REDUCE
+        + pickle.STOP
+    )
+
+
+def _bypass_payloads(marker: Path) -> dict[str, bytes]:
+    evil_npy = marker.with_suffix(".pkl")
+    evil_npy.write_bytes(pickle.dumps(_TouchMarker(marker)))
+    return {
+        "sklearn-dotted-os-system": _global_call("sklearn", "os.system", f"touch '{marker}'"),
+        "numpy-runstring": _global_call(
+            "numpy.testing._private.utils",
+            "runstring",
+            f"open({str(marker)!r}, 'w').close()",
+            {},
+        ),
+        "numpy-load-allow-pickle": _global_call("numpy", "load", str(evil_npy), None, True),
+    }
+
+
+class _TouchMarker:
+    def __init__(self, marker: Path) -> None:
+        self.marker = marker
+
+    def __reduce__(self) -> tuple[object, tuple[object, ...]]:
+        import os
+
+        return os.system, (f"touch '{self.marker}'",)
+
+
+@pytest.mark.parametrize(
+    "payload_name", ["sklearn-dotted-os-system", "numpy-runstring", "numpy-load-allow-pickle"]
+)
+def test_safe_pickle_blocks_allowlist_bypasses(tmp_path: Path, payload_name: str) -> None:
+    marker = tmp_path / "pwned"
+    payload = _bypass_payloads(marker)[payload_name]
+    with pytest.raises(UnsafeArtifactError, match="not in doppel artifact allowlist"):
+        safe_loads(payload)
+    assert not marker.exists()
+
+
+def test_sample_cli_rejects_crafted_artifact_cleanly(tmp_path: Path) -> None:
+    from typer.testing import CliRunner
+
+    from doppel.cli import app
+
+    df = pl.DataFrame({"x": list(range(10)), "y": [float(i) for i in range(10)]})
+    synth = CartSynthesizer()
+    synth.fit(Dataset.single(infer_table("t", df)), Rng.from_seed(0))
+    artifact = tmp_path / "evil.doppel"
+    save(synth, artifact, training_row_count=df.height)
+    marker = tmp_path / "pwned"
+    _replace_member(artifact, "synth.pickle", _bypass_payloads(marker)["sklearn-dotted-os-system"])
+
+    result = CliRunner().invoke(
+        app, ["sample", str(artifact), "--output", str(tmp_path / "out.csv"), "--rows", "5"]
+    )
+    assert result.exit_code == 2
+    assert "disallowed class" in result.output
+    assert not isinstance(result.exception, UnsafeArtifactError)
+    assert not marker.exists()
+
+
+def _replace_member(artifact: Path, member: str, blob: bytes) -> None:
+    members: dict[str, bytes] = {}
+    with tarfile.open(artifact, "r:gz") as tar:
+        for m in tar.getmembers():
+            handle = tar.extractfile(m)
+            assert handle is not None
+            members[m.name] = handle.read()
+    members[member] = blob
+    with tarfile.open(artifact, "w:gz") as tar:
+        for name, data in members.items():
+            info = tarfile.TarInfo(name=name)
+            info.size = len(data)
+            tar.addfile(info, io.BytesIO(data))
+
+
 def test_artifact_load_rejects_malicious_pickle(tmp_path: Path) -> None:
     """A tampered `.doppel` artifact carrying an exploit payload must fail before exec."""
     # First produce a legitimate artifact so we have a valid manifest.

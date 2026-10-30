@@ -19,10 +19,11 @@ fitted synthesizer. A crafted pickle payload can execute arbitrary code on load.
 
 - Pickle is deserialised through a **restricted unpickler**
   ([src/doppel/artifact/safe_pickle.py](src/doppel/artifact/safe_pickle.py)) that
-  refuses any class outside an explicit allowlist (sklearn, numpy, polars, scipy,
-  the narrow doppel model classes needed by the artifact format, narrow stdlib).
-  Standard `os.system` / `subprocess.Popen` / `builtins.eval` pickle-RCE payloads
-  are blocked before any code runs.
+  refuses every global outside an exact `(module, name)` allowlist: the sklearn
+  tree classes, numpy array and dtype reconstructors, polars dtypes, the doppel model
+  classes, and narrow builtins. It allows no whole module and no dotted name, so
+  gadgets such as `numpy.load(..., allow_pickle=True)` or `("sklearn", "os.system")`
+  are refused, as are `os.system` / `subprocess.Popen` / `builtins.eval`.
 - Manifest is Pydantic-validated and version-checked **before** the pickle is read.
 - Tar extraction uses `getmember` + `extractfile` only — no `tarfile.extractall`, so
   tarbomb / `..` path traversal is closed.
@@ -77,11 +78,15 @@ radius as Parquet. Doppel is a synth tool, not an ELT tool.
 
 doppel's privacy posture is **heuristic**, not formal:
 
-- When the `[pii]` extra is installed and Presidio detects PII in a `gen` source,
-  those columns are stripped before fit and regenerated via Faker at sample time —
-  no real names / emails / phone numbers reach the output.
+- When the `[pii]` extra is installed and Presidio detects PII in a `gen` source
+  (single-table or multi-table), those columns are stripped before fit and
+  regenerated via Faker at sample time. Presidio scans free-text columns and
+  string categorical columns. A categorical tagged only as a location (a country
+  or city column) is kept, because it is an analysis dimension. Primary-key and
+  foreign-key columns are never stripped.
 - `doppel fit` refuses any source where Presidio detects PII; the artifact format
-  doesn't carry detection metadata to support round-trip regeneration.
+  doesn't carry detection metadata to support round-trip regeneration. Without the
+  `[pii]` extra, `fit` prints a warning that PII was not checked.
 - Free-text columns without detected PII are sampled with replacement and **may leak
   original values**. `doppel diff` reports a distance-to-closest-record percentile
   and a per-column verbatim-text fraction so you can spot row-level memorisation.

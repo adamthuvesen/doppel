@@ -139,3 +139,69 @@ def test_pii_detection_module_returns_struct() -> None:
     d = PIIDetection(name="x", entity_type="EMAIL_ADDRESS", confidence=0.8)
     assert d.name == "x"
     assert d.entity_type == "EMAIL_ADDRESS"
+
+
+_MANAGERS = ["Margaret Thornbury", "Desmond Okafor", "Ingrid Vasquez", "Tobias Lindqvist"]
+
+
+def test_doppel_gen_multi_table_regenerates_pii(tmp_path: Path) -> None:
+    n = 50
+    pl.DataFrame(
+        {
+            "user_id": list(range(1, n + 1)),
+            "email": [f"real.person{i}@corp-mail.com" for i in range(n)],
+            "account_manager": [_MANAGERS[i % 4] for i in range(n)],
+            "age": [20 + (i % 40) for i in range(n)],
+        }
+    ).write_csv(tmp_path / "users.csv")
+    pl.DataFrame(
+        {
+            "order_id": list(range(1, 2 * n + 1)),
+            "user_id": [1 + (i % n) for i in range(2 * n)],
+            "amount": [float(i % 17) for i in range(2 * n)],
+        }
+    ).write_csv(tmp_path / "orders.csv")
+    schema = tmp_path / "schema.toml"
+    schema.write_text(
+        """
+[tables.users]
+file = "users.csv"
+primary_key = "user_id"
+
+[tables.orders]
+file = "orders.csv"
+primary_key = "order_id"
+
+[[foreign_keys]]
+child_table = "orders"
+child_column = "user_id"
+parent_table = "users"
+parent_column = "user_id"
+"""
+    )
+    out_dir = tmp_path / "out"
+    result = runner.invoke(
+        app,
+        ["gen", "--schema", str(schema), "--rows", "40", "--output", str(out_dir), "--seed", "3"],
+    )
+    assert result.exit_code == 0, result.output
+
+    users = pl.read_csv(out_dir / "users.csv")
+    orders = pl.read_csv(out_dir / "orders.csv")
+    assert users.columns == ["user_id", "email", "account_manager", "age"]
+    assert users.height == 40
+    real_emails = {f"real.person{i}@corp-mail.com" for i in range(n)}
+    assert real_emails.isdisjoint(users["email"].to_list())
+    assert set(_MANAGERS).isdisjoint(users["account_manager"].to_list())
+    assert set(orders["user_id"].to_list()) <= set(users["user_id"].to_list())
+
+
+def test_detect_keeps_location_categoricals() -> None:
+    df = pl.DataFrame(
+        {
+            "country": ["Sweden", "Germany", "France", "Spain"] * 25,
+            "account_manager": _MANAGERS * 25,
+        }
+    )
+    detections = detect(df, infer_table("t", df).columns)
+    assert [(d.name, d.entity_type) for d in detections] == [("account_manager", "PERSON")]

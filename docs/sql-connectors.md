@@ -24,7 +24,10 @@ normal warehouse tooling.
 
 For every URI source, pass exactly one selector:
 
-- `--table NAME` — reads the whole table
+- `--table NAME` — reads the whole table. Doppel quotes every part of a dotted
+  name (`schema.table`). A bare part folds as the vendor folds an unquoted name:
+  upper case on Snowflake, lower case on Postgres. Wrap a part in double quotes
+  (`'"MixedCase"'`) to keep its exact case. DuckDB sources open read-only.
 - `--query "SELECT ..."` — reads the result of a custom query (developer-trust input)
 
 For DuckDB, the path goes in the URI path component. For Snowflake and Postgres,
@@ -63,32 +66,53 @@ driver. It should not appear in logs, error messages, or `--explain` output.
 When you set `--fit-rows N` on a SQL source, doppel asks the database for the
 sample instead of reading the full table first:
 
-| Vendor    | Generated SQL                                                              |
-| --------- | -------------------------------------------------------------------------- |
-| Snowflake | `SELECT * FROM (<base>) SAMPLE (N ROWS) SEED (S)`                          |
-| Postgres  | `SELECT * FROM (<base>) AS t TABLESAMPLE BERNOULLI(p) REPEATABLE(S) LIMIT N` |
-| DuckDB    | `SELECT * FROM (<base>) AS t USING SAMPLE N ROWS (REPEATABLE S)`           |
-| Other     | `SELECT * FROM (<base>) AS t ORDER BY RANDOM() LIMIT N` (with warning)     |
+| Vendor    | Source             | Generated SQL                                                       |
+| --------- | ------------------ | ------------------------------------------------------------------- |
+| Snowflake | `--table`, seed    | `SELECT * FROM <table> SAMPLE SYSTEM (p) SEED (S) LIMIT N`          |
+| Snowflake | no seed, or query  | `SELECT * FROM (<base>) SAMPLE (N ROWS)`                            |
+| Postgres  | `--table`          | `SELECT * FROM <table> TABLESAMPLE BERNOULLI (p) REPEATABLE (S) LIMIT N` |
+| Postgres  | `--query`          | `SELECT * FROM (<query>) AS t ORDER BY RANDOM() LIMIT N`            |
+| DuckDB    | any, seed          | `SELECT * FROM (<base>) AS t USING SAMPLE reservoir(N ROWS) REPEATABLE (S)` |
+| DuckDB    | any, no seed       | `SELECT * FROM (<base>) AS t USING SAMPLE N ROWS`                   |
+| Other     | any                | `SELECT * FROM (<base>) AS t ORDER BY RANDOM() LIMIT N`             |
 
-For Postgres, `p` is computed from the row-count estimate with a 5% oversample
-because `TABLESAMPLE BERNOULLI` returns approximate row counts. The client-side
-`LIMIT N` keeps the final fit set at the requested size. Determinism for the
-ANSI fallback depends on the vendor's `RANDOM()` seedability; doppel warns when
-that fallback is used.
+`p` is a percentage computed from the row-count estimate with a 5% oversample,
+because fraction samples return approximate row counts. `LIMIT N` keeps the fit
+set at the requested size. When the row count is unknown, `p` is 100, so the
+read takes the first N rows of the table and is not a random sample.
 
-Setting `--seed` propagates through every supported vendor's seed clause.
+The vendors restrict where a seed can go:
+
+- Postgres applies `TABLESAMPLE` only to a table, not to a subquery.
+- Snowflake accepts `SEED` only with `SYSTEM` or `BLOCK` fraction sampling, not
+  with a fixed-size `N ROWS` sample, and not on a view or subquery. A seeded
+  `--table` read of a Snowflake view therefore fails at the warehouse. Read a
+  view with `--query "SELECT * FROM my_view"` instead, which gives an unseeded
+  sample. Snowflake takes a seed from 0 to 2147483647, so doppel passes
+  `S mod 2^31`. `SYSTEM` samples blocks of rows, not single rows.
+- The Snowflake forms follow the Snowflake `SAMPLE` documentation and have not
+  been run against a warehouse. The Postgres forms are checked with the real
+  Postgres parser (pglast). The DuckDB forms run in the test suite.
+
+When a seed is set but the chosen form cannot take one (a `--query` read on
+Snowflake or Postgres, or another vendor), doppel warns that the output may not
+be byte-identical across runs.
 
 ## Row-count probe
 
 Before reading from Snowflake or Postgres, doppel runs a cheap row-count
 query against the catalog:
 
-- Snowflake: `SELECT ROW_COUNT FROM INFORMATION_SCHEMA.TABLES`
+- Snowflake: `SELECT MAX(ROW_COUNT) FROM INFORMATION_SCHEMA.TABLES`
 - Postgres: `SELECT reltuples::BIGINT FROM pg_class`
 - For `--query`: `SELECT COUNT(*) FROM (<query>) AS _doppel_probe`
 
-If the estimate exceeds **1,000,000 rows** and `--fit-rows` is not set, doppel
-fails before reading the data. The error names the row count and suggests
+If the estimate exceeds **1,000,000 rows**, or the count is unknown, and
+`--fit-rows` is not set, doppel fails before reading the data. The count is
+unknown when the probe returns no value, when Postgres `reltuples` is negative
+(the table was never analysed), or when Snowflake returns 0 or NULL (a view
+has no `ROW_COUNT`). Multi-table schemas cannot pass `--fit-rows`, so they
+cannot read such a table. The error names the row count and suggests
 `--fit-rows N` to sample or `--fit-rows 0` to fit on the whole table. The latter
 can move a lot of data over the network.
 

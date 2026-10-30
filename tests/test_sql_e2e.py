@@ -109,7 +109,7 @@ def test_postgres_read_uses_connectorx(
     )
     assert result.exit_code == 0, result.stdout
     kwargs = patch_snowflake.call_args.kwargs
-    assert "public.users" in kwargs["query"]
+    assert '"public"."users"' in kwargs["query"]
 
 
 def test_pushdown_sql_sent_to_driver_snowflake(
@@ -141,8 +141,9 @@ def test_pushdown_sql_sent_to_driver_snowflake(
     # The final read sends the sampled SQL; the probe call (if any) goes
     # through duckdb, not connectorx. Only the last call here is the data read.
     sent_sql = patch_snowflake.call_args.kwargs["query"]
-    assert "SAMPLE (1000 ROWS)" in sent_sql
+    assert "SAMPLE SYSTEM (" in sent_sql
     assert "SEED (42)" in sent_sql
+    assert "LIMIT 1000" in sent_sql
 
 
 def test_pushdown_sql_sent_to_driver_postgres(
@@ -173,7 +174,7 @@ def test_pushdown_sql_sent_to_driver_postgres(
     assert result.exit_code == 0, result.stdout
     sent_sql = patch_snowflake.call_args.kwargs["query"]
     assert "TABLESAMPLE BERNOULLI" in sent_sql
-    assert "REPEATABLE(42)" in sent_sql
+    assert "REPEATABLE (42)" in sent_sql
 
 
 # ---------- Row-count probe ----------
@@ -267,6 +268,40 @@ def test_row_count_probe_under_threshold_proceeds(
     assert result.exit_code == 0, result.stdout
 
 
+def _table_spec(uri: str, table: str) -> DatabaseUri:
+    spec = parse_source_spec(uri, table=table, query=None, password_cmd=None)
+    assert isinstance(spec, DatabaseUri)
+    return spec
+
+
+@pytest.mark.parametrize(
+    ("uri", "probe_value"),
+    [
+        ("postgres://user@host/db", -1),
+        ("snowflake://user@account/db/schema?warehouse=WH", 0),
+        ("snowflake://user@account/db/schema?warehouse=WH", None),
+    ],
+)
+def test_row_count_probe_unknown_count_requires_fit_rows(
+    patch_snowflake: MagicMock, uri: str, probe_value: int | None
+) -> None:
+    patch_snowflake.return_value = pl.DataFrame({"c": [probe_value]})
+    spec = _table_spec(uri, "users")
+    with pytest.raises(typer.BadParameter, match="unknown number of rows"):
+        source_sql.read(spec, fit_rows=None, seed=None, timeout=0)
+    assert patch_snowflake.call_count == 1
+
+
+def test_row_count_probe_unknown_count_proceeds_with_fit_rows(
+    patch_snowflake: MagicMock, mock_df: pl.DataFrame
+) -> None:
+    patch_snowflake.side_effect = [pl.DataFrame({"c": [-1]}), mock_df]
+    spec = _table_spec("postgres://user@host/db", "users")
+    df = source_sql.read(spec, fit_rows=50, seed=1, timeout=0)
+    assert df.height == mock_df.height
+    assert "TABLESAMPLE BERNOULLI (100.0000)" in patch_snowflake.call_args.kwargs["query"]
+
+
 # ---------- Sink rejection ----------
 
 
@@ -312,14 +347,14 @@ def test_connection_error_redacts_password(mock_df: pl.DataFrame) -> None:
     """If the driver raises, the error message must not contain the raw password."""
 
     def raise_with_pw(**kwargs: Any) -> pl.DataFrame:
-        raise RuntimeError("connection refused")
+        raise RuntimeError(f"connection refused for {kwargs['uri']}")
 
     with (
         patch("doppel.sources.sql.pl.read_database_uri", side_effect=raise_with_pw),
         patch("doppel.sources.sql._probe_row_count", return_value=100),
     ):
         spec = parse_source_spec(
-            "snowflake://user:hunter2@account/db/s?warehouse=WH",
+            "snowflake://user:hunter2@account/db/s?warehouse=WH&token=t0ken&PWD=s3cret",
             table="USERS",
             query=None,
             password_cmd=None,
@@ -327,8 +362,12 @@ def test_connection_error_redacts_password(mock_df: pl.DataFrame) -> None:
         assert isinstance(spec, DatabaseUri)
         with pytest.raises(WarehouseConnectionError) as exc_info:
             source_sql.read(spec, fit_rows=None, seed=1, timeout=300)
-        assert "hunter2" not in str(exc_info.value)
-        assert ":***@" in str(exc_info.value)
+        message = str(exc_info.value)
+        for secret in ("hunter2", "t0ken", "s3cret"):
+            assert secret not in message
+        assert ":***@" in message
+        assert exc_info.value.__cause__ is None
+        assert exc_info.value.__suppress_context__
 
 
 # ---------- Missing [sql] extra (simulated) ----------

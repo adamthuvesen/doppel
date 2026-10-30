@@ -9,10 +9,13 @@ from __future__ import annotations
 
 import importlib
 import importlib.util
+from pathlib import Path
 
 import polars as pl
 import pytest
+from typer.testing import CliRunner
 
+from doppel.cli import app
 from doppel.dataset import Table
 from doppel.pii.detect import PIIDetection
 from doppel.pipeline import pii
@@ -73,3 +76,19 @@ def test_fit_detects_pii_when_presidio_is_installed_without_faker(
     fit_module = importlib.import_module("doppel.cli.fit")
 
     assert fit_module._detect_pii_if_available(_text_table()) == [detection]
+
+
+def test_fit_warns_that_pii_was_not_checked_without_extra(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    fit_module = importlib.import_module("doppel.cli.fit")
+    monkeypatch.setattr(fit_module, "pii_detection_available", lambda: False)
+    csv = tmp_path / "src.csv"
+    pl.DataFrame({"id": list(range(30)), "v": [i % 5 for i in range(30)]}).write_csv(csv)
+
+    result = CliRunner().invoke(
+        app, ["fit", str(csv), "--output", str(tmp_path / "m.doppel"), "--seed", "1"]
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "PII not checked" in result.output

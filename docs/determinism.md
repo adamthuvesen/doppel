@@ -78,14 +78,17 @@ byte-identical output. Tested in `tests/test_where_cli.py::test_gen_where_is_det
 When the input is a database URI, `--seed` propagates into the warehouse's
 sample clause:
 
-- Snowflake: `SAMPLE (N ROWS) SEED (S)` — fully seedable; same seed and
-  same source row order yields the same sample.
-- Postgres: `TABLESAMPLE BERNOULLI(p) REPEATABLE(S)` — seedable; the
-  client-side `LIMIT N` keeps the exact-row-count contract.
-- DuckDB: `USING SAMPLE N ROWS (REPEATABLE S)` — seedable.
-- ANSI fallback (`ORDER BY RANDOM() LIMIT N`) for any other vendor:
-  determinism is vendor-dependent. Doppel emits a one-line stderr
-  warning when this branch fires.
+- Snowflake: a `--table` read uses `SAMPLE SYSTEM (p) SEED (S)` on the
+  base table plus `LIMIT N`. A `--query` read cannot take a seed.
+- Postgres: a `--table` read uses `TABLESAMPLE BERNOULLI (p) REPEATABLE (S)`
+  plus `LIMIT N`. A `--query` read uses `ORDER BY RANDOM()` and cannot take
+  a seed.
+- DuckDB: `USING SAMPLE reservoir(N ROWS) REPEATABLE (S)` — seedable.
+- Any other vendor: `ORDER BY RANDOM() LIMIT N`; determinism is
+  vendor-dependent.
+
+Doppel warns when a seed is set but the chosen form cannot take one.
+[docs/sql-connectors.md](sql-connectors.md) lists every form.
 
 The pushdown SQL builders in `src/doppel/sources/sql.py::build_pushdown_sql`
 are pure functions; the unit tests in `tests/test_sql_pushdown.py` cover

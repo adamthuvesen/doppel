@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import importlib.util
 import warnings
-from collections.abc import Callable
+from collections.abc import Callable, Collection
 
 from doppel.dataset import Table
 from doppel.pii.detect import PIIDetection
@@ -27,8 +27,12 @@ def strip_pii_if_available(
     table: Table,
     *,
     on_detected: Callable[[list[PIIDetection]], None] | None = None,
+    keep: Collection[str] = (),
 ) -> tuple[list[PIIDetection], Table, list[str]]:
     """Detect and strip PII when the optional ``pii`` extra is installed.
+
+    Columns in ``keep`` are never stripped. Multi-table synthesis passes its key
+    columns here, because the foreign-key edges need them.
 
     Without the extra this is a no-op: free text is left untouched and a warning is
     emitted. Use ``doppel diff`` (DCR percentiles, per-column verbatim_rate) to check
@@ -52,7 +56,7 @@ def strip_pii_if_available(
 
     if table.data is None:
         return unchanged
-    detections = detect_pii(table.data, table.columns)
+    detections = [d for d in detect_pii(table.data, table.columns) if d.name not in keep]
     if not detections:
         return unchanged
     if on_detected is not None:

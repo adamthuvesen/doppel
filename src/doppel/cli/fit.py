@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING
 import typer
 from rich.console import Console
 
+from doppel.artifact import ArtifactError
 from doppel.artifact import load as load_artifact
 from doppel.artifact import save as save_artifact
 from doppel.cli import labels as cli_labels
@@ -175,7 +176,10 @@ def sample(
 ) -> None:
     sink_spec = resolve_sink(output)
     console.print(f"[dim]loading[/] {artifact}")
-    synth, manifest, schema_toml = load_artifact(artifact)
+    try:
+        synth, manifest, schema_toml = load_artifact(artifact)
+    except ArtifactError as exc:
+        raise typer.BadParameter(str(exc)) from exc
     console.print(
         f"[dim]artifact[/] {manifest.synthesizer_class!r} fit on "
         f"{manifest.training_row_count} rows x {manifest.training_column_count} cols "
@@ -212,7 +216,10 @@ def sample(
 
 def _detect_pii_if_available(table: Table) -> list[PIIDetection]:
     """Return detected PII columns when Presidio is installed."""
-    if not pii_detection_available() or table.data is None:
+    if not pii_detection_available():
+        console.print("[yellow]warn[/]: PII not checked: the optional [pii] extra is not installed")
+        return []
+    if table.data is None:
         return []
     from doppel.pii.detect import detect as detect_pii
 

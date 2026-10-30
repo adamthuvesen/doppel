@@ -1,6 +1,6 @@
-"""PII detection over TEXT columns using Microsoft Presidio.
+"""PII detection over TEXT and string CATEGORICAL columns using Microsoft Presidio.
 
-Heuristic: sample each TEXT column, run Presidio's analyzer on each value, and tally
+Heuristic: sample each candidate column, run Presidio's analyzer on each value, and tally
 detected entity types. If a dominant entity type covers more than `min_confidence` of
 the non-null sample, mark the entire column as that PII type. Otherwise leave as TEXT.
 
@@ -43,6 +43,11 @@ SUPPORTED_ENTITIES: frozenset[str] = frozenset(
 )
 
 
+# A categorical column of countries or cities is an analysis dimension, not PII, and
+# Presidio tags it LOCATION. Regenerating it would destroy its distribution.
+_CATEGORICAL_ENTITIES: frozenset[str] = SUPPORTED_ENTITIES - {"LOCATION"}
+
+
 # Cap per-cell text length so a column of multi-MB blobs doesn't hang spaCy.
 # Presidio runtime scales ~linearly with input length and the heuristic doesn't
 # need more than the first paragraph to spot an email / phone / SSN.
@@ -57,8 +62,8 @@ def detect(
     min_confidence: float = 0.6,
     max_chars: int = _MAX_ANALYZE_CHARS,
 ) -> list[PIIDetection]:
-    """Return one `PIIDetection` per TEXT column that looks like PII."""
-    candidates = [c for c in columns if c.type is ColumnType.TEXT and c.name in df.columns]
+    """Return one `PIIDetection` per TEXT or string CATEGORICAL column that looks like PII."""
+    candidates = [c for c in columns if c.name in df.columns and _is_candidate(c, df)]
     if not candidates:
         return []
     analyzer: Any = _analyzer()
@@ -85,9 +90,16 @@ def detect(
             continue
         top_entity = max(entity_score, key=lambda k: entity_score[k])
         confidence = min(1.0, entity_score[top_entity] / len(sample))
-        if confidence >= min_confidence and top_entity in SUPPORTED_ENTITIES:
+        supported = SUPPORTED_ENTITIES if col.type is ColumnType.TEXT else _CATEGORICAL_ENTITIES
+        if confidence >= min_confidence and top_entity in supported:
             out.append(PIIDetection(name=col.name, entity_type=top_entity, confidence=confidence))
     return out
+
+
+def _is_candidate(column: Column, df: pl.DataFrame) -> bool:
+    if column.type is ColumnType.TEXT:
+        return True
+    return column.type is ColumnType.CATEGORICAL and df[column.name].dtype == pl.String
 
 
 @lru_cache(maxsize=1)

@@ -1,24 +1,19 @@
-"""Restricted pickle unpickling — refuse anything outside an explicit allowlist.
+"""Restricted pickle unpickling — refuse anything outside an exact allowlist.
 
 Naked `pickle.loads` on an untrusted `.doppel` artifact is RCE: an attacker can ship a
 `__reduce__` payload that runs arbitrary code (`os.system`, `subprocess`, ...) before any
 type or value check runs. This module's `RestrictedUnpickler` overrides `find_class` and
-refuses anything that isn't in our explicit allowlist of modules / classes we actually
-need to round-trip a fitted `CartSynthesizer`.
+refuses every `(module, name)` pair that is not listed below.
 
-The allowlist covers:
-  - `builtins.{dict,list,tuple,set,frozenset,bool,int,float,str,bytes,bytearray,
-              complex,type,object,NoneType,slice}`
-  - `collections.{OrderedDict,defaultdict,deque,Counter}`
-  - the narrow set of `doppel` classes that make up a fitted artifact
-  - any class under `numpy.*` (needed for ndarrays, dtypes, scalar types)
-  - any class under `sklearn.*` (needed for DecisionTree* and their internal Tree class)
-  - any class under `polars.*` (needed for datetime dtype round-trip)
-  - `scipy.*` (sklearn pulls in scipy.sparse and related types via dependency)
+The allowlist is exact. Module prefixes are not enough: `numpy`, `sklearn`, and `scipy`
+expose callables such as `numpy.load(..., allow_pickle=True)` and
+`numpy.testing._private.utils.runstring`, and protocol 4 resolves a dotted name such as
+`("sklearn", "os.system")` through attribute access. A dotted name is always refused.
 
-If you load a `.doppel` file produced by an older/newer doppel version and it pulls in a
-class outside this allowlist, the load will refuse with a clear error message naming the
-offending class. That's the intended behaviour — better a loud refusal than a silent RCE.
+The set was derived by recording every global that real artifacts reference (the test
+suite plus `doppel fit` on `examples/saas_accounts.csv` and a frame covering every
+supported dtype). An artifact that needs a class outside this set fails with a clear
+error naming the class. That is the intended behaviour: a loud refusal, not a silent RCE.
 """
 
 from __future__ import annotations
@@ -41,17 +36,16 @@ _ALLOWED_BUILTINS: frozenset[str] = frozenset(
         "bytes",
         "bytearray",
         "complex",
-        "type",
-        "object",
         "NoneType",
         "slice",
     }
 )
 
-_ALLOWED_COLLECTIONS: frozenset[str] = frozenset({"OrderedDict", "defaultdict", "deque", "Counter"})
-
-_ALLOWED_DOPPEL_GLOBALS: frozenset[tuple[str, str]] = frozenset(
+_ALLOWED_GLOBALS: frozenset[tuple[str, str]] = frozenset(
     {
+        *(("builtins", name) for name in _ALLOWED_BUILTINS),
+        *(("collections", name) for name in ("OrderedDict", "defaultdict", "deque", "Counter")),
+        ("_codecs", "encode"),
         ("doppel.schema.datetime", "CalendarFeature"),
         ("doppel.schema.types", "Column"),
         ("doppel.schema.types", "ColumnType"),
@@ -65,14 +59,46 @@ _ALLOWED_DOPPEL_GLOBALS: frozenset[tuple[str, str]] = frozenset(
         ("doppel.synth.cart_repair", "RepairSummary"),
         ("doppel.synth.cart_repair", "CountBound"),
         ("doppel.synth.cart_repair", "MissingFlag"),
+        ("numpy", "dtype"),
+        ("numpy", "ndarray"),
+        *(
+            (f"numpy.{core}.{module}", name)
+            for core in ("_core", "core")
+            for module, name in (
+                ("multiarray", "_reconstruct"),
+                ("multiarray", "scalar"),
+                ("numeric", "_frombuffer"),
+            )
+        ),
+        ("sklearn.tree._classes", "DecisionTreeClassifier"),
+        ("sklearn.tree._classes", "DecisionTreeRegressor"),
+        ("sklearn.tree._tree", "Tree"),
+        ("polars.series.series", "Series"),
+        *(
+            ("polars.datatypes.classes", name)
+            for name in (
+                "Boolean",
+                "Categorical",
+                "Categories",
+                "Date",
+                "Datetime",
+                "Enum",
+                "Float32",
+                "Float64",
+                "Int8",
+                "Int16",
+                "Int32",
+                "Int64",
+                "Int128",
+                "Null",
+                "String",
+                "UInt8",
+                "UInt16",
+                "UInt32",
+                "UInt64",
+            )
+        ),
     }
-)
-
-_ALLOWED_MODULE_PREFIXES: tuple[str, ...] = (
-    "numpy",
-    "sklearn",
-    "polars",
-    "scipy",
 )
 
 
@@ -82,18 +108,8 @@ class UnsafeArtifactError(pickle.UnpicklingError):
 
 class RestrictedUnpickler(pickle.Unpickler):
     def find_class(self, module: str, name: str) -> Any:
-        if module == "builtins" and name in _ALLOWED_BUILTINS:
+        if "." not in name and (module, name) in _ALLOWED_GLOBALS:
             return super().find_class(module, name)
-        if module == "collections" and name in _ALLOWED_COLLECTIONS:
-            return super().find_class(module, name)
-        if module == "_codecs" and name == "encode":
-            # numpy uses _codecs.encode to pickle dtype names; required for ndarray roundtrip.
-            return super().find_class(module, name)
-        if (module, name) in _ALLOWED_DOPPEL_GLOBALS:
-            return super().find_class(module, name)
-        for prefix in _ALLOWED_MODULE_PREFIXES:
-            if module == prefix or module.startswith(prefix + "."):
-                return super().find_class(module, name)
         raise UnsafeArtifactError(
             f"refusing to unpickle {module}.{name}: not in doppel artifact allowlist. "
             "If this is a legitimate doppel artifact from a newer release, upgrade. "

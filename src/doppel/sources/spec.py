@@ -34,6 +34,10 @@ _SINK_SUPPORTED_SCHEMES: frozenset[str] = frozenset(["duckdb"])
 _AUTH_REQUIRED_SCHEMES: frozenset[str] = frozenset(["snowflake", "postgres", "postgresql"])
 
 _ENV_VAR_RE = re.compile(r"\$\{([A-Z_][A-Z0-9_]*)\}")
+_SECRET_QUERY_PARAM_RE = re.compile(r"(^|&)(password|pwd|token)=([^&]*)", re.IGNORECASE)
+_IDENTIFIER_PART = r'"(?:[^"]|"")+"|[^."]+'
+_IDENTIFIER_PART_RE = re.compile(_IDENTIFIER_PART)
+_DOTTED_IDENTIFIER_RE = re.compile(rf"(?:{_IDENTIFIER_PART})(?:\.(?:{_IDENTIFIER_PART}))*")
 
 
 @dataclass(frozen=True)
@@ -83,21 +87,80 @@ def expand_env_vars(value: str) -> str:
     return _ENV_VAR_RE.sub(_substitute, value)
 
 
-def redact_uri(uri: str) -> str:
-    """Return a log-safe form of `uri` with the password substituted by `:***`.
+def table_name_parts(scheme: str, name: str) -> list[str]:
+    """Split a dotted table name into unquoted parts, folded as the vendor folds them.
 
-    Operates on the netloc only — query strings, paths, and fragments are
-    untouched (passwords don't live there)."""
+    A bare part folds to upper case on Snowflake and lower case on Postgres, which
+    matches how each vendor resolves an unquoted identifier. A part the user wrapped
+    in double quotes keeps its exact case."""
+    if not _DOTTED_IDENTIFIER_RE.fullmatch(name):
+        raise typer.BadParameter(f"invalid table name {name!r}")
+    parts: list[str] = []
+    for match in _IDENTIFIER_PART_RE.finditer(name):
+        part = match.group(0)
+        if part.startswith('"'):
+            parts.append(part[1:-1].replace('""', '"'))
+        elif scheme == "snowflake":
+            parts.append(part.upper())
+        elif scheme in {"postgres", "postgresql"}:
+            parts.append(part.lower())
+        else:
+            parts.append(part)
+    return parts
+
+
+def quote_table_name(scheme: str, name: str) -> str:
+    """Return `name` as a double-quoted, dot-joined SQL identifier for `scheme`."""
+    return ".".join(_quote_identifier(part) for part in table_name_parts(scheme, name))
+
+
+def _quote_identifier(part: str) -> str:
+    return '"' + part.replace('"', '""') + '"'
+
+
+def reject_sink_matching_source(source: SourceSpec, sink: SinkSpec) -> None:
+    """Refuse a DuckDB sink that would overwrite the table it reads from."""
+    if not (isinstance(source, DatabaseUri) and isinstance(sink, DuckDbSink)):
+        return
+    if source.scheme != "duckdb" or source.table is None:
+        return
+    source_path = Path(urllib.parse.urlsplit(source.raw_uri).path)
+    if source_path.resolve() != sink.path.resolve():
+        return
+    source_table = quote_table_name("duckdb", source.table).lower()
+    if source_table == quote_table_name("duckdb", sink.table).lower():
+        raise typer.BadParameter(
+            f"output table {sink.table!r} is the source table; "
+            "write to a different table or DuckDB file"
+        )
+
+
+def redact_uri(uri: str) -> str:
+    """Return a log-safe form of `uri`: the netloc password becomes `:***`, and
+    the `password`, `pwd`, and `token` query parameters become `***`."""
     parsed = urllib.parse.urlsplit(uri)
-    if parsed.password is None:
+    netloc = parsed.netloc
+    if parsed.password is not None:
+        user = parsed.username or ""
+        host = parsed.hostname or ""
+        port = f":{parsed.port}" if parsed.port is not None else ""
+        netloc = f"{user}:***@{host}{port}"
+    query = _SECRET_QUERY_PARAM_RE.sub(r"\1\2=***", parsed.query)
+    if netloc == parsed.netloc and query == parsed.query:
         return uri
-    user = parsed.username or ""
-    host = parsed.hostname or ""
-    port = f":{parsed.port}" if parsed.port is not None else ""
-    new_netloc = f"{user}:***@{host}{port}"
-    return urllib.parse.urlunsplit(
-        (parsed.scheme, new_netloc, parsed.path, parsed.query, parsed.fragment)
-    )
+    return urllib.parse.urlunsplit((parsed.scheme, netloc, parsed.path, query, parsed.fragment))
+
+
+def redact_text(text: str, raw_uri: str) -> str:
+    """Remove the raw URI and each secret it carries from `text`, such as a driver error."""
+    redacted = text.replace(raw_uri, redact_uri(raw_uri))
+    parsed = urllib.parse.urlsplit(raw_uri)
+    secrets = [parsed.password] if parsed.password else []
+    secrets += [m.group(3) for m in _SECRET_QUERY_PARAM_RE.finditer(parsed.query) if m.group(3)]
+    for secret in secrets:
+        for form in {secret, urllib.parse.unquote(secret), urllib.parse.unquote_plus(secret)}:
+            redacted = redacted.replace(form, "***")
+    return redacted
 
 
 def _replace_password(uri: str, password: str) -> str:
@@ -338,5 +401,9 @@ __all__ = [
     "expand_env_vars",
     "parse_sink_spec",
     "parse_source_spec",
+    "quote_table_name",
+    "redact_text",
     "redact_uri",
+    "reject_sink_matching_source",
+    "table_name_parts",
 ]

@@ -17,63 +17,81 @@ from typing import TYPE_CHECKING, Any, cast
 import polars as pl
 
 from doppel.sources.errors import RowCountProbeError, WarehouseConnectionError
-from doppel.sources.spec import DatabaseUri, emit_redacted_log
+from doppel.sources.spec import (
+    DatabaseUri,
+    emit_redacted_log,
+    quote_table_name,
+    redact_text,
+    table_name_parts,
+)
 
 if TYPE_CHECKING:
     pass
 
 ROW_COUNT_THRESHOLD = 1_000_000
-# Postgres TABLESAMPLE BERNOULLI returns approximate row counts; oversample
-# by 5% and `LIMIT N` client-side so users get exactly the row count they
-# asked for. Documented in docs/sql-connectors.md.
-_POSTGRES_OVERSAMPLE = 1.05
+# Fraction samples (Postgres BERNOULLI, Snowflake SYSTEM) return approximate row
+# counts; oversample by 5% and `LIMIT N` so users get the row count they asked
+# for. Documented in docs/sql-connectors.md.
+_FRACTION_OVERSAMPLE = 1.05
+# Snowflake accepts a SEED from 0 to 2147483647 inclusive.
+_SNOWFLAKE_SEED_MODULUS = 2**31
 
 
 def build_pushdown_sql(
     scheme: str,
-    base_query: str,
+    *,
+    table: str | None,
+    query: str | None,
     fit_rows: int | None,
     seed: int | None,
     row_count_estimate: int | None = None,
 ) -> tuple[str, bool]:
-    """Wrap `base_query` in a per-vendor sample clause when `fit_rows` is set.
+    """Build the read SQL, with a per-vendor sample clause when `fit_rows` is set.
 
-    Returns `(sql, ansi_fallback_used)`. The fallback flag tells callers to
-    emit a determinism-caveat warning."""
+    Returns `(sql, unseeded)`. `unseeded` tells callers that the vendor cannot
+    honour the seed for this source, so they emit a determinism-caveat warning.
+
+    Postgres `TABLESAMPLE` and Snowflake `SEED` apply only to a base table, so
+    a `--query` read on those vendors uses an unseeded form."""
+    base_query = _base_query(scheme, table=table, query=query)
     if fit_rows is None:
         return base_query, False
     inner = base_query.strip().rstrip(";")
-    if scheme == "snowflake":
-        seed_clause = f" SEED ({seed})" if seed is not None else ""
-        sql = f"SELECT * FROM ({inner}) SAMPLE ({fit_rows} ROWS){seed_clause}"
-        return sql, False
-    if scheme in {"postgres", "postgresql"}:
-        # Compute probability from row-count estimate; clamp to (0, 100].
-        if row_count_estimate and row_count_estimate > 0:
-            probability = min(100.0, 100.0 * fit_rows * _POSTGRES_OVERSAMPLE / row_count_estimate)
-        else:
-            probability = 100.0
-        seed_clause = f" REPEATABLE({seed})" if seed is not None else ""
-        # Quote the probability as a fixed number (Postgres requires it inline).
-        sql = (
-            f"SELECT * FROM ({inner}) AS _doppel_t "
-            f"TABLESAMPLE BERNOULLI({probability:.4f}){seed_clause} "
-            f"LIMIT {fit_rows}"
-        )
-        return sql, False
     if scheme == "duckdb":
-        seed_clause = f" REPEATABLE {seed}" if seed is not None else ""
-        sql = (
+        if seed is None:
+            return f"SELECT * FROM ({inner}) AS _doppel_t USING SAMPLE {fit_rows} ROWS", False
+        return (
             f"SELECT * FROM ({inner}) AS _doppel_t "
-            f"USING SAMPLE {fit_rows} ROWS ({seed_clause.strip()})"
-            if seed is not None
-            else f"SELECT * FROM ({inner}) AS _doppel_t USING SAMPLE {fit_rows} ROWS"
+            f"USING SAMPLE reservoir({fit_rows} ROWS) REPEATABLE ({seed})",
+            False,
         )
-        return sql, False
-    # ANSI fallback for unsupported vendors. Determinism depends on the vendor's
-    # RANDOM() seedability, so the caller warns.
+    if scheme == "snowflake":
+        if table is None or seed is None:
+            return f"SELECT * FROM ({inner}) SAMPLE ({fit_rows} ROWS)", seed is not None
+        probability = _sample_percent(fit_rows, row_count_estimate)
+        return (
+            f"SELECT * FROM {quote_table_name(scheme, table)} "
+            f"SAMPLE SYSTEM ({probability:.4f}) SEED ({seed % _SNOWFLAKE_SEED_MODULUS}) "
+            f"LIMIT {fit_rows}",
+            False,
+        )
+    if scheme in {"postgres", "postgresql"} and table is not None:
+        probability = _sample_percent(fit_rows, row_count_estimate)
+        seed_clause = f" REPEATABLE ({seed})" if seed is not None else ""
+        return (
+            f"SELECT * FROM {quote_table_name(scheme, table)} "
+            f"TABLESAMPLE BERNOULLI ({probability:.4f}){seed_clause} LIMIT {fit_rows}",
+            False,
+        )
     sql = f"SELECT * FROM ({inner}) AS _doppel_t ORDER BY RANDOM() LIMIT {fit_rows}"
     return sql, True
+
+
+def _sample_percent(fit_rows: int, row_count_estimate: int | None) -> float:
+    """Sample percentage for a fraction sample, oversampled so `LIMIT` gets `fit_rows`."""
+    if row_count_estimate is None or row_count_estimate <= 0:
+        return 100.0
+    return min(100.0, 100.0 * fit_rows * _FRACTION_OVERSAMPLE / row_count_estimate)
 
 
 def build_count_sql(scheme: str, *, table: str | None, query: str | None) -> str:
@@ -85,21 +103,22 @@ def build_count_sql(scheme: str, *, table: str | None, query: str | None) -> str
     if table is None:
         raise ValueError("build_count_sql requires either `table` or `query`")
     if scheme == "snowflake":
-        # ROW_COUNT in INFORMATION_SCHEMA is millisecond-cheap. Strip schema
-        # qualification if the user passed `SCHEMA.TABLE`.
-        last_segment = table.split(".")[-1].upper()
+        # ROW_COUNT in INFORMATION_SCHEMA is millisecond-cheap. It is NULL for a view.
+        last_segment = table_name_parts(scheme, table)[-1]
         return (
-            "SELECT COALESCE(MAX(ROW_COUNT), 0) AS c "
+            "SELECT MAX(ROW_COUNT) AS c "
             "FROM INFORMATION_SCHEMA.TABLES "
-            f"WHERE UPPER(TABLE_NAME) = '{last_segment}'"
+            f"WHERE TABLE_NAME = {_string_literal(last_segment)}"
         )
     if scheme in {"postgres", "postgresql"}:
-        # reltuples is the planner's estimate; cheap and good enough for the
-        # safety net. Quoting with `::regclass` resolves schema-qualified names.
-        return f"SELECT reltuples::BIGINT AS c FROM pg_class WHERE oid = '{table}'::regclass"
-    if scheme == "duckdb":
-        return f"SELECT COUNT(*) AS c FROM {table}"
-    return f"SELECT COUNT(*) AS c FROM {table}"
+        # reltuples is the planner's estimate: -1 until the table is analysed.
+        regclass = _string_literal(quote_table_name(scheme, table))
+        return f"SELECT reltuples::BIGINT AS c FROM pg_class WHERE oid = {regclass}::regclass"
+    return f"SELECT COUNT(*) AS c FROM {quote_table_name(scheme, table)}"
+
+
+def _string_literal(value: str) -> str:
+    return "'" + value.replace("'", "''") + "'"
 
 
 def read(
@@ -118,20 +137,24 @@ def read(
     Wraps every driver exception as `WarehouseConnectionError` with the
     redacted URI so traceback chains never carry the raw password."""
     emit_redacted_log(spec)
-    base_query = _base_query(spec)
 
     row_count_estimate: int | None = None
     if spec.scheme in {"snowflake", "postgres", "postgresql"}:
         row_count_estimate = _probe_row_count(spec, timeout=timeout)
-        if row_count_estimate is not None:
-            _enforce_row_count_threshold(spec, row_count_estimate, fit_rows)
+        _enforce_row_count_threshold(spec, row_count_estimate, fit_rows)
 
-    sql, fallback = build_pushdown_sql(spec.scheme, base_query, fit_rows, seed, row_count_estimate)
-    if fallback and seed is not None:
+    sql, unseeded = build_pushdown_sql(
+        spec.scheme,
+        table=spec.table,
+        query=spec.query,
+        fit_rows=fit_rows,
+        seed=seed,
+        row_count_estimate=row_count_estimate,
+    )
+    if unseeded and seed is not None:
         warnings.warn(
-            f"using ANSI sample fallback for scheme {spec.scheme!r}; determinism "
-            "depends on the vendor's RANDOM() seedability — output may not be "
-            "byte-identical across runs",
+            f"the {spec.scheme!r} sample for this source cannot take a seed; "
+            "output may not be byte-identical across runs",
             UserWarning,
             stacklevel=2,
         )
@@ -141,48 +164,50 @@ def read(
     return _read_via_connectorx(spec, sql, timeout=timeout)
 
 
-def _base_query(spec: DatabaseUri) -> str:
-    """The user's selection — either `SELECT * FROM <table>` or the raw --query.
-
-    Single-table source. The pushdown wrapper turns this into a sampled query
-    if `fit_rows` is set."""
-    if spec.query is not None:
-        return spec.query
-    if spec.table is not None:
-        return f"SELECT * FROM {spec.table}"
+def _base_query(scheme: str, *, table: str | None, query: str | None) -> str:
+    """The user's selection — either `SELECT * FROM <table>` or the raw --query."""
+    if query is not None:
+        return query
+    if table is not None:
+        return f"SELECT * FROM {quote_table_name(scheme, table)}"
     raise ValueError("DatabaseUri must have either `table` or `query` set")
 
 
-def _enforce_row_count_threshold(spec: DatabaseUri, estimate: int, fit_rows: int | None) -> None:
-    """If the table is huge and the user didn't ask to sample, refuse to read.
+def _enforce_row_count_threshold(
+    spec: DatabaseUri, estimate: int | None, fit_rows: int | None
+) -> None:
+    """If the table is huge or its size is unknown and the user didn't ask to
+    sample, refuse to read.
 
     The 1M threshold is a safety net: streaming a billion-row Snowflake table
-    to fit 25k rows is a $5k mistake. Users with intent can opt in via
-    `--fit-rows N` (sample to N) or `--fit-rows 0` (fit on the whole thing)."""
+    to fit 25k rows is a $5k mistake. An unknown count (`None`: a view, or a
+    Postgres table that was never analysed) counts as over the threshold.
+    Users with intent can opt in via `--fit-rows N` (sample to N) or
+    `--fit-rows 0` (fit on the whole thing)."""
     import typer
 
-    if estimate <= ROW_COUNT_THRESHOLD:
+    if estimate is not None and estimate <= ROW_COUNT_THRESHOLD:
         return
+    size = "an unknown number of" if estimate is None else f"~{estimate:,}"
     if fit_rows is not None:
-        # User opted in explicitly. Emit a one-line stderr warning for full-fit.
         if fit_rows == 0:
             warnings.warn(
-                f"reading full table from {spec.uri} (~{estimate:,} rows); "
+                f"reading full table from {spec.uri} ({size} rows); "
                 "this streams every row over the network — consider --fit-rows N",
                 UserWarning,
                 stacklevel=3,
             )
         return
     raise typer.BadParameter(
-        f"table at {spec.uri} has ~{estimate:,} rows; pass --fit-rows N to "
+        f"table at {spec.uri} has {size} rows; pass --fit-rows N to "
         "sample, or --fit-rows 0 to fit on the whole table"
     )
 
 
 def _probe_row_count(spec: DatabaseUri, *, timeout: int) -> int | None:
-    """Run the cheap row-count query. Returns None on benign probe failure
-    (unknown table, permission issue) so we don't block the user from reading
-    a table whose catalog we can't see — the threshold check then doesn't fire."""
+    """Run the cheap row-count query. Returns None when the count is unknown:
+    no row, NULL, a negative Postgres `reltuples`, or a Snowflake 0 (which a
+    view or a missing catalog entry also returns)."""
     sql = build_count_sql(spec.scheme, table=spec.table, query=spec.query)
     try:
         if spec.scheme == "duckdb":
@@ -199,7 +224,10 @@ def _probe_row_count(spec: DatabaseUri, *, timeout: int) -> int | None:
     raw = df.row(0)[0]
     if raw is None:
         return None
-    return int(raw)
+    count = int(raw)
+    if count < 0 or (count == 0 and spec.scheme == "snowflake"):
+        return None
+    return count
 
 
 def _read_duckdb(spec: DatabaseUri, sql: str, *, timeout: int) -> pl.DataFrame:
@@ -222,7 +250,7 @@ def _read_duckdb(spec: DatabaseUri, sql: str, *, timeout: int) -> pl.DataFrame:
         ) from exc
 
     def _do_read() -> pl.DataFrame:
-        con = duckdb.connect(db_path)
+        con = duckdb.connect(db_path, read_only=db_path != ":memory:")
         try:
             result = con.execute(sql)
             description = result.description
@@ -274,7 +302,8 @@ def _read_via_connectorx(spec: DatabaseUri, sql: str, *, timeout: int) -> pl.Dat
             )
             return cast("pl.DataFrame", df)
         except Exception as exc:
-            raise WarehouseConnectionError(f"failed to read from {spec.uri}: {exc}") from exc
+            detail = redact_text(str(exc), spec.raw_uri)
+            raise WarehouseConnectionError(f"failed to read from {spec.uri}: {detail}") from None
 
     return _run_with_timeout(_do_read, timeout=timeout, spec=spec)
 

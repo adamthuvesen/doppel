@@ -1,8 +1,7 @@
 """Load a `.doppel` artifact: validate manifest, then unpickle the synthesizer.
 
 The pickle blob is deserialised through `safe_pickle.safe_loads`, which refuses any
-class outside an explicit allowlist (sklearn / numpy / polars / doppel / scipy + safe
-builtins). This blocks the standard pickle-RCE vector: a crafted `__reduce__` payload
+global outside an exact `(module, name)` allowlist. This blocks the standard pickle-RCE vector: a crafted `__reduce__` payload
 calling `os.system` or similar will raise `UnsafeArtifactError` before any code runs.
 
 `inspect_artifact()` is a manifest-only variant that never touches the pickle, used by

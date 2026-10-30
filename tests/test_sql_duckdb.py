@@ -336,3 +336,110 @@ def test_no_table_or_query_rejected(duckdb_fixture: Path, tmp_path: Path) -> Non
     # command failed (exit 2) AND no output file was produced.
     assert result.exit_code == 2
     assert not out.exists()
+
+
+def _duckdb_tables(db: Path) -> set[str]:
+    con = duckdb.connect(str(db), read_only=True)
+    try:
+        return {row[0] for row in con.execute("SELECT table_name FROM duckdb_tables()").fetchall()}
+    finally:
+        con.close()
+
+
+@pytest.fixture
+def duckdb_with_secrets(duckdb_fixture: Path) -> Path:
+    con = duckdb.connect(str(duckdb_fixture))
+    con.execute("CREATE TABLE secrets AS SELECT 'hunter2' AS pw")
+    con.close()
+    return duckdb_fixture
+
+
+def test_source_table_injection_does_not_run(duckdb_with_secrets: Path, tmp_path: Path) -> None:
+    result = CliRunner().invoke(
+        app,
+        [
+            "gen",
+            f"duckdb:///{duckdb_with_secrets}",
+            "--table",
+            "users; DROP TABLE secrets",
+            "-n",
+            "10",
+            "-o",
+            str(tmp_path / "out.csv"),
+            "--no-quality",
+        ],
+    )
+    assert result.exit_code != 0
+    assert "secrets" in _duckdb_tables(duckdb_with_secrets)
+
+
+def test_duckdb_source_opens_read_only(duckdb_with_secrets: Path, tmp_path: Path) -> None:
+    result = CliRunner().invoke(
+        app,
+        [
+            "gen",
+            f"duckdb:///{duckdb_with_secrets}",
+            "--query",
+            "DROP TABLE secrets",
+            "-n",
+            "10",
+            "-o",
+            str(tmp_path / "out.csv"),
+            "--no-quality",
+        ],
+    )
+    assert result.exit_code != 0
+    assert "secrets" in _duckdb_tables(duckdb_with_secrets)
+
+
+def test_sink_table_injection_does_not_run(duckdb_fixture: Path, tmp_path: Path) -> None:
+    sink_db = tmp_path / "sink.db"
+    con = duckdb.connect(str(sink_db))
+    con.execute("CREATE TABLE users AS SELECT 1 AS id")
+    con.close()
+    table = "t2 AS SELECT 1 AS q; DROP TABLE users; CREATE TABLE t3"
+    result = CliRunner().invoke(
+        app,
+        [
+            "gen",
+            f"duckdb:///{duckdb_fixture}",
+            "--table",
+            "users",
+            "-n",
+            "10",
+            "-o",
+            f"duckdb:///{sink_db}?table={table}",
+            "--seed",
+            "1",
+            "--no-quality",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    assert _duckdb_tables(sink_db) == {"users", table}
+
+
+@pytest.mark.parametrize("sink_table", ["users", "USERS", '"users"'])
+def test_sink_matching_source_is_refused(
+    duckdb_fixture: Path, tmp_path: Path, sink_table: str
+) -> None:
+    con = duckdb.connect(str(duckdb_fixture), read_only=True)
+    before = con.execute("SELECT count(*) FROM users").fetchone()
+    con.close()
+    result = CliRunner().invoke(
+        app,
+        [
+            "gen",
+            f"duckdb:///{duckdb_fixture}",
+            "--table",
+            "users",
+            "-n",
+            "10",
+            "-o",
+            f"duckdb:///{duckdb_fixture}?table={sink_table}",
+            "--no-quality",
+        ],
+    )
+    assert result.exit_code == 2
+    con = duckdb.connect(str(duckdb_fixture), read_only=True)
+    assert con.execute("SELECT count(*) FROM users").fetchone() == before
+    con.close()

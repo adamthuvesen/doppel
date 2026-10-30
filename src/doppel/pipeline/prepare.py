@@ -16,7 +16,7 @@ from doppel.sources import read as source_read
 from doppel.sources.spec import DatabaseUri, FilePath, SourceSpec
 
 
-def _table_name_for_source(spec: SourceSpec) -> str:
+def table_name_for_source(spec: SourceSpec) -> str:
     if isinstance(spec, FilePath):
         return spec.path.stem
     return spec.table or "query"
@@ -57,7 +57,7 @@ def build_training_table(
     source_spec: SourceSpec,
     schema_path: Path | None,
 ) -> PreparedTrainingTable:
-    table_name = _table_name_for_source(source_spec)
+    table_name = table_name_for_source(source_spec)
     table = infer_table(table_name, fit_df)
     schema_toml: SchemaToml | None = None
     if schema_path is not None:

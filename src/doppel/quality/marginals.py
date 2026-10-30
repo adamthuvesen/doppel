@@ -166,7 +166,7 @@ def _ks(col: Column, real: pl.Series, synth: pl.Series) -> float:
     try:
         real_arr = _finite(to_float_array(col, real.drop_nulls()))
         synth_arr = _finite(to_float_array(col, synth.drop_nulls()))
-    except (TypeError, ValueError, pl.exceptions.PolarsError):
+    except TypeError, ValueError, pl.exceptions.PolarsError:
         return float("nan")
     if real_arr.size == 0 or synth_arr.size == 0:
         return float("nan")

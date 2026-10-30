@@ -99,7 +99,7 @@ def _pair_association(df: pl.DataFrame, a: Column, b: Column) -> float:
 def _safe_association(compute: Callable[[], float]) -> float:
     try:
         return compute()
-    except (TypeError, ValueError, pl.exceptions.PolarsError):
+    except TypeError, ValueError, pl.exceptions.PolarsError:
         return 0.0
 
 

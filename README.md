@@ -1,6 +1,6 @@
 # doppel
 
-![License](https://img.shields.io/github/license/adamthuvesen/doppel) ![Python](https://img.shields.io/badge/python-3.11%2B-blue)
+![License](https://img.shields.io/github/license/adamthuvesen/doppel) ![Python](https://img.shields.io/badge/python-3.14%2B-blue)
 
 doppel makes synthetic tabular data from real datasets.
 

@@ -18,7 +18,6 @@ from doppel.cli._common import (
     NullValuesOpt,
     fit_progress,
     print_repair_summary,
-    resolve_sink,
     resolve_source,
     sample_frame,
 )
@@ -28,6 +27,7 @@ from doppel.pipeline.fit_rows import AUTO_FIT_CAP, AUTO_FIT_MULTIPLIER
 from doppel.pipeline.pii import pii_detection_available
 from doppel.pipeline.prepare import build_training_table, read_source_dataframe
 from doppel.sinks import write as sink_write
+from doppel.sources.spec import parse_sink_spec
 from doppel.synth.cart import CartSynthesizer
 from doppel.synth.seed import Rng
 from doppel.text_policy import TextPolicy
@@ -61,11 +61,6 @@ def fit(
         readable=True,
         help="Optional schema.toml (embedded into the artifact for use at sample time).",
     ),
-    model: str = typer.Option(
-        "cart",
-        "--model",
-        help="Synthesizer model. Currently only 'cart' is supported.",
-    ),
     seed: int | None = typer.Option(None, "--seed", help="Deterministic RNG seed."),
     fit_rows: int | None = typer.Option(
         None,
@@ -96,9 +91,6 @@ def fit(
     connection_timeout: ConnectionTimeoutOpt = 300,
     null_values: NullValuesOpt = None,
 ) -> None:
-    if model != "cart":
-        raise typer.BadParameter(f"model={model!r} is not supported by this build. Use 'cart'.")
-
     source_spec = resolve_source(
         input_path,
         table=sql_table,
@@ -179,7 +171,7 @@ def sample(
     ),
     hash_salt: HashSaltOpt = None,
 ) -> None:
-    sink_spec = resolve_sink(output)
+    sink_spec = parse_sink_spec(output)
     console.print(f"[dim]loading[/] {artifact}")
     try:
         synth, manifest, schema_toml = load_artifact(artifact)

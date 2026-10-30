@@ -469,7 +469,7 @@ class CartSynthesizer:
             cs = _fit_column(col, source_dtype, features, target, rng)
             synths.append(cs)
             feat_values = cs.encoder.transform(target)
-            features = features.with_columns(pl.Series(col.name, feat_values, dtype=pl.Float64))
+            features = _add_feature(features, pl.Series(col.name, feat_values, dtype=pl.Float64))
             cal = source_calendar_series.get(col.name)
             if cal:
                 features = _append_calendar_features(features, col.name, cal)
@@ -494,7 +494,7 @@ class CartSynthesizer:
             series = _build_series(col, full, cs.source_dtype)
             modeled_series[col.name] = series
             feat_values = cs.encoder.transform(series)
-            features = features.with_columns(pl.Series(col.name, feat_values, dtype=pl.Float64))
+            features = _add_feature(features, pl.Series(col.name, feat_values, dtype=pl.Float64))
             # Extract calendar features from the synth datetime so downstream columns
             # see the same kind of predictors they saw at fit time. The synth epoch is
             # leaf-sampled from a real source epoch, so the calendar values match a
@@ -569,6 +569,11 @@ class CartSynthesizer:
                 self._datetime_dtypes[col.name] = series.dtype
                 out = out.with_columns(decompose(series).alias(col.name))
         return out
+
+
+def _add_feature(features: pl.DataFrame, series: pl.Series) -> pl.DataFrame:
+    """Append a column. A zero-column frame has height 0 in polars 2, so it cannot take a Series."""
+    return features.with_columns(series) if features.width else series.to_frame()
 
 
 def _append_calendar_features(

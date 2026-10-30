@@ -44,5 +44,5 @@ report.json
 !benchmarks/results/
 !benchmarks/results/*.json
 
-# Local-only demo recording (regenerate with `vhs demo.tape`)
+# Local-only demo recording
 assets/

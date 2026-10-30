@@ -24,9 +24,7 @@ from rich.progress import (
 from doppel.quality.aggregate import compute as compute_quality
 from doppel.schema.types import Column
 from doppel.sources.spec import (
-    SinkSpec,
     SourceSpec,
-    parse_sink_spec,
     parse_source_spec,
 )
 from doppel.synth.cart import RepairSummary
@@ -99,7 +97,7 @@ def progress_bar(console: Console, label: str, tail: TextColumn) -> Progress:
 
 
 @contextmanager
-def fit_progress(console: Console) -> Generator[Callable[[int, int, str], None], None, None]:
+def fit_progress(console: Console) -> Generator[Callable[[int, int, str], None]]:
     """Live per-column progress bar for CartSynthesizer.fit.
 
     The yielded callable matches `synth.cart.FitProgress` — called as
@@ -226,17 +224,9 @@ def parse_null_values(raw: str | None) -> tuple[str, ...]:
     return ("", *sorted({token for token in tokens if token}))
 
 
-def resolve_sink(value: str) -> SinkSpec:
-    """Resolve a CLI `-o` value into a `SinkSpec`. Centralised so the rejection
-    messages for warehouse sinks come from one place."""
-    return parse_sink_spec(value)
-
-
-def _normalise_optional_str(value: object) -> str | None:
+def _normalise_optional_str(value: str | None) -> str | None:
     """Treat None / empty / whitespace as 'not provided'."""
     if value is None:
-        return None
-    if not isinstance(value, str):
         return None
     stripped = value.strip()
     return stripped or None

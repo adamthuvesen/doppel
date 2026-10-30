@@ -61,7 +61,3 @@ Before editing a subsystem, read the matching doc:
 - **Known limitations** → [docs/limitations.md](docs/limitations.md)
 
 If a doc disagrees with code, fix the doc in the same change.
-
-## Index
-
-Start with the conventions above, then follow the subsystem docs in the routing table.

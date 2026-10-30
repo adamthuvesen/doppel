@@ -10,6 +10,7 @@ from rich.console import Console
 
 from doppel.cli import labels as cli_labels
 from doppel.cli._common import ConnectionTimeoutOpt, NullValuesOpt, resolve_source
+from doppel.pipeline.prepare import table_name_for_source
 from doppel.schema import toml as schema_toml
 from doppel.schema.infer import infer_table
 from doppel.sources import read as source_read
@@ -64,7 +65,7 @@ def infer(
     source_label = cli_labels.source_label(source_spec)
     console.print(f"[dim]reading[/] {source_label}")
     df = source_read(source_spec, timeout=connection_timeout)
-    table = infer_table(cli_labels.table_name_for_source(source_spec), df)
+    table = infer_table(table_name_for_source(source_spec), df)
     schema = schema_toml.from_table(table)
 
     if output is None:
@@ -119,7 +120,7 @@ def check(
     source_label = cli_labels.source_label(source_spec)
     console.print(f"[dim]reading[/] {source_label}")
     df = source_read(source_spec, timeout=connection_timeout)
-    inferred = infer_table(cli_labels.table_name_for_source(source_spec), df)
+    inferred = infer_table(table_name_for_source(source_spec), df)
 
     try:
         schema = schema_toml.load(schema_file)

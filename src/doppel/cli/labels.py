@@ -17,9 +17,3 @@ def sink_label(spec: SinkSpec) -> str:
     if type(spec) is DuckDbSink:
         return f"duckdb:///{spec.path}?table={spec.table}"
     return str(spec)
-
-
-def table_name_for_source(spec: SourceSpec) -> str:
-    if isinstance(spec, FilePath):
-        return spec.path.stem
-    return spec.table or "query"

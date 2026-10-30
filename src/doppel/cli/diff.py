@@ -20,6 +20,7 @@ from doppel.cli._common import (
     resolve_source,
     sample_frame,
 )
+from doppel.pipeline.prepare import table_name_for_source
 from doppel.quality.aggregate import QualityReport
 from doppel.quality.aggregate import compute as compute_quality
 from doppel.report.html import to_html
@@ -220,7 +221,7 @@ def run(
         synth_df, sample_rows, seed=sample_seed + 1, console=console, label="synth"
     )
 
-    columns = infer_table(cli_labels.table_name_for_source(real_spec), real_df).columns
+    columns = infer_table(table_name_for_source(real_spec), real_df).columns
     console.print(
         f"[dim]computing report for[/] {len(columns)} columns "
         f"({real_df.height} real vs {synth_df.height} synth rows)"
@@ -271,7 +272,7 @@ def run(
 @contextmanager
 def _dcr_progress(
     console: Console, total_rows: int
-) -> Generator[Callable[[int, int], None] | None, None, None]:
+) -> Generator[Callable[[int, int], None] | None]:
     """Live Rich progress bar for DCR computation when the workload is large enough."""
     if total_rows < 5_000:
         yield None

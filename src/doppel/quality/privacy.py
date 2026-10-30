@@ -137,7 +137,7 @@ def _build_feature_matrices(
                 r, s = _scale_numeric(col, real[col.name], synth[col.name])
             else:
                 r, s = _one_hot(real[col.name], synth[col.name])
-        except (TypeError, ValueError, pl.exceptions.PolarsError):
+        except TypeError, ValueError, pl.exceptions.PolarsError:
             continue
         real_blocks.append(r)
         synth_blocks.append(s)

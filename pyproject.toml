@@ -8,7 +8,7 @@ version = "0.1.0"
 description = "Synthetic data that looks real — a statistical double of your dataset."
 readme = "README.md"
 license = "MIT"
-requires-python = ">=3.11"
+requires-python = ">=3.14"
 authors = [{ name = "Adam Thuvesen" }]
 keywords = [
     "synthetic-data",
@@ -24,37 +24,28 @@ classifiers = [
     "License :: OSI Approved :: MIT License",
     "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.11",
-    "Programming Language :: Python :: 3.12",
-    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
     "Topic :: Scientific/Engineering",
     "Topic :: Software Development :: Testing",
     "Typing :: Typed",
 ]
 dependencies = [
-    "polars>=1.20",
-    "duckdb>=1.1",
-    "scikit-learn>=1.5",
-    "scipy>=1.13",
-    "numpy>=1.26",
-    "pydantic>=2.7",
-    "typer>=0.12",
-    "rich>=13.7",
-    "tomli-w>=1.0",
+    "polars>=2.1",
+    "duckdb>=2.0",
+    "scikit-learn>=1.9",
+    "scipy>=1.18",
+    "numpy>=2.5",
+    "pydantic>=2.14",
+    "typer>=0.29",
+    "rich>=15.0",
+    "tomli-w>=1.2",
+    "pyarrow>=26.0",
 ]
 
 [project.optional-dependencies]
-pii = ["presidio-analyzer>=2.2", "faker>=26"]
-sql = [
-    "connectorx>=0.3",
-    "pyarrow>=14",
-]
-all = [
-    "presidio-analyzer>=2.2",
-    "faker>=26",
-    "connectorx>=0.3",
-    "pyarrow>=14",
-]
+pii = ["presidio-analyzer>=2.2.362", "faker>=40.54", "spacy>=3.8.18"]
+sql = ["connectorx>=0.4.6"]
+all = ["doppeldata[pii,sql]"]
 
 [project.scripts]
 doppel = "doppel.__main__:app"
@@ -80,7 +71,7 @@ include = ["src/doppel", "README.md", "LICENSE", "pyproject.toml"]
 
 [tool.ruff]
 line-length = 100
-target-version = "py311"
+target-version = "py314"
 src = ["src", "tests"]
 
 [tool.ruff.lint]
@@ -116,7 +107,7 @@ indent-style = "space"
 
 [tool.pyright]
 include = ["src", "tests"]
-pythonVersion = "3.11"
+pythonVersion = "3.14"
 typeCheckingMode = "strict"
 reportMissingTypeStubs = false
 reportUnknownMemberType = false

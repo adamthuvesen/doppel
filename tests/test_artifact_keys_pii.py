@@ -33,7 +33,7 @@ class _Exploit:
         # os.system('echo PWNED') — without `os` in the allowlist this must NOT execute.
         import os
 
-        return os.system, ("exit 0",)
+        return os.system, ("exit 0",)  # pyright: ignore[reportDeprecated]  # the exploit payload is os.system
 
 
 def test_safe_pickle_refuses_os_system() -> None:
@@ -120,7 +120,7 @@ class _TouchMarker:
     def __reduce__(self) -> tuple[object, tuple[object, ...]]:
         import os
 
-        return os.system, (f"touch '{self.marker}'",)
+        return os.system, (f"touch '{self.marker}'",)  # pyright: ignore[reportDeprecated]  # the exploit payload is os.system
 
 
 @pytest.mark.parametrize(

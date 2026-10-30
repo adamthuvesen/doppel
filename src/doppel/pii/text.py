@@ -48,8 +48,10 @@ def restore(
         )
     out = synthesized
     n = out.height if row_count is None else row_count
-    for d in detections:
-        out = out.with_columns(pl.Series(d.name, generate(d.entity_type, n, rng)))
+    fakes = [pl.Series(d.name, generate(d.entity_type, n, rng)) for d in detections]
+    if fakes:
+        # A zero-column frame has height 0 in polars 2, so it cannot take a Series.
+        out = out.with_columns(fakes) if out.width else pl.DataFrame(fakes)
     available = set(out.columns)
     ordered = [name for name in original_order if name in available]
     return out.select(ordered)

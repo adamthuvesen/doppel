@@ -24,7 +24,6 @@ from doppel.cli._common import (
     parse_null_values,
     print_quality_summary,
     print_repair_summary,
-    resolve_sink,
     resolve_source,
     sample_frame,
 )
@@ -32,11 +31,18 @@ from doppel.constraints.engine import ConstraintReport
 from doppel.dataset import Table
 from doppel.pii.detect import PIIDetection
 from doppel.pipeline.pii import strip_pii_if_available
+from doppel.pipeline.prepare import table_name_for_source
 from doppel.pipeline.single_table import generate_single_table
 from doppel.pipeline.types import SingleTableGenerateConfig
 from doppel.pipeline.where import merge_where_into_constraints
 from doppel.schema import multi as multi_schema
-from doppel.sources.spec import DatabaseUri, FilePath, SinkSpec, reject_sink_matching_source
+from doppel.sources.spec import (
+    DatabaseUri,
+    FilePath,
+    SinkSpec,
+    parse_sink_spec,
+    reject_sink_matching_source,
+)
 from doppel.synth.cart import CartSynthesizer
 from doppel.synth.hierarchy import HierarchicalSynthesizer
 from doppel.synth.multi_where import (
@@ -81,11 +87,6 @@ def run(
         exists=True,
         readable=True,
         help="Optional schema.toml describing types, keys, constraints, and FK edges.",
-    ),
-    model: str = typer.Option(
-        "cart",
-        "--model",
-        help="Synthesizer model. Currently only 'cart' is supported.",
     ),
     seed: int | None = typer.Option(
         None,
@@ -179,9 +180,6 @@ def run(
         ),
     ),
 ) -> None:
-    if model != "cart":
-        raise typer.BadParameter(f"model={model!r} is not supported by this build. Use 'cart'.")
-
     is_multi = schema is not None and _is_multi_table_file(schema)
 
     if is_multi:
@@ -227,7 +225,7 @@ def run(
         connection_timeout=connection_timeout,
         null_values=null_values,
     )
-    sink_spec = resolve_sink(output)
+    sink_spec = parse_sink_spec(output)
     reject_sink_matching_source(source_spec, sink_spec)
     _run_single(
         source_spec,
@@ -300,7 +298,7 @@ def _run_single(
     try:
         with fit_progress(console) as cb:
             console.print(
-                f"[dim]fitting CART synthesizer on[/] {cli_labels.table_name_for_source(source_spec)!r}"
+                f"[dim]fitting CART synthesizer on[/] {table_name_for_source(source_spec)!r}"
             )
             result = generate_single_table(
                 SingleTableGenerateConfig(

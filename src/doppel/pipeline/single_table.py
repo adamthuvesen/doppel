@@ -18,7 +18,6 @@ from doppel.pipeline.where import (
     precheck_where,
     thin_support_warning,
 )
-from doppel.schema.toml import SchemaToml
 from doppel.synth.cart import CartSynthesizer, FitProgress
 from doppel.synth.seed import Rng
 from doppel.text_policy import apply as apply_text_policy
@@ -58,7 +57,6 @@ def generate_single_table(
     )
     table = prepared.table
     schema_toml = prepared.schema_toml
-    assert isinstance(schema_toml, SchemaToml | None)
 
     pii_detected, table_for_fit, original_columns = strip_pii_if_available(
         table, on_detected=on_pii_detected

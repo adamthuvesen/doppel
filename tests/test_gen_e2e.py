@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+import io
+import os
+import subprocess
+import sys
 from pathlib import Path
 
 import polars as pl
@@ -352,3 +356,43 @@ def test_gen_null_values_controls_na_tokens(
     assert result.exit_code == 0, result.stdout
     synth_regions = pl.read_csv(out, null_values=[])["region"].to_list()
     assert ("NA" in synth_regions) is expected_na
+
+
+def test_gen_is_byte_identical_across_processes_with_different_hash_seeds(
+    mixed_csv: Path, tmp_path: Path
+) -> None:
+    """Set iteration order depends on PYTHONHASHSEED, so only separate processes can catch it."""
+    outs = {seed: tmp_path / f"synth_{seed}.csv" for seed in ("1", "2")}
+    processes = {
+        seed: subprocess.Popen(
+            [
+                sys.executable,
+                "-m",
+                "doppel",
+                "gen",
+                str(mixed_csv),
+                "--rows",
+                "120",
+                "--output",
+                str(out),
+                "--seed",
+                "7",
+                "--text-policy",
+                "hash",
+                "--hash-salt",
+                "fixed-salt",
+                "--no-quality",
+            ],
+            env={**os.environ, "PYTHONHASHSEED": seed},
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        for seed, out in outs.items()
+    }
+    for process in processes.values():
+        _, stderr = process.communicate()
+        assert process.returncode == 0, stderr
+    first, second = (out.read_bytes() for out in outs.values())
+    assert first == second
+    assert pl.read_csv(io.BytesIO(first)).height == 120

@@ -11,7 +11,7 @@ from typer.testing import CliRunner
 
 from doppel.cli import app
 
-pytest.importorskip("presidio_analyzer")
+pytestmark = pytest.mark.extras
 
 from doppel.errors import PIIUnavailableError
 from doppel.pii import detect as detect_module

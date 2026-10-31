@@ -1,7 +1,7 @@
 """PII detection + Faker regeneration.
 
 Presidio is heavy to initialise (loads a spaCy NLP model). These tests skip when
-the optional `pii` extra isn't installed in the environment.
+the optional `pii` extra isn't installed; the `extras` marker excludes them from the base-install job.
 """
 
 from __future__ import annotations
@@ -14,8 +14,7 @@ from typer.testing import CliRunner
 
 from doppel.cli import app
 
-pytest.importorskip("presidio_analyzer")
-pytest.importorskip("faker")
+pytestmark = pytest.mark.extras
 
 from doppel.pii.detect import PIIDetection, detect
 from doppel.pii.fake import generate

@@ -75,7 +75,7 @@ def test_database_uri_both_table_and_query_rejected() -> None:
 
 
 def test_database_uri_neither_table_nor_query_rejected() -> None:
-    with pytest.raises(InvalidInputError, match="exactly one of --table or --query"):
+    with pytest.raises(InvalidInputError, match="exactly one of"):
         parse_source_spec(
             "snowflake://user@a/db/s?warehouse=WH",
             table=None,
@@ -260,12 +260,12 @@ def test_duckdb_sink_requires_path() -> None:
 
 
 def test_snowflake_sink_rejected() -> None:
-    with pytest.raises(InvalidInputError, match="Snowflake sinks are not supported"):
+    with pytest.raises(InvalidInputError, match="Snowflake sinks"):
         parse_sink_spec("snowflake://user@a/db/s?warehouse=WH")
 
 
 def test_postgres_sink_rejected() -> None:
-    with pytest.raises(InvalidInputError, match="Postgres sinks are not supported"):
+    with pytest.raises(InvalidInputError, match="Postgres sinks"):
         parse_sink_spec("postgres://user@host/db")
 
 

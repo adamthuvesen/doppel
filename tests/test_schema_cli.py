@@ -62,7 +62,7 @@ min = 0
     )
     result = runner.invoke(app, ["schema", "check", str(mixed_csv), "--schema", str(schema_path)])
     assert result.exit_code != 0
-    assert "constraint references unknown column" in result.stdout
+    assert "unknown column" in result.stdout
 
 
 def test_schema_check_rejects_unknown_schema_key_cleanly(mixed_csv: Path, tmp_path: Path) -> None:

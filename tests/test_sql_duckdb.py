@@ -8,6 +8,7 @@ patched driver calls."""
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import duckdb
@@ -190,7 +191,7 @@ def test_diff_duckdb_vs_duckdb(duckdb_fixture: Path, tmp_path: Path) -> None:
     # First gen synth into a second DuckDB file.
     sink_db = tmp_path / "synth.db"
     runner = CliRunner()
-    runner.invoke(
+    gen_result = runner.invoke(
         app,
         [
             "gen",
@@ -207,6 +208,7 @@ def test_diff_duckdb_vs_duckdb(duckdb_fixture: Path, tmp_path: Path) -> None:
         ],
         catch_exceptions=False,
     )
+    assert gen_result.exit_code == 0, gen_result.stdout
 
     json_report = tmp_path / "diff.json"
     result = runner.invoke(
@@ -223,7 +225,10 @@ def test_diff_duckdb_vs_duckdb(duckdb_fixture: Path, tmp_path: Path) -> None:
         catch_exceptions=False,
     )
     assert result.exit_code == 0, result.stdout
-    assert json_report.exists()
+    report = json.loads(json_report.read_text())
+    assert report["real_rows"] == 200
+    assert report["synth_rows"] == 100
+    assert {m["column"] for m in report["marginals"]} >= {"age", "score", "is_premium"}
 
 
 def test_diff_mixed_file_and_uri(duckdb_fixture: Path, tmp_path: Path) -> None:
@@ -250,6 +255,7 @@ def test_diff_mixed_file_and_uri(duckdb_fixture: Path, tmp_path: Path) -> None:
         catch_exceptions=False,
     )
     assert result.exit_code == 0
+    json_report = tmp_path / "diff.json"
     result = runner.invoke(
         app,
         [
@@ -258,10 +264,15 @@ def test_diff_mixed_file_and_uri(duckdb_fixture: Path, tmp_path: Path) -> None:
             f"duckdb:///{duckdb_fixture}",
             "--table",
             "users",
+            "--json",
+            str(json_report),
         ],
         catch_exceptions=False,
     )
     assert result.exit_code == 0, result.stdout
+    report = json.loads(json_report.read_text())
+    assert report["real_rows"] == 100
+    assert report["synth_rows"] == 200
 
 
 def test_schema_infer_from_duckdb(duckdb_fixture: Path, tmp_path: Path) -> None:

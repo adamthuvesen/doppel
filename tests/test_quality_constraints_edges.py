@@ -171,8 +171,8 @@ def test_encode_feature_passes_when_no_collision() -> None:
 # -----------------------------------------------------------------------------
 
 
+@pytest.mark.extras
 def test_pii_restore_raises_on_missing_original_column() -> None:
-    pytest.importorskip("faker")
     from doppel.pii.detect import PIIDetection
     from doppel.pii.text import restore
 

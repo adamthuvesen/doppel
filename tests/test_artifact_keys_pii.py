@@ -180,9 +180,8 @@ def test_promoted_string_pk_yields_string_synth_values() -> None:
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.extras
 def test_pii_confidence_never_exceeds_one() -> None:
-    pytest.importorskip("presidio_analyzer", reason="pii extra not installed")
-
     from doppel.pii.detect import detect
 
     # Cells that contain MULTIPLE emails would naively over-count.

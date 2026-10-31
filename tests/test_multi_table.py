@@ -194,8 +194,6 @@ parent_column = "user_id"
         ],
     )
     assert result.exit_code == 0, result.stdout
-    assert (out_dir / "users.csv").exists()
-    assert (out_dir / "orders.csv").exists()
     out_users = pl.read_csv(out_dir / "users.csv")
     out_orders = pl.read_csv(out_dir / "orders.csv")
     assert out_users.height == 40

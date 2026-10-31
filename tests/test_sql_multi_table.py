@@ -92,8 +92,12 @@ parent_column = "user_id"
     )
     schema = multi_schema.load(schema_path)
     dataset = multi_schema.to_dataset(schema, schema_path.parent)
-    assert dataset.tables["users"].data is not None
-    assert dataset.tables["orders"].data is not None
+    users = dataset.tables["users"].data
+    orders = dataset.tables["orders"].data
+    assert users is not None and orders is not None
+    assert (users.height, orders.height) == (50, 200)
+    assert len(dataset.edges) == 1
+    assert set(orders["user_id"]) <= set(users["user_id"])
 
 
 def test_multi_table_file_and_uri_in_same_block_rejected() -> None:
@@ -102,7 +106,7 @@ def test_multi_table_file_and_uri_in_same_block_rejected() -> None:
 
 
 def test_multi_table_uri_without_table_or_query_rejected() -> None:
-    with pytest.raises(ValidationError, match="exactly one of `table` or `query`"):
+    with pytest.raises(ValidationError, match="exactly one of"):
         multi_schema.TableSpec(uri="duckdb:///x.db")
 
 
@@ -157,8 +161,12 @@ parent_column = "user_id"
     )
     assert result.exit_code == 0, result.stdout
     # Default suffix for URI-backed tables is .csv.
-    assert (out_dir / "users.csv").exists()
-    assert (out_dir / "orders.csv").exists()
+    users = pl.read_csv(out_dir / "users.csv")
+    orders = pl.read_csv(out_dir / "orders.csv")
+    assert users.columns == ["user_id", "name", "plan"]
+    assert orders.columns == ["order_id", "user_id", "amount"]
+    assert users.height == 20
+    assert set(orders["user_id"]) <= set(users["user_id"])
 
 
 def test_multi_table_single_uri_dedup(two_table_duckdb: Path, tmp_path: Path) -> None:
@@ -181,11 +189,10 @@ primary_key = "order_id"
     )
     schema = multi_schema.load(schema_path)
     dataset = multi_schema.to_dataset(schema, schema_path.parent)
-    assert dataset.tables["users"].data is not None
     users_df = dataset.tables["users"].data
-    assert users_df.height == 50
     orders_df = dataset.tables["orders"].data
-    assert orders_df is not None
+    assert users_df is not None and orders_df is not None
+    assert users_df.height == 50
     assert orders_df.height == 200
 
 

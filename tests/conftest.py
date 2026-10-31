@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import importlib.util
+from collections.abc import Iterator
 from datetime import datetime, timedelta
 from pathlib import Path
+from typing import Any
 
 import polars as pl
 import pytest
@@ -46,3 +49,33 @@ def mixed_parquet(tmp_path: Path, mixed_df: pl.DataFrame) -> Path:
     out = tmp_path / "mixed.parquet"
     mixed_df.write_parquet(out)
     return out
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _memoize_presidio_analyze() -> Iterator[None]:
+    """Run Presidio once per distinct text for the whole session.
+
+    Every `gen` call scans a 200-value sample per text column, and most test frames repeat
+    the same few values. The analyzer is real; only repeat calls are answered from a dict.
+    """
+    if importlib.util.find_spec("presidio_analyzer") is None:
+        yield
+        return
+    from presidio_analyzer import AnalyzerEngine
+
+    original = AnalyzerEngine.analyze
+    cache: dict[tuple[int, str, str], Any] = {}
+
+    def analyze(self: Any, text: str, language: str, **kwargs: Any) -> Any:
+        if kwargs:
+            return original(self, text=text, language=language, **kwargs)
+        key = (id(self), language, text)
+        if key not in cache:
+            cache[key] = original(self, text=text, language=language)
+        return cache[key]
+
+    setattr(AnalyzerEngine, "analyze", analyze)  # noqa: B010
+    try:
+        yield
+    finally:
+        setattr(AnalyzerEngine, "analyze", original)  # noqa: B010

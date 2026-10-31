@@ -440,8 +440,10 @@ def test_multi_datetime_dataset_each_gets_own_prefix() -> None:
     table = infer_table("orders", df)
     synth = CartSynthesizer()
     synth.fit(Dataset.single(table), Rng.from_seed(0))
-    out = synth.sample(50, Rng.from_seed(0))
-    assert out.only().data is not None
+    data = synth.sample(50, Rng.from_seed(0)).only().data
+    assert data is not None
+    assert data.height == 50
+    assert data.select("signup_at", "purchase_at").null_count().row(0) == (0, 0)
     # Both datetimes resolved their own feature set.
     assert "signup_at" in synth._calendar_features
     assert "purchase_at" in synth._calendar_features
@@ -683,8 +685,16 @@ def test_null_in_source_datetime_handled_during_fit_and_sample() -> None:
     table = infer_table("events", df)
     synth = CartSynthesizer()
     synth.fit(Dataset.single(table), Rng.from_seed(3))
-    out = synth.sample(80, Rng.from_seed(3))
-    assert out.only().data is not None
+    data = synth.sample(80, Rng.from_seed(3)).only().data
+    assert data is not None
+    assert data.height == 80
+    assert data.columns == df.columns
+    event_time = data["event_time"]
+    assert event_time.dtype == pl.Datetime
+    # The source is 20% null; the sample keeps nulls and keeps real values inside the source range.
+    assert 0.05 <= event_time.null_count() / data.height <= 0.4
+    observed = event_time.drop_nulls()
+    assert observed.is_between(df["event_time"].min(), df["event_time"].max()).all()
 
 
 # ---------------------------------------------------------------------------

@@ -40,7 +40,7 @@ def test_diff_accepts_html_alias(mixed_csv: Path, tmp_path: Path) -> None:
     html_path = tmp_path / "report.html"
     result = runner.invoke(app, ["diff", str(mixed_csv), str(mixed_csv), "--html", str(html_path)])
     assert result.exit_code == 0, result.stdout
-    assert html_path.exists()
+    assert "doppel quality report" in html_path.read_text(encoding="utf-8")
 
 
 def test_diff_writes_json_report(mixed_csv: Path, tmp_path: Path) -> None:

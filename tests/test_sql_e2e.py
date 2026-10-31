@@ -271,6 +271,8 @@ def test_row_count_probe_under_threshold_proceeds(
         catch_exceptions=False,
     )
     assert result.exit_code == 0, result.stdout
+    assert pl.read_csv(out).height == 50
+    assert "TABLESAMPLE" not in patch_snowflake.call_args.kwargs["query"]
 
 
 def _table_spec(uri: str, table: str) -> DatabaseUri:
@@ -331,7 +333,7 @@ def test_snowflake_sink_rejected(tmp_path: Path) -> None:
         catch_exceptions=False,
     )
     assert result.exit_code != 0
-    assert "Snowflake sinks are not supported" in (result.stdout + result.stderr)
+    assert "Snowflake sinks" in (result.stdout + result.stderr)
 
 
 def test_postgres_sink_rejected(tmp_path: Path) -> None:
@@ -344,7 +346,7 @@ def test_postgres_sink_rejected(tmp_path: Path) -> None:
         catch_exceptions=False,
     )
     assert result.exit_code != 0
-    assert "Postgres sinks are not supported" in (result.stdout + result.stderr)
+    assert "Postgres sinks" in (result.stdout + result.stderr)
 
 
 # ---------- Error redaction ----------

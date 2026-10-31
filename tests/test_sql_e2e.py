@@ -14,12 +14,11 @@ from unittest.mock import MagicMock, patch
 
 import polars as pl
 import pytest
-import typer
 from typer.testing import CliRunner
 
 from doppel.cli import app
+from doppel.errors import InvalidInputError, WarehouseConnectionError
 from doppel.sources import sql as source_sql
-from doppel.sources.errors import WarehouseConnectionError
 from doppel.sources.spec import DatabaseUri, parse_source_spec
 
 
@@ -294,7 +293,7 @@ def test_row_count_probe_unknown_count_requires_fit_rows(
 ) -> None:
     patch_snowflake.return_value = pl.DataFrame({"c": [probe_value]})
     spec = _table_spec(uri, "users")
-    with pytest.raises(typer.BadParameter, match="unknown number of rows"):
+    with pytest.raises(InvalidInputError, match="unknown number of rows"):
         source_sql.read(spec, fit_rows=None, seed=None, timeout=0)
     assert patch_snowflake.call_count == 1
 
@@ -398,7 +397,7 @@ def test_missing_sql_extra_raises_install_hint(mock_df: pl.DataFrame) -> None:
         patch("importlib.import_module") as importer,
     ):
         importer.side_effect = ImportError("No module named 'connectorx'")
-        with pytest.raises(typer.BadParameter, match=r"\[sql\] extra"):
+        with pytest.raises(InvalidInputError, match=r"\[sql\] extra"):
             source_sql.read(spec, fit_rows=None, seed=1, timeout=300)
 
 

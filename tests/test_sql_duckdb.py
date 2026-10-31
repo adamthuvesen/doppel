@@ -418,9 +418,19 @@ def test_sink_table_injection_does_not_run(duckdb_fixture: Path, tmp_path: Path)
     assert _duckdb_tables(sink_db) == {"users", table}
 
 
-@pytest.mark.parametrize("sink_table", ["users", "USERS", '"users"'])
+@pytest.mark.parametrize(
+    ("source_table", "sink_table"),
+    [
+        ("users", "users"),
+        ("users", "USERS"),
+        ("users", '"users"'),
+        ("users", "main.users"),
+        ("main.users", "users"),
+        ("users", "source.main.users"),
+    ],
+)
 def test_sink_matching_source_is_refused(
-    duckdb_fixture: Path, tmp_path: Path, sink_table: str
+    duckdb_fixture: Path, tmp_path: Path, source_table: str, sink_table: str
 ) -> None:
     con = duckdb.connect(str(duckdb_fixture), read_only=True)
     before = con.execute("SELECT count(*) FROM users").fetchone()
@@ -431,7 +441,7 @@ def test_sink_matching_source_is_refused(
             "gen",
             f"duckdb:///{duckdb_fixture}",
             "--table",
-            "users",
+            source_table,
             "-n",
             "10",
             "-o",

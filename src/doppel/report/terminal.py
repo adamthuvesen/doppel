@@ -108,6 +108,8 @@ def render(report: QualityReport, console: Console, *, top_n: int | None = None)
     priv_table.add_row("DCR p25", f"{report.privacy.percentile_25:.4f}")
     priv_table.add_row("DCR p50 (median)", f"{report.privacy.percentile_50:.4f}")
     priv_table.add_row("DCR mean", f"{report.privacy.mean_distance:.4f}")
+    rate = report.exact_row_match_rate
+    priv_table.add_row("exact row matches", f"{rate:.1%}" if math.isfinite(rate) else "n/a")
     console.print(priv_table)
 
 

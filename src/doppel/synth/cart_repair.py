@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 
 import polars as pl
 
-from doppel.schema.heuristics import is_binary_flag, is_integer_dtype, looks_like_count_column
+from doppel.schema.heuristics import count_column_candidates, is_binary_flag
 from doppel.schema.types import Column, ColumnType
 
 
@@ -114,14 +114,7 @@ def detect_missing_flags(columns: list[Column], df: pl.DataFrame) -> list[Missin
 
 
 def detect_count_bounds(columns: list[Column], df: pl.DataFrame) -> list[CountBound]:
-    candidates = [
-        c
-        for c in columns
-        if c.name in df.columns
-        and c.type is ColumnType.NUMERIC
-        and is_integer_dtype(df[c.name].dtype)
-        and looks_like_count_column(c.name)
-    ]
+    candidates = count_column_candidates(columns, df)
     bounds: list[CountBound] = []
     for low in candidates:
         for high in candidates:

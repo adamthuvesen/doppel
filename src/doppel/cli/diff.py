@@ -21,7 +21,7 @@ from doppel.pipeline.compare import (
 from doppel.report.html import to_html
 from doppel.report.json import to_json
 from doppel.report.terminal import render as render_terminal
-from doppel.sources.spec import SourceSpec
+from doppel.sources.spec import DEFAULT_CONNECTION_TIMEOUT, SourceSpec
 
 console = Console()
 
@@ -92,8 +92,8 @@ def run(
         min=1,
         help=(
             "Cap rows fed into the DCR nearest-neighbour search (per side). "
-            "Larger values are more accurate but slower; default 50,000 keeps a 100k+ frame "
-            "responsive."
+            f"Larger values are more accurate but slower; the default {DEFAULT_MAX_DCR_ROWS:,} "
+            "keeps a large frame responsive."
         ),
     ),
     sql_table: str | None = typer.Option(
@@ -114,7 +114,7 @@ def run(
         "--password-cmd",
         help='Shell command whose stdout is the SQL password (e.g. "op read op://vault/db/pw").',
     ),
-    connection_timeout: ConnectionTimeoutOpt = 300,
+    connection_timeout: ConnectionTimeoutOpt = DEFAULT_CONNECTION_TIMEOUT,
     null_values: NullValuesOpt = None,
 ) -> None:
     real_spec = _resolve_diff_arg(

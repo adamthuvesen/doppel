@@ -32,7 +32,6 @@ from pathlib import Path
 from typing import Any
 
 import tomli_w
-import typer
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from doppel.constraints.dsl import (
@@ -42,6 +41,7 @@ from doppel.constraints.dsl import (
     WhereConstraint,
 )
 from doppel.dataset import Table
+from doppel.errors import InvalidInputError
 from doppel.schema.calendar_feature import CalendarFeature
 from doppel.schema.types import Column, ColumnType
 
@@ -95,7 +95,7 @@ class ColumnSpec(BaseModel):
             try:
                 items.append(CalendarFeature(raw))
             except ValueError as exc:
-                raise typer.BadParameter(
+                raise InvalidInputError(
                     f"unknown calendar feature {raw!r}; allowed: {', '.join(_CALENDAR_ALLOWLIST)}"
                 ) from exc
         return tuple(items)
@@ -208,19 +208,24 @@ def validate_against_table(inferred: Table, schema: SchemaToml) -> None:
         )
 
     if schema.table.primary_key is not None:
-        if schema.table.primary_key not in inferred_names:
-            raise ValueError(
-                f"primary_key {schema.table.primary_key!r} is not present in the data. "
-                f"Available columns: {sorted(inferred_names)}"
-            )
-        if inferred.data is not None:
-            series = inferred.data[schema.table.primary_key]
-            if series.null_count() > 0 or series.n_unique() != inferred.data.height:
-                raise ValueError(
-                    f"primary_key {schema.table.primary_key!r} must be unique and non-null"
-                )
+        validate_primary_key(inferred, schema.table.primary_key)
 
     _validate_constraints(schema.constraints, inferred_names)
+
+
+def validate_primary_key(table: Table, primary_key: str, *, table_label: str = "") -> None:
+    """Reject a declared primary key that is absent, or not unique and non-null in the data."""
+    where = f" for table {table_label!r}" if table_label else ""
+    names = {c.name for c in table.columns}
+    if primary_key not in names:
+        raise ValueError(
+            f"primary_key {primary_key!r}{where} is not present in the data. "
+            f"Available columns: {sorted(names)}"
+        )
+    if table.data is not None:
+        series = table.data[primary_key]
+        if series.null_count() > 0 or series.n_unique() != table.data.height:
+            raise ValueError(f"primary_key {primary_key!r}{where} must be unique and non-null")
 
 
 def _validate_constraints(constraints: list[Constraint], column_names: set[str]) -> None:
@@ -295,4 +300,5 @@ __all__ = [
     "save",
     "to_payload",
     "validate_against_table",
+    "validate_primary_key",
 ]

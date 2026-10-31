@@ -1,17 +1,10 @@
-"""Shared dtype sets and name heuristics for inference, synthesis, and reporting."""
+"""Name and value heuristics shared by inference, synthesis, and reporting."""
 
 from __future__ import annotations
 
 import polars as pl
 
-INTEGER_DTYPE_NAMES: frozenset[str] = frozenset(
-    {"Int8", "Int16", "Int32", "Int64", "UInt8", "UInt16", "UInt32", "UInt64"}
-)
-FLOAT_DTYPE_NAMES: frozenset[str] = frozenset({"Float32", "Float64"})
-
-
-def is_integer_dtype(dtype: pl.DataType) -> bool:
-    return str(dtype) in INTEGER_DTYPE_NAMES
+from doppel.schema.types import Column, ColumnType
 
 
 def is_binary_flag(series: pl.Series) -> bool:
@@ -31,10 +24,22 @@ def looks_like_count_column(name: str) -> bool:
     )
 
 
+def count_column_candidates(columns: list[Column], *frames: pl.DataFrame) -> list[Column]:
+    """NUMERIC integer columns named like counts, present in every frame.
+
+    The dtype comes from the first frame."""
+    return [
+        c
+        for c in columns
+        if c.type is ColumnType.NUMERIC
+        and all(c.name in df.columns for df in frames)
+        and frames[0][c.name].dtype.is_integer()
+        and looks_like_count_column(c.name)
+    ]
+
+
 __all__ = [
-    "FLOAT_DTYPE_NAMES",
-    "INTEGER_DTYPE_NAMES",
+    "count_column_candidates",
     "is_binary_flag",
-    "is_integer_dtype",
     "looks_like_count_column",
 ]

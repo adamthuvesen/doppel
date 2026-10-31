@@ -42,7 +42,7 @@ There are three password mechanisms. doppel applies them in this order:
    ```
    --password-cmd "op read op://vault/snowflake/password"
    ```
-   If the command exits non-zero, doppel exits with `BadParameter` quoting
+   If the command exits non-zero, doppel exits with code 2 and quotes
    the subprocess stderr.
 
 2. **`${ENV_VAR}` interpolation** anywhere in the URI:
@@ -111,10 +111,10 @@ If the estimate exceeds **1,000,000 rows**, or the count is unknown, and
 `--fit-rows` is not set, doppel fails before reading the data. The count is
 unknown when the probe returns no value, when Postgres `reltuples` is negative
 (the table was never analysed), or when Snowflake returns 0 or NULL (a view
-has no `ROW_COUNT`). Multi-table schemas cannot pass `--fit-rows`, so they
-cannot read such a table. The error names the row count and suggests
+has no `ROW_COUNT`). The error names the row count and suggests
 `--fit-rows N` to sample or `--fit-rows 0` to fit on the whole table. The latter
-can move a lot of data over the network.
+can move a lot of data over the network. A multi-table schema sets the same
+choice per table with `fit_rows` (see below).
 
 The probe is skipped for DuckDB and file sources (the auto-cap behavior
 applies for files, and DuckDB is local).
@@ -148,6 +148,21 @@ URI-backed tables must also declare exactly one of `table` or `query`. The
 CLI's `--password-cmd` and `--connection-timeout` apply to every SQL table in
 the run.
 
+`fit_rows` on a table does what `--fit-rows` does for single-table `gen`, which
+multi-table `gen` does not accept:
+
+```toml
+[tables.orders]
+uri = "snowflake://${SF_USER}@account/db/schema?warehouse=WH"
+table = "ORDERS_VIEW"     # a view: Snowflake reports no row count
+primary_key = "order_id"
+fit_rows = 50000          # fit on a seeded 50,000-row sample; 0 reads the whole table
+```
+
+A sample of a table that other tables reference would orphan their rows, so such
+a parent table takes only `fit_rows = 0`. doppel rejects a larger value when it
+loads the schema.
+
 ## Sinks
 
 The `-o`/`--output` flag accepts:
@@ -155,7 +170,7 @@ The `-o`/`--output` flag accepts:
 - a file path (any extension supported by `sinks.file`); or
 - a DuckDB URI of the form `duckdb:///path.db?table=NAME`.
 
-Snowflake and Postgres sink URIs raise `BadParameter` at parse time. Warehouse
+Snowflake and Postgres sink URIs are rejected at parse time (exit code 2). Warehouse
 writes need decisions about transactions, idempotency, table creation, schema
 permissions, and recovery. doppel leaves that to your normal ELT tooling.
 

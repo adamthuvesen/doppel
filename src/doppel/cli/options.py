@@ -6,7 +6,23 @@ from typing import Annotated
 
 import typer
 
-from doppel.sources.spec import SourceSpec, parse_source_spec
+from doppel.pipeline.fit_rows import AUTO_FIT_CAP, AUTO_FIT_MULTIPLIER, AUTO_FIT_TRIGGER_ROWS
+from doppel.sources.spec import SourceSpec, parse_source_spec, password_cmd_timeout
+
+_FIT_ROWS_HELP_TAIL = (
+    "Pass 0 to disable the auto-cap and fit on the full source. "
+    "For SQL sources, pushes the sample into the warehouse via vendor-native syntax."
+)
+FIT_ROWS_HELP_GEN = (
+    "Randomly sample this many source rows before fitting (useful for large files). "
+    f"Defaults to min(rows x {AUTO_FIT_MULTIPLIER}, {AUTO_FIT_CAP:,}) when the source has "
+    f"more than {AUTO_FIT_TRIGGER_ROWS:,} rows. {_FIT_ROWS_HELP_TAIL}"
+)
+FIT_ROWS_HELP_FIT = (
+    "Randomly sample this many source rows before fitting (useful for large files). "
+    f"Defaults to {AUTO_FIT_CAP:,} when the source has more than {AUTO_FIT_TRIGGER_ROWS:,} "
+    f"rows. {_FIT_ROWS_HELP_TAIL}"
+)
 
 ConnectionTimeoutOpt = Annotated[
     int,
@@ -58,7 +74,7 @@ def resolve_source(
         table=_normalise_optional_str(table),
         query=_normalise_optional_str(query),
         password_cmd=_normalise_optional_str(password_cmd),
-        password_cmd_timeout=min(connection_timeout, 60),
+        password_cmd_timeout=password_cmd_timeout(connection_timeout),
         null_values=parse_null_values(null_values),
     )
 

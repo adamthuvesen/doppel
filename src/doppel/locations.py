@@ -8,9 +8,10 @@ from __future__ import annotations
 import os
 import re
 from dataclasses import dataclass
+from enum import StrEnum
 from pathlib import Path
 
-import typer
+from doppel.errors import InvalidInputError
 
 # Schemes that require auth on the warehouse. DuckDB is local and needs none.
 AUTH_REQUIRED_SCHEMES: frozenset[str] = frozenset(["snowflake", "postgres", "postgresql"])
@@ -19,6 +20,40 @@ _ENV_VAR_RE = re.compile(r"\$\{([A-Z_][A-Z0-9_]*)\}")
 _IDENTIFIER_PART = r'"(?:[^"]|"")+"|[^."]+'
 _IDENTIFIER_PART_RE = re.compile(_IDENTIFIER_PART)
 _DOTTED_IDENTIFIER_RE = re.compile(rf"(?:{_IDENTIFIER_PART})(?:\.(?:{_IDENTIFIER_PART}))*")
+
+
+class FileFormat(StrEnum):
+    CSV = "csv"
+    TSV = "tsv"
+    PARQUET = "parquet"
+    JSON = "json"
+    NDJSON = "ndjson"
+    ARROW = "arrow"
+
+
+FILE_FORMAT_BY_SUFFIX: dict[str, FileFormat] = {
+    ".csv": FileFormat.CSV,
+    ".tsv": FileFormat.TSV,
+    ".parquet": FileFormat.PARQUET,
+    ".json": FileFormat.JSON,
+    ".ndjson": FileFormat.NDJSON,
+    ".jsonl": FileFormat.NDJSON,
+    ".arrow": FileFormat.ARROW,
+    ".feather": FileFormat.ARROW,
+    ".ipc": FileFormat.ARROW,
+}
+
+
+def file_format(path: Path, *, role: str) -> FileFormat:
+    """The format of `path` from its suffix. `role` ("source" or "sink") names it in the error."""
+    suffix = path.suffix.lower()
+    fmt = FILE_FORMAT_BY_SUFFIX.get(suffix)
+    if fmt is None:
+        raise ValueError(
+            f"unsupported {role} extension: {suffix!r}. "
+            f"Supported: {' '.join(FILE_FORMAT_BY_SUFFIX)}"
+        )
+    return fmt
 
 
 @dataclass(frozen=True)
@@ -30,13 +65,13 @@ class FilePath:
 
 
 def expand_env_vars(value: str) -> str:
-    """Expand `${VAR}` references in `value`. Missing vars raise BadParameter."""
+    """Expand `${VAR}` references in `value`. Missing vars raise InvalidInputError."""
 
     def _substitute(match: re.Match[str]) -> str:
         name = match.group(1)
         resolved = os.environ.get(name)
         if resolved is None:
-            raise typer.BadParameter(
+            raise InvalidInputError(
                 f"environment variable ${{{name}}} referenced in URI is not set"
             )
         return resolved
@@ -51,7 +86,7 @@ def table_name_parts(scheme: str, name: str) -> list[str]:
     matches how each vendor resolves an unquoted identifier. A part the user wrapped
     in double quotes keeps its exact case."""
     if not _DOTTED_IDENTIFIER_RE.fullmatch(name):
-        raise typer.BadParameter(f"invalid table name {name!r}")
+        raise InvalidInputError(f"invalid table name {name!r}")
     parts: list[str] = []
     for match in _IDENTIFIER_PART_RE.finditer(name):
         part = match.group(0)

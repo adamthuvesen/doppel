@@ -16,6 +16,7 @@ from dataclasses import dataclass
 import polars as pl
 
 from doppel.constraints.dsl import InequalityConstraint, RangeConstraint, WhereConstraint
+from doppel.constraints.expr import predicate_holds
 
 
 @dataclass(frozen=True)
@@ -66,13 +67,8 @@ def violation_mask_inequality(df: pl.DataFrame, c: InequalityConstraint) -> pl.S
 
 
 def violation_mask_where(df: pl.DataFrame, compiled: CompiledWhere) -> pl.Series:
-    """A row violates a `where` constraint when the predicate is False or NULL.
-
-    NULL handling matches `range`/`inequality`: an unknown-truth row is treated as
-    violating so reject-resample only keeps rows we can prove satisfy the predicate.
-    """
-    holds = df.select(compiled.predicate.alias("__doppel_where__"))["__doppel_where__"]
-    return (~holds).fill_null(True)
+    """A row violates a `where` constraint when the predicate does not hold (False or NULL)."""
+    return ~predicate_holds(df, compiled.predicate)
 
 
 def combined_violation_mask(

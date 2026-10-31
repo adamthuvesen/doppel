@@ -14,6 +14,7 @@ from doppel.schema.infer import infer_table
 from doppel.schema.toml import SchemaToml
 from doppel.sources import read as source_read
 from doppel.sources.spec import DatabaseUri, FilePath, SourceSpec
+from doppel.synth.seed import sample_seed
 
 
 def table_name_for_source(spec: SourceSpec) -> str:
@@ -35,9 +36,7 @@ def sample_frame(
         return df
     if notify is not None:
         notify(f"sampling {label} rows {rows} of {df.height}")
-    # Coerce None to 0 so the sampling step is reproducible across runs even when the
-    # user omitted --seed. Polars otherwise falls back to OS entropy here.
-    return df.sample(n=rows, seed=seed if seed is not None else 0, shuffle=True)
+    return df.sample(n=rows, seed=sample_seed(seed), shuffle=True)
 
 
 def read_source_dataframe(

@@ -15,11 +15,12 @@ from doppel.constraints.multi_where import (
 from doppel.dataset import Dataset
 from doppel.pii.detect import PIIDetection
 from doppel.pipeline.pii import strip_pii_if_available
+from doppel.pipeline.quality_summary import QualitySummary, compute_quality_summary
 from doppel.schema import multi as multi_schema
 from doppel.sinks import write as sink_write
-from doppel.sources.spec import FilePath
+from doppel.sources.spec import DEFAULT_CONNECTION_TIMEOUT, FilePath
 from doppel.synth.hierarchy import HierarchicalSynthesizer
-from doppel.synth.seed import Rng
+from doppel.synth.seed import Rng, sample_seed
 from doppel.text_policy import TextPolicy, resolve_hash_salt
 from doppel.text_policy import apply as apply_text_policy
 
@@ -43,8 +44,9 @@ class MultiTableGenerateConfig:
     text_policy: TextPolicy = TextPolicy.SAMPLE
     hash_salt: str | None = None
     password_cmd: str | None = None
-    connection_timeout: int = 300
+    connection_timeout: int = DEFAULT_CONNECTION_TIMEOUT
     null_values: tuple[str, ...] = ("",)
+    quality: bool = False
 
 
 @dataclass(frozen=True)
@@ -52,13 +54,14 @@ class WrittenTable:
     name: str
     path: Path
     out_df: pl.DataFrame
+    pii_detected: tuple[PIIDetection, ...] = ()
+    quality: QualitySummary | None = None
 
 
 @dataclass(frozen=True)
 class MultiTableGenerateResult:
     tables: list[WrittenTable]
     rows_per_root: dict[str, int]
-    pii_detected: dict[str, tuple[PIIDetection, ...]]
 
 
 def generate_multi_table(
@@ -81,6 +84,7 @@ def generate_multi_table(
         password_cmd=config.password_cmd,
         connection_timeout=config.connection_timeout,
         null_values=config.null_values,
+        seed=config.seed,
     )
     status(f"read {len(dataset.tables)} tables, {len(dataset.edges)} FK edges")
 
@@ -91,6 +95,7 @@ def generate_multi_table(
             notify_where_scope(WHERE_SCOPE_NOTE)
 
     original_columns = {name: table.columns for name, table in dataset.tables.items()}
+    real_frames = {name: table.data for name, table in dataset.tables.items()}
     pii_by_table = _strip_pii(dataset, on_pii_detected)
 
     status("fitting hierarchical synthesizer")
@@ -139,13 +144,49 @@ def generate_multi_table(
             salt=run_salt,
         )
         sink_write(out_df, FilePath(path=dest))
-        written.append(WrittenTable(name=name, path=dest, out_df=out_df))
+        detected = tuple(pii_by_table[name][0]) if name in pii_by_table else ()
+        real_df = real_frames[name]
+        quality = (
+            compute_quality_summary(
+                real_df,
+                out_df,
+                original_columns[name],
+                sample_seed=sample_seed(config.seed),
+                exclude_from_row_match={d.name for d in detected},
+            )
+            if config.quality and real_df is not None
+            else None
+        )
+        written.append(
+            WrittenTable(
+                name=name, path=dest, out_df=out_df, pii_detected=detected, quality=quality
+            )
+        )
 
-    return MultiTableGenerateResult(
-        tables=written,
-        rows_per_root=rows_per_root,
-        pii_detected={name: tuple(d) for name, (d, _) in pii_by_table.items()},
-    )
+    return MultiTableGenerateResult(tables=written, rows_per_root=rows_per_root)
+
+
+def run_summary_payload(
+    config: MultiTableGenerateConfig, result: MultiTableGenerateResult
+) -> dict[str, object]:
+    """The machine-readable `gen --json-summary` payload for a multi-table run."""
+    return {
+        "schema_path": str(config.schema_path),
+        "output_dir": str(config.output_dir),
+        "rows_per_root": result.rows_per_root,
+        "seed": config.seed,
+        "text_policy": config.text_policy.value,
+        "tables": {
+            t.name: {
+                "output_path": str(t.path),
+                "rows_written": t.out_df.height,
+                "cols_written": t.out_df.width,
+                "pii_columns_regenerated": [d.name for d in t.pii_detected],
+                "quality": t.quality.to_payload() if t.quality is not None else None,
+            }
+            for t in result.tables
+        },
+    }
 
 
 def plan_root_rows(dataset: Dataset, rows: int, overrides: Mapping[str, int]) -> dict[str, int]:

@@ -7,6 +7,8 @@ from pathlib import Path
 
 import polars as pl
 
+from doppel.locations import FileFormat, file_format
+
 # Only the empty string is NULL by default: "NA" is also North America and "None" a
 # valid label. Callers pass more tokens with `--null-values`. Tokens are compared
 # after whitespace stripping, so " " is NULL too.
@@ -15,24 +17,20 @@ _DATE_PREFIX_RE = r"^\d{4}-\d{2}-\d{2}([T ][0-9]{2}:[0-9]{2}:[0-9]{2})?"
 
 
 def read(path: Path, *, null_values: Collection[str] = DEFAULT_NULL_VALUES) -> pl.DataFrame:
-    suffix = path.suffix.lower()
-    if suffix == ".csv":
-        return _normalise_strings(pl.read_csv(path, try_parse_dates=True), null_values)
-    if suffix == ".tsv":
-        df = pl.read_csv(path, separator="\t", try_parse_dates=True)
-        return _normalise_strings(df, null_values)
-    if suffix == ".parquet":
-        return pl.read_parquet(path)
-    if suffix == ".json":
-        return _normalise_strings(pl.read_json(path), null_values)
-    if suffix in {".ndjson", ".jsonl"}:
-        return _normalise_strings(pl.read_ndjson(path), null_values)
-    if suffix in {".arrow", ".feather", ".ipc"}:
-        return pl.read_ipc(path)
-    raise ValueError(
-        f"unsupported source extension: {suffix!r}. "
-        "Supported: .csv .tsv .parquet .json .ndjson .jsonl .arrow .feather .ipc"
-    )
+    match file_format(path, role="source"):
+        case FileFormat.CSV:
+            return _normalise_strings(pl.read_csv(path, try_parse_dates=True), null_values)
+        case FileFormat.TSV:
+            df = pl.read_csv(path, separator="\t", try_parse_dates=True)
+            return _normalise_strings(df, null_values)
+        case FileFormat.PARQUET:
+            return pl.read_parquet(path)
+        case FileFormat.JSON:
+            return _normalise_strings(pl.read_json(path), null_values)
+        case FileFormat.NDJSON:
+            return _normalise_strings(pl.read_ndjson(path), null_values)
+        case FileFormat.ARROW:
+            return pl.read_ipc(path)
 
 
 def _normalise_strings(

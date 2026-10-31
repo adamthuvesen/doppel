@@ -22,7 +22,7 @@ from doppel.pipeline.where import (
 )
 from doppel.sinks import write as sink_write
 from doppel.synth.cart import CartSynthesizer, FitProgress
-from doppel.synth.seed import Rng
+from doppel.synth.seed import Rng, sample_seed
 from doppel.text_policy import apply as apply_text_policy
 
 
@@ -123,7 +123,13 @@ def generate_single_table(
         sink_write(out_df, config.sink_spec)
 
     quality = (
-        compute_quality_summary(real_df, out_df, table.columns, sample_seed=config.seed or 0)
+        compute_quality_summary(
+            real_df,
+            out_df,
+            table.columns,
+            sample_seed=sample_seed(config.seed),
+            exclude_from_row_match={d.name for d in pii_detected},
+        )
         if config.quality
         else None
     )

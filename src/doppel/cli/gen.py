@@ -16,6 +16,7 @@ from rich.table import Table as _Table
 from doppel.cli import labels as cli_labels
 from doppel.cli.display import fit_progress, print_quality_summary, print_repair_summary
 from doppel.cli.options import (
+    FIT_ROWS_HELP_GEN,
     ConnectionTimeoutOpt,
     HashSaltOpt,
     NullValuesOpt,
@@ -27,7 +28,11 @@ from doppel.constraints.dsl import Constraint
 from doppel.constraints.engine import ConstraintReport
 from doppel.dataset import Table
 from doppel.pii.detect import PIIDetection
-from doppel.pipeline.multi_table import MultiTableGenerateConfig, generate_multi_table
+from doppel.pipeline.multi_table import (
+    MultiTableGenerateConfig,
+    generate_multi_table,
+)
+from doppel.pipeline.multi_table import run_summary_payload as multi_run_summary_payload
 from doppel.pipeline.prepare import sample_frame, table_name_for_source
 from doppel.pipeline.single_table import generate_single_table, run_summary_payload
 from doppel.pipeline.types import SingleTableGenerateConfig
@@ -35,6 +40,7 @@ from doppel.pipeline.where import merge_where_into_constraints
 from doppel.schema import multi as multi_schema
 from doppel.schema import toml as schema_toml_mod
 from doppel.sinks.spec import parse_sink_spec
+from doppel.sources.spec import DEFAULT_CONNECTION_TIMEOUT
 from doppel.synth.cart import CartSynthesizer
 from doppel.text_policy import TextPolicy
 
@@ -82,12 +88,7 @@ def run(
         None,
         "--fit-rows",
         min=0,
-        help=(
-            "Randomly sample this many source rows before fitting (useful for large files). "
-            "Defaults to min(rows*5, 100k) when source > 100k rows. "
-            "Pass 0 to disable the auto-cap and fit on the full source. "
-            "For SQL sources, pushes the sample into the warehouse via vendor-native syntax."
-        ),
+        help=FIT_ROWS_HELP_GEN,
     ),
     sql_table: str | None = typer.Option(
         None,
@@ -110,7 +111,7 @@ def run(
             "Overrides URI-embedded password with a warning."
         ),
     ),
-    connection_timeout: ConnectionTimeoutOpt = 300,
+    connection_timeout: ConnectionTimeoutOpt = DEFAULT_CONNECTION_TIMEOUT,
     null_values: NullValuesOpt = None,
     text_policy: TextPolicy = typer.Option(
         TextPolicy.SAMPLE,
@@ -175,7 +176,10 @@ def run(
                 "and let `tables[*].file` declare the source files"
             )
         if fit_rows is not None:
-            raise typer.BadParameter("--fit-rows is currently only supported for single-table gen")
+            raise typer.BadParameter(
+                "--fit-rows applies to single-table gen; for a multi-table schema, set "
+                "`fit_rows` on the table in schema.toml"
+            )
         if sql_table is not None or sql_query is not None:
             raise typer.BadParameter(
                 "--table / --query apply only to single-table URI sources; multi-table "
@@ -195,7 +199,9 @@ def run(
                 password_cmd=password_cmd,
                 connection_timeout=connection_timeout,
                 null_values=parse_null_values(null_values),
-            )
+                quality=not no_quality,
+            ),
+            json_summary=json_summary,
         )
         return
 
@@ -294,15 +300,19 @@ def _run_single(
         print_quality_summary(console, result.quality)
 
     if json_summary is not None:
-        payload = run_summary_payload(
-            config, result, input_label=source_label, output_label=sink_label
+        _write_json_summary(
+            json_summary,
+            run_summary_payload(config, result, input_label=source_label, output_label=sink_label),
         )
-        json_summary.parent.mkdir(parents=True, exist_ok=True)
-        json_summary.write_text(json.dumps(payload, indent=2, default=str), encoding="utf-8")
-        console.print(f"[green]ok[/] wrote JSON summary -> {json_summary}")
 
 
-def _run_multi(config: MultiTableGenerateConfig) -> None:
+def _write_json_summary(path: Path, payload: dict[str, object]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, indent=2, default=str), encoding="utf-8")
+    console.print(f"[green]ok[/] wrote JSON summary -> {path}")
+
+
+def _run_multi(config: MultiTableGenerateConfig, *, json_summary: Path | None) -> None:
     console.print(f"[dim]loading multi-table schema[/] {config.schema_path}")
 
     def _on_pii_detected(table_name: str, detections: list[PIIDetection]) -> None:
@@ -319,6 +329,11 @@ def _run_multi(config: MultiTableGenerateConfig) -> None:
         console.print(
             f"[green]ok[/] {written.name}: {written.out_df.height} rows -> {written.path}"
         )
+    for written in result.tables:
+        if written.quality is not None:
+            print_quality_summary(console, written.quality, label=written.name)
+    if json_summary is not None:
+        _write_json_summary(json_summary, multi_run_summary_payload(config, result))
 
 
 def _dim(message: str) -> None:

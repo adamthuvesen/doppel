@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import subprocess
+from pathlib import Path
 
+import polars as pl
 import pytest
 from typer.testing import CliRunner
 
@@ -11,8 +13,9 @@ from doppel.cli import app
 
 pytest.importorskip("presidio_analyzer")
 
+from doppel.errors import PIIUnavailableError
 from doppel.pii import detect as detect_module
-from doppel.pii.detect import SPACY_MODEL, PIIUnavailableError
+from doppel.pii.detect import SPACY_MODEL
 
 
 def test_missing_spacy_model_raises_with_install_command_and_downloads_nothing(
@@ -45,3 +48,24 @@ def test_doctor_reports_the_spacy_model() -> None:
 
     assert result.exit_code == 0, result.stdout
     assert SPACY_MODEL in result.stdout
+
+
+def test_gen_without_the_spacy_model_exits_cleanly(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(detect_module, "spacy_model_available", lambda: False)
+    detect_module.analyzer_engine.cache_clear()
+    source = tmp_path / "people.csv"
+    pl.DataFrame(
+        {"note": [f"free text number {i}" for i in range(40)], "v": list(range(40))}
+    ).write_csv(source)
+
+    result = CliRunner().invoke(
+        app, ["gen", str(source), "-o", str(tmp_path / "out.csv"), "-n", "10", "--seed", "1"]
+    )
+
+    detect_module.analyzer_engine.cache_clear()
+    assert result.exit_code == 1
+    assert result.exception is None or isinstance(result.exception, SystemExit)
+    assert SPACY_MODEL in result.output
+    assert "Traceback" not in result.output

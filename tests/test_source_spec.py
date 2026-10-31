@@ -10,8 +10,8 @@ import sys
 from pathlib import Path
 
 import pytest
-import typer
 
+from doppel.errors import InvalidInputError
 from doppel.locations import FilePath, expand_env_vars
 from doppel.sinks.spec import DuckDbSink, parse_sink_spec
 from doppel.sources.spec import DatabaseUri, parse_source_spec, redact_uri
@@ -26,14 +26,14 @@ def test_parse_file_path(tmp_path: Path) -> None:
 
 
 def test_parse_file_path_missing_raises(tmp_path: Path) -> None:
-    with pytest.raises(typer.BadParameter, match="does not exist"):
+    with pytest.raises(InvalidInputError, match="does not exist"):
         parse_source_spec(str(tmp_path / "missing.csv"), table=None, query=None, password_cmd=None)
 
 
 def test_parse_file_path_with_table_rejected(tmp_path: Path) -> None:
     p = tmp_path / "data.csv"
     p.write_text("a,b\n1,2\n")
-    with pytest.raises(typer.BadParameter, match="apply only to URI sources"):
+    with pytest.raises(InvalidInputError, match="apply only to URI sources"):
         parse_source_spec(str(p), table="users", query=None, password_cmd=None)
 
 
@@ -65,7 +65,7 @@ def test_parse_database_uri_with_query() -> None:
 
 
 def test_database_uri_both_table_and_query_rejected() -> None:
-    with pytest.raises(typer.BadParameter, match="mutually exclusive"):
+    with pytest.raises(InvalidInputError, match="mutually exclusive"):
         parse_source_spec(
             "snowflake://user@a/db/s?warehouse=WH",
             table="T",
@@ -75,7 +75,7 @@ def test_database_uri_both_table_and_query_rejected() -> None:
 
 
 def test_database_uri_neither_table_nor_query_rejected() -> None:
-    with pytest.raises(typer.BadParameter, match="exactly one of --table or --query"):
+    with pytest.raises(InvalidInputError, match="exactly one of --table or --query"):
         parse_source_spec(
             "snowflake://user@a/db/s?warehouse=WH",
             table=None,
@@ -85,7 +85,7 @@ def test_database_uri_neither_table_nor_query_rejected() -> None:
 
 
 def test_unknown_scheme_rejected() -> None:
-    with pytest.raises(typer.BadParameter, match="unsupported URI scheme"):
+    with pytest.raises(InvalidInputError, match="unsupported URI scheme"):
         parse_source_spec(
             "bigquery://proj/ds/tbl",
             table="users",
@@ -112,7 +112,7 @@ def test_env_var_expansion(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def test_env_var_missing_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("SF_PASS", raising=False)
-    with pytest.raises(typer.BadParameter, match="SF_PASS"):
+    with pytest.raises(InvalidInputError, match="SF_PASS"):
         parse_source_spec(
             "snowflake://user:${SF_PASS}@account/db/s?warehouse=WH",
             table="USERS",
@@ -191,7 +191,7 @@ def test_password_cmd_overrides_uri_password(capfd: pytest.CaptureFixture[str]) 
 
 
 def test_password_cmd_failure_raises() -> None:
-    with pytest.raises(typer.BadParameter, match="--password-cmd"):
+    with pytest.raises(InvalidInputError, match="--password-cmd"):
         parse_source_spec(
             "postgres://user@host/db",
             table="users",
@@ -201,7 +201,7 @@ def test_password_cmd_failure_raises() -> None:
 
 
 def test_password_cmd_empty_output_raises() -> None:
-    with pytest.raises(typer.BadParameter, match="no output"):
+    with pytest.raises(InvalidInputError, match="no output"):
         parse_source_spec(
             "postgres://user@host/db",
             table="users",
@@ -211,7 +211,7 @@ def test_password_cmd_empty_output_raises() -> None:
 
 
 def test_password_cmd_stderr_quoted() -> None:
-    with pytest.raises(typer.BadParameter) as exc_info:
+    with pytest.raises(InvalidInputError) as exc_info:
         parse_source_spec(
             "postgres://user@host/db",
             table="users",
@@ -250,27 +250,27 @@ def test_parse_sink_duckdb_uri() -> None:
 
 
 def test_duckdb_sink_requires_table() -> None:
-    with pytest.raises(typer.BadParameter, match="table=NAME"):
+    with pytest.raises(InvalidInputError, match="table=NAME"):
         parse_sink_spec("duckdb:///tmp/synth.db")
 
 
 def test_duckdb_sink_requires_path() -> None:
-    with pytest.raises(typer.BadParameter, match="file path"):
+    with pytest.raises(InvalidInputError, match="file path"):
         parse_sink_spec("duckdb://?table=t")
 
 
 def test_snowflake_sink_rejected() -> None:
-    with pytest.raises(typer.BadParameter, match="Snowflake sinks are not supported"):
+    with pytest.raises(InvalidInputError, match="Snowflake sinks are not supported"):
         parse_sink_spec("snowflake://user@a/db/s?warehouse=WH")
 
 
 def test_postgres_sink_rejected() -> None:
-    with pytest.raises(typer.BadParameter, match="Postgres sinks are not supported"):
+    with pytest.raises(InvalidInputError, match="Postgres sinks are not supported"):
         parse_sink_spec("postgres://user@host/db")
 
 
 def test_unknown_sink_scheme_rejected() -> None:
-    with pytest.raises(typer.BadParameter, match="unknown sink URI scheme"):
+    with pytest.raises(InvalidInputError, match="unknown sink URI scheme"):
         parse_sink_spec("bigquery://x")
 
 

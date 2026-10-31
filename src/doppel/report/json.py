@@ -35,6 +35,7 @@ def to_json(
             "synth_matrix": _without_non_finite(report.correlations.synth_matrix),
         },
         "privacy": _without_non_finite(asdict(report.privacy)),
+        "exact_row_match_rate": _finite_or_none(report.exact_row_match_rate),
         "dtype_mismatches": [asdict(issue) for issue in report.dtype_mismatches],
         "invariant_issues": [asdict(issue) for issue in report.invariant_issues],
         "calendar_fidelity": {

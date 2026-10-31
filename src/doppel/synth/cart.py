@@ -37,9 +37,9 @@ from doppel.schema.datetime import (
     decompose,
     recompose,
 )
-from doppel.schema.heuristics import FLOAT_DTYPE_NAMES, INTEGER_DTYPE_NAMES
 from doppel.schema.nullable import encode_feature
 from doppel.schema.nullable import null_rate as _null_rate
+from doppel.schema.reserved import CALENDAR_FEATURE_PREFIX, reject_reserved_column_name
 from doppel.schema.types import Column, ColumnType
 from doppel.synth.cart_repair import (
     CountBound,
@@ -80,7 +80,6 @@ _MIN_SAMPLES_LEAF = 5
 # Reserved prefix for calendar features inside the CART feature matrix. Double-underscore
 # mirrors `__doppel_null__` and is collision-proof against user column names — the fit-time
 # guard raises ValueError if any source column starts with this prefix.
-_CALENDAR_FEATURE_PREFIX = "__dt_"
 FitProgress = Callable[[int, int, str], None]
 
 
@@ -363,7 +362,7 @@ def _generate_key(
     if source_dtype == pl.String:
         return pl.Series(name, [f"{name}_{i}" for i in range(1, n + 1)], dtype=pl.String)
     out = pl.Series(name, list(range(1, n + 1)), dtype=pl.Int64)
-    if source_dtype is not None and str(source_dtype) in (INTEGER_DTYPE_NAMES | FLOAT_DTYPE_NAMES):
+    if source_dtype is not None and (source_dtype.is_integer() or source_dtype.is_float()):
         return out.cast(source_dtype)
     return out
 
@@ -454,15 +453,8 @@ class CartSynthesizer:
         table = dataset.only()
         if table.data is None:
             raise ValueError(f"table {table.name!r} has no data attached")
-        # Guard against user column names that would collide with the calendar-feature
-        # prefix and silently corrupt the running feature matrix.
         for col in table.columns:
-            if col.name.startswith(_CALENDAR_FEATURE_PREFIX):
-                raise ValueError(
-                    f"source column {col.name!r} starts with the reserved prefix "
-                    f"{_CALENDAR_FEATURE_PREFIX!r}, which doppel uses internally for "
-                    "calendar-feature columns. Rename the column upstream."
-                )
+            reject_reserved_column_name(col.name)
         self._table_name = table.name
         self._original_columns = list(table.columns)
         self._primary_key = table.primary_key
@@ -803,7 +795,7 @@ def _append_calendar_features(
     """
     new_cols: list[pl.Series] = []
     for feature_name, series in cal.items():
-        col_name = f"{_CALENDAR_FEATURE_PREFIX}{source_col}_{feature_name}"
+        col_name = f"{CALENDAR_FEATURE_PREFIX}{source_col}_{feature_name}"
         filled = series.fill_null(0).cast(pl.Float64).rename(col_name)
         new_cols.append(filled)
     if not new_cols:
@@ -833,9 +825,9 @@ def _build_series(
         return pl.Series(col.name, coerced, dtype=pl.Int64)
     if col.type is ColumnType.NUMERIC:
         series = pl.Series(col.name, values, dtype=pl.Float64)
-        if source_dtype is not None and str(source_dtype) in INTEGER_DTYPE_NAMES:
+        if source_dtype is not None and source_dtype.is_integer():
             return series.round(0).cast(source_dtype)
-        if source_dtype is not None and str(source_dtype) in FLOAT_DTYPE_NAMES:
+        if source_dtype is not None and source_dtype.is_float():
             return series.cast(source_dtype)
         return series
     series = pl.Series(col.name, values)

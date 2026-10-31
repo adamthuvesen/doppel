@@ -5,7 +5,7 @@ from __future__ import annotations
 import polars as pl
 
 from doppel.dataset import Table
-from doppel.schema.heuristics import INTEGER_DTYPE_NAMES, is_binary_flag
+from doppel.schema.heuristics import is_binary_flag
 from doppel.schema.types import Column, ColumnType
 
 # Heuristics for distinguishing CATEGORICAL from TEXT on string-typed columns.
@@ -43,7 +43,7 @@ def _classify(
     if dtype.is_numeric():
         if _is_unique_key(series, n_rows) and _looks_like_key_name(name):
             return ColumnType.KEY, None
-        if str(dtype) in INTEGER_DTYPE_NAMES and is_binary_flag(series):
+        if dtype.is_integer() and is_binary_flag(series):
             return ColumnType.CATEGORICAL, tuple(sorted(series.drop_nulls().unique().to_list()))
         return ColumnType.NUMERIC, None
     if dtype == pl.String:

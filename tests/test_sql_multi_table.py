@@ -187,3 +187,100 @@ primary_key = "order_id"
     orders_df = dataset.tables["orders"].data
     assert orders_df is not None
     assert orders_df.height == 200
+
+
+def _orders_users_schema(db: Path, *, users_extra: str = "", orders_extra: str = "") -> str:
+    return f"""
+[tables.users]
+uri = "duckdb:///{db}"
+table = "users"
+primary_key = "user_id"
+{users_extra}
+
+[tables.orders]
+uri = "duckdb:///{db}"
+table = "orders"
+primary_key = "order_id"
+{orders_extra}
+
+[[foreign_keys]]
+child_table = "orders"
+child_column = "user_id"
+parent_table = "users"
+parent_column = "user_id"
+"""
+
+
+def test_child_table_fit_rows_samples_that_table(two_table_duckdb: Path, tmp_path: Path) -> None:
+    schema_path = tmp_path / "schema.toml"
+    schema_path.write_text(
+        _orders_users_schema(two_table_duckdb, orders_extra="fit_rows = 20"), encoding="utf-8"
+    )
+
+    dataset = multi_schema.to_dataset(multi_schema.load(schema_path), tmp_path, seed=1)
+
+    orders = dataset.tables["orders"].data
+    users = dataset.tables["users"].data
+    assert orders is not None and users is not None
+    assert orders.height == 20
+    assert users.height == 50
+
+
+def test_parent_table_rejects_a_fit_rows_sample(two_table_duckdb: Path, tmp_path: Path) -> None:
+    schema_path = tmp_path / "schema.toml"
+    schema_path.write_text(
+        _orders_users_schema(two_table_duckdb, users_extra="fit_rows = 10"), encoding="utf-8"
+    )
+
+    with pytest.raises(ValidationError, match="orphan"):
+        multi_schema.load(schema_path)
+
+
+@pytest.mark.extras
+@pytest.mark.parametrize(("fit_rows", "exit_code"), [(None, 2), (0, 0)])
+def test_unknown_row_count_table_needs_schema_fit_rows(
+    tmp_path: Path, fit_rows: int | None, exit_code: int
+) -> None:
+    from unittest.mock import patch
+
+    pl.DataFrame({"user_id": list(range(1, 21)), "plan": ["free", "gold"] * 10}).write_csv(
+        tmp_path / "users.csv"
+    )
+    orders = pl.DataFrame(
+        {"order_id": list(range(1, 41)), "user_id": [1 + i % 20 for i in range(40)]}
+    )
+    fit_line = "" if fit_rows is None else f"fit_rows = {fit_rows}"
+    schema_path = tmp_path / "schema.toml"
+    schema_path.write_text(
+        f"""
+[tables.users]
+file = "users.csv"
+primary_key = "user_id"
+
+[tables.orders]
+uri = "snowflake://user@account/db/schema?warehouse=WH"
+table = "ORDERS_VIEW"
+primary_key = "order_id"
+{fit_line}
+
+[[foreign_keys]]
+child_table = "orders"
+child_column = "user_id"
+parent_table = "users"
+parent_column = "user_id"
+""",
+        encoding="utf-8",
+    )
+
+    with (
+        patch("doppel.sources.sql._probe_row_count", return_value=None),
+        patch("doppel.sources.sql.pl.read_database_uri", return_value=orders),
+    ):
+        result = CliRunner().invoke(
+            app,
+            ["gen", "--schema", str(schema_path), "-o", str(tmp_path / "out"), "-n", "10"],
+        )
+
+    assert result.exit_code == exit_code, result.output
+    if exit_code:
+        assert "unknown number of rows" in result.output

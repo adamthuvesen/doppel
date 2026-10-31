@@ -13,7 +13,7 @@ from doppel.pii.detect import PIIDetection
 from doppel.pipeline.quality_summary import QualitySummary
 from doppel.schema.toml import SchemaToml
 from doppel.sinks.spec import SinkSpec
-from doppel.sources.spec import SourceSpec
+from doppel.sources.spec import DEFAULT_CONNECTION_TIMEOUT, SourceSpec
 from doppel.synth.cart import CartSynthesizer
 from doppel.text_policy import TextPolicy
 
@@ -29,7 +29,7 @@ class SingleTableGenerateConfig:
     max_oversample: float = 4.0
     text_policy: TextPolicy = TextPolicy.SAMPLE
     hash_salt: str | None = None
-    connection_timeout: int = 300
+    connection_timeout: int = DEFAULT_CONNECTION_TIMEOUT
     sink_spec: SinkSpec | None = None
     quality: bool = False
 

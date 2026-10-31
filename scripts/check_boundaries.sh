@@ -46,6 +46,9 @@ cat >"$pkg/synth/planted_pii_import.py" <<'PY'
 from doppel.pii import detect  # noqa: F401
 PY
 echo "from doppel.schema import infer  # noqa: F401" >>"$pkg/schema/types.py"
+cat >"$pkg/pipeline/planted_typer_import.py" <<'PY'
+import typer  # noqa: F401
+PY
 
 # One planted use per ban family, in a file that owns nothing.
 cat >"$pkg/locations_planted_bans.py" <<'PY'
@@ -104,6 +107,10 @@ contracts_output="$(cd "$scratch" && PYTHONPATH="$scratch/src" "$bin/lint-import
 broken="$(grep -c ' BROKEN' <<<"$contracts_output" || true)"
 if [ "$broken" != "$contracts" ]; then
   fail "a planted violation did not break every import contract ($broken of $contracts broke)" "$contracts_output"
+fi
+# The other plants reach typer through doppel.cli, so check that this plant itself is caught.
+if ! grep -qF "doppel.pipeline.planted_typer_import -> typer" <<<"$contracts_output"; then
+  fail "the typer contract did not catch a planted import typer" "$contracts_output"
 fi
 
 ruff_output="$(cd "$scratch" && "$bin/ruff" check --no-cache --output-format concise src 2>&1 || true)"

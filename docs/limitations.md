@@ -22,4 +22,4 @@ Design choices, not bugs — don't "fix" these without scope agreement.
   sensitive as its source. See [SECURITY.md](../SECURITY.md).
 
 Integer + float subtypes now round-trip — Int32/Int64/UInt*/Float32/Float64 all
-preserved via `_INTEGER_DTYPE_NAMES`/`_FLOAT_DTYPE_NAMES` in `synth/cart.py`.
+preserved through Polars `dtype.is_integer()` / `dtype.is_float()` in `synth/cart.py`.

@@ -16,8 +16,8 @@ from typing import Any, cast
 
 import polars as pl
 
+from doppel.errors import InvalidInputError, RowCountProbeError, WarehouseConnectionError
 from doppel.locations import quote_table_name, table_name_parts
-from doppel.sources.errors import RowCountProbeError, WarehouseConnectionError
 from doppel.sources.spec import DatabaseUri, emit_redacted_log, redact_text
 
 ROW_COUNT_THRESHOLD = 1_000_000
@@ -176,8 +176,6 @@ def _enforce_row_count_threshold(
     Postgres table that was never analysed) counts as over the threshold.
     Users with intent can opt in via `--fit-rows N` (sample to N) or
     `--fit-rows 0` (fit on the whole thing)."""
-    import typer
-
     if estimate is not None and estimate <= ROW_COUNT_THRESHOLD:
         return
     size = "an unknown number of" if estimate is None else f"~{estimate:,}"
@@ -190,9 +188,10 @@ def _enforce_row_count_threshold(
                 stacklevel=3,
             )
         return
-    raise typer.BadParameter(
+    raise InvalidInputError(
         f"table at {spec.uri} has {size} rows; pass --fit-rows N to "
-        "sample, or --fit-rows 0 to fit on the whole table"
+        "sample, or --fit-rows 0 to fit on the whole table "
+        "(in a multi-table schema, set `fit_rows` on the table)"
     )
 
 
@@ -273,9 +272,7 @@ def _read_via_connectorx(spec: DatabaseUri, sql: str, *, timeout: int) -> pl.Dat
 
         importlib.import_module("connectorx")
     except ImportError as exc:
-        import typer
-
-        raise typer.BadParameter(
+        raise InvalidInputError(
             f"the {spec.scheme}:// scheme requires the optional [sql] extra. "
             'Install it with: pip install "doppeldata[sql]"'
         ) from exc

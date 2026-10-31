@@ -28,3 +28,9 @@ class Rng:
     def spawn(self) -> Rng:
         # Independent child stream for parallel/per-column use without disturbing the parent.
         return Rng(numpy=np.random.default_rng(self.numpy.integers(0, _SKLEARN_SEED_MAX)))
+
+
+def sample_seed(seed: int | None) -> int:
+    """The seed for a Polars `sample`. Polars draws OS entropy for None, so None becomes 0
+    and a run without `--seed` still samples the same rows each time."""
+    return 0 if seed is None else seed

@@ -11,9 +11,9 @@ from pathlib import Path
 import duckdb
 import pglast
 import pytest
-import typer
 from pglast import ast
 
+from doppel.errors import InvalidInputError
 from doppel.locations import quote_table_name
 from doppel.sources.sql import build_count_sql, build_pushdown_sql
 
@@ -190,7 +190,7 @@ def test_quote_table_name(scheme: str, name: str, quoted: str) -> None:
 
 @pytest.mark.parametrize("name", ["", "a..b", ".a", 'a"b', '"unterminated'])
 def test_quote_table_name_rejects_malformed(name: str) -> None:
-    with pytest.raises(typer.BadParameter, match="invalid table name"):
+    with pytest.raises(InvalidInputError, match="invalid table name"):
         quote_table_name("duckdb", name)
 
 

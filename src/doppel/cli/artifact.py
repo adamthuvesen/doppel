@@ -8,7 +8,8 @@ import typer
 from rich.console import Console
 from rich.table import Table
 
-from doppel.artifact import ArtifactError, inspect_artifact
+from doppel.artifact import inspect_artifact
+from doppel.cli.error_exits import map_errors
 
 app = typer.Typer(
     name="artifact",
@@ -21,6 +22,7 @@ console = Console()
 
 
 @app.command("info")
+@map_errors
 def info(
     path: Path = typer.Argument(
         ...,
@@ -30,10 +32,7 @@ def info(
     ),
 ) -> None:
     """Show artifact metadata (manifest, schema, sizes) — does not rebuild the synthesizer."""
-    try:
-        info_obj = inspect_artifact(path)
-    except ArtifactError as exc:
-        raise typer.BadParameter(str(exc)) from exc
+    info_obj = inspect_artifact(path)
     m = info_obj.manifest
     console.print(f"[bold]{path}[/]")
     console.print(f"  artifact-version: {m.version}")

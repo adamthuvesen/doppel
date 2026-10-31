@@ -205,6 +205,28 @@ markers = [
 
 [tool.importlinter]
 root_package = "doppel"
+include_external_packages = true
+
+[[tool.importlinter.contracts]]
+name = "Only the CLI imports typer"
+type = "forbidden"
+source_modules = [
+    "doppel.artifact",
+    "doppel.constraints",
+    "doppel.dataset",
+    "doppel.errors",
+    "doppel.locations",
+    "doppel.pii",
+    "doppel.pipeline",
+    "doppel.quality",
+    "doppel.report",
+    "doppel.schema",
+    "doppel.sinks",
+    "doppel.sources",
+    "doppel.synth",
+    "doppel.text_policy",
+]
+forbidden_modules = ["typer"]
 
 [[tool.importlinter.contracts]]
 name = "Nothing in core imports the CLI"
@@ -353,7 +375,7 @@ layers = [
     "doppel.dataset",
     "doppel.schema.datetime | doppel.schema.nullable | doppel.schema.heuristics",
     "doppel.schema.types",
-    "doppel.schema.calendar_feature",
+    "doppel.schema.calendar_feature | doppel.schema.reserved",
 ]
 
 [tool.coverage.run]

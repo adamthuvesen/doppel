@@ -10,7 +10,6 @@ from typing import cast
 
 import polars as pl
 import pytest
-import typer
 from rich.console import Console
 
 from doppel.dataset import Dataset
@@ -236,7 +235,7 @@ type = "datetime"
 calendar_features = ["is_weekend"]
 """
     )
-    with pytest.raises(typer.BadParameter, match="is_weekend"):
+    with pytest.raises(ValueError, match="is_weekend"):
         schema_toml.load(p)
 
 

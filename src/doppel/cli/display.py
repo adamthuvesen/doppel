@@ -81,6 +81,10 @@ def dcr_progress(console: Console) -> Generator[Callable[[int, int], None]]:
             progress.stop()
 
 
+def fmt_rate(value: float) -> str:
+    return f"{value:.1%}" if math.isfinite(value) else "n/a"
+
+
 def format_quality_line(summary: QualitySummary) -> str:
     def fmt(value: float) -> str:
         return f"{value:.4f}" if math.isfinite(value) else "n/a"
@@ -89,6 +93,7 @@ def format_quality_line(summary: QualitySummary) -> str:
         f"quality | marginal={fmt(summary.avg_marginal)} "
         f"| corr={fmt(summary.corr_frobenius)} "
         f"| dcr_p5={fmt(summary.dcr_p5)} "
+        f"| exact_rows={fmt_rate(summary.exact_row_match_rate)} "
         f"| text_leaks={len(summary.text_leaks)}"
     )
 

@@ -23,7 +23,6 @@ import numpy as np
 import tomli_w
 
 from doppel import __version__
-from doppel.artifact.load import ArtifactError
 from doppel.artifact.manifest import (
     ARRAYS_MEMBER,
     MANIFEST_MEMBER,
@@ -32,6 +31,7 @@ from doppel.artifact.manifest import (
     SCHEMA_TOML_MEMBER,
     Manifest,
 )
+from doppel.errors import ArtifactError
 from doppel.schema.toml import SchemaToml, to_payload
 from doppel.synth.cart import CartSynthesizer
 

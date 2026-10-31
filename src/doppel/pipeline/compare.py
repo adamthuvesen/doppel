@@ -8,11 +8,11 @@ from dataclasses import dataclass
 
 from doppel.pipeline.prepare import sample_frame, table_name_for_source
 from doppel.quality import privacy as priv_mod
-from doppel.quality.aggregate import QualityReport
+from doppel.quality.aggregate import TEXT_LEAK_MIN_RATE, QualityReport
 from doppel.quality.aggregate import compute as compute_quality
 from doppel.schema.infer import infer_table
 from doppel.sources import read as source_read
-from doppel.sources.spec import SourceSpec
+from doppel.sources.spec import DEFAULT_CONNECTION_TIMEOUT, SourceSpec
 
 DEFAULT_MAX_DCR_ROWS = 50_000
 
@@ -26,7 +26,7 @@ class CompareConfig:
     sample_rows: int | None = None
     sample_seed: int = 0
     max_dcr_rows: int = DEFAULT_MAX_DCR_ROWS
-    connection_timeout: int = 300
+    connection_timeout: int = DEFAULT_CONNECTION_TIMEOUT
 
 
 @dataclass(frozen=True)
@@ -134,7 +134,11 @@ def check_thresholds(report: QualityReport, spec: ThresholdSpec) -> list[Thresho
     if spec.fail_on_verbatim_text:
         for column, rate in report.text_leaks():
             breaches.append(
-                ThresholdBreach(f"verbatim_text[{column}]", rate, "0.0 (--fail-on-verbatim-text)")
+                ThresholdBreach(
+                    f"verbatim_text[{column}]",
+                    rate,
+                    f"{TEXT_LEAK_MIN_RATE} (--fail-on-verbatim-text)",
+                )
             )
     return breaches
 

@@ -7,31 +7,29 @@ from pathlib import Path
 
 import polars as pl
 
+from doppel.locations import FileFormat, file_format
+
 _TEMPORAL_DTYPES = (pl.Datetime, pl.Date, pl.Time, pl.Duration)
 
 
 def write(df: pl.DataFrame, path: Path) -> None:
-    suffix = path.suffix.lower()
+    fmt = file_format(path, role="sink")
     path.parent.mkdir(parents=True, exist_ok=True)
-    if suffix == ".csv":
-        df.write_csv(path)
-    elif suffix == ".tsv":
-        df.write_csv(path, separator="\t")
-    elif suffix == ".parquet":
-        df.write_parquet(path)
-    elif suffix in {".json", ".ndjson", ".jsonl"}:
-        _warn_if_temporal(df, suffix)
-        if suffix == ".json":
+    match fmt:
+        case FileFormat.CSV:
+            df.write_csv(path)
+        case FileFormat.TSV:
+            df.write_csv(path, separator="\t")
+        case FileFormat.PARQUET:
+            df.write_parquet(path)
+        case FileFormat.JSON:
+            _warn_if_temporal(df, path.suffix.lower())
             df.write_json(path)
-        else:
+        case FileFormat.NDJSON:
+            _warn_if_temporal(df, path.suffix.lower())
             df.write_ndjson(path)
-    elif suffix in {".arrow", ".feather", ".ipc"}:
-        df.write_ipc(path)
-    else:
-        raise ValueError(
-            f"unsupported sink extension: {suffix!r}. "
-            "Supported: .csv .tsv .parquet .json .ndjson .jsonl .arrow .feather .ipc"
-        )
+        case FileFormat.ARROW:
+            df.write_ipc(path)
 
 
 def _warn_if_temporal(df: pl.DataFrame, suffix: str) -> None:

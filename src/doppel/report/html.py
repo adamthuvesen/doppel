@@ -508,6 +508,10 @@ def _calendar_section(report: QualityReport) -> str:
 # --------------------------------------------------------------------------- #
 # privacy — DCR distribution strip
 # --------------------------------------------------------------------------- #
+def _fmt_rate(value: float) -> str:
+    return f"{value:.1%}" if math.isfinite(value) else "n/a"
+
+
 def _privacy_section(report: QualityReport) -> str:
     p = report.privacy
     points = [
@@ -540,6 +544,8 @@ def _privacy_section(report: QualityReport) -> str:
   differential privacy. Compared {p.n_synth:,} synthetic vs {p.n_real:,} real rows over {p.n_features}
   encoded features.</div>
   {strip}
+  <p class="note">Exact row matches: <strong>{_fmt_rate(report.exact_row_match_rate)}</strong>
+  of synthetic rows equal a real row over the modelled columns.</p>
 </section>"""
 
 

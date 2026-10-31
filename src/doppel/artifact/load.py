@@ -31,6 +31,7 @@ from doppel.artifact.manifest import (
     SCHEMA_TOML_MEMBER,
     Manifest,
 )
+from doppel.errors import ArtifactError
 from doppel.schema.toml import SchemaToml
 from doppel.synth.cart import CartSynthesizer
 from doppel.synth.cart_state import StoredCart
@@ -48,10 +49,6 @@ _MAX_TOTAL_BYTES = 512 * _MIB
 _MAX_ARRAYS = 65_536
 _OLD_PICKLE_MEMBER = "synth.pickle"
 _NPZ_ERRORS = (ValueError, OSError, EOFError, zipfile.BadZipFile)
-
-
-class ArtifactError(ValueError):
-    """Raised when a `.doppel` artifact is malformed, mis-versioned, or untrusted."""
 
 
 @dataclass(frozen=True)

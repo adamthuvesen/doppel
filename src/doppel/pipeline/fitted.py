@@ -16,12 +16,14 @@ from doppel.dataset import Dataset, Table
 from doppel.pipeline.fit_rows import AUTO_FIT_CAP, AUTO_FIT_MULTIPLIER
 from doppel.pipeline.pii import detect_pii_if_available
 from doppel.pipeline.prepare import build_training_table, read_source_dataframe
+from doppel.pipeline.quality_summary import QualitySummary, compute_quality_summary
 from doppel.schema.toml import SchemaToml
 from doppel.sinks import write as sink_write
 from doppel.sinks.spec import SinkSpec
-from doppel.sources.spec import SourceSpec
+from doppel.sources import read as source_read
+from doppel.sources.spec import DEFAULT_CONNECTION_TIMEOUT, SourceSpec
 from doppel.synth.cart import CartSynthesizer, FitProgress, RepairSummary
-from doppel.synth.seed import Rng
+from doppel.synth.seed import Rng, sample_seed
 from doppel.text_policy import TextPolicy
 from doppel.text_policy import apply as apply_text_policy
 
@@ -35,7 +37,7 @@ class FitConfig:
     seed: int | None = None
     fit_rows: int | None = None
     schema_path: Path | None = None
-    connection_timeout: int = 300
+    connection_timeout: int = DEFAULT_CONNECTION_TIMEOUT
 
 
 @dataclass(frozen=True)
@@ -53,6 +55,8 @@ class SampleConfig:
     seed: int | None = None
     text_policy: TextPolicy = TextPolicy.SAMPLE
     hash_salt: str | None = None
+    real_spec: SourceSpec | None = None
+    connection_timeout: int = DEFAULT_CONNECTION_TIMEOUT
 
 
 @dataclass(frozen=True)
@@ -60,6 +64,7 @@ class SampleResult:
     out_df: pl.DataFrame
     constraint_count: int
     repair_summary: RepairSummary
+    quality: QualitySummary | None = None
 
 
 def fit_single_table(
@@ -110,7 +115,9 @@ def sample_fitted(
     synth: CartSynthesizer,
     schema_toml: SchemaToml | None,
 ) -> SampleResult:
-    """Sample `config.rows` rows, apply the embedded constraints and the text policy, and write."""
+    """Sample `config.rows` rows, apply the embedded constraints and the text policy, and write.
+
+    An artifact does not keep its source, so the quality summary needs `config.real_spec`."""
     constraints = schema_toml.constraints if schema_toml is not None else []
     if constraints:
         out_ds, _ = synthesize_with_constraints(
@@ -128,8 +135,15 @@ def sample_fitted(
         salt=config.hash_salt,
     )
     sink_write(out_df, config.sink_spec)
+    quality = None
+    if config.real_spec is not None:
+        real_df = source_read(config.real_spec, timeout=config.connection_timeout)
+        quality = compute_quality_summary(
+            real_df, out_df, synth.original_columns, sample_seed=sample_seed(config.seed)
+        )
     return SampleResult(
         out_df=out_df,
         constraint_count=len(constraints),
         repair_summary=synth.last_repair_summary,
+        quality=quality,
     )

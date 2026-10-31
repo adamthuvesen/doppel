@@ -82,6 +82,23 @@ def compile_expression(
         raise ValueError("expression is too deeply nested") from None
 
 
+def compile_where(expression: str, columns: set[str]) -> pl.Expr:
+    """Compile a `--where` predicate over `columns`."""
+    try:
+        return compile_expression(expression, columns, mode="boolean")
+    except ValueError as exc:
+        raise ValueError(f"--where invalid: {exc}") from exc
+
+
+def predicate_holds(df: pl.DataFrame, predicate: pl.Expr) -> pl.Series:
+    """True for each row of `df` where `predicate` holds.
+
+    NULL counts as not holding. A row of unknown truth never satisfies a `where`:
+    reject-resample counts it as a violation, a filter drops it, and the support
+    count leaves it out."""
+    return df.select(predicate).to_series().fill_null(False)
+
+
 def apply(
     df: pl.DataFrame,
     constraints: list[DerivedConstraint],

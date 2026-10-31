@@ -12,8 +12,8 @@ import duckdb
 import polars as pl
 import pytest
 
+from doppel.errors import WarehouseConnectionError
 from doppel.sources import sql as source_sql
-from doppel.sources.errors import WarehouseConnectionError
 from doppel.sources.spec import DatabaseUri, parse_source_spec
 
 

@@ -16,11 +16,13 @@ from doppel.constraints.reject import (
     violation_mask_range,
 )
 from doppel.dataset import Dataset, ForeignKey, Table
+from doppel.errors import SentinelCollisionError
 from doppel.quality.aggregate import compute as compute_quality
 from doppel.schema import multi as multi_schema
 from doppel.schema.infer import infer_table
 from doppel.schema.multi import ForeignKeySpec, MultiSchemaToml, TableSpec
-from doppel.schema.nullable import NULL_SENTINEL, SentinelCollisionError, encode_feature
+from doppel.schema.nullable import encode_feature
+from doppel.schema.reserved import NULL_SENTINEL
 from doppel.schema.toml import ColumnSpec
 from doppel.schema.types import Column, ColumnType
 from doppel.synth.cart import CartSynthesizer, _generate_key

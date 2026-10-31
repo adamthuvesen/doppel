@@ -19,6 +19,8 @@ from typing import Any
 
 import polars as pl
 
+from doppel.errors import PIIUnavailableError
+from doppel.pii.fake import FAKEABLE_ENTITIES
 from doppel.schema.types import Column, ColumnType
 
 
@@ -29,20 +31,8 @@ class PIIDetection:
     confidence: float
 
 
-# Entity types we know how to fake. Anything else is recorded but not auto-replaced.
-SUPPORTED_ENTITIES: frozenset[str] = frozenset(
-    {
-        "EMAIL_ADDRESS",
-        "PERSON",
-        "PHONE_NUMBER",
-        "LOCATION",
-        "URL",
-        "IP_ADDRESS",
-        "CREDIT_CARD",
-        "US_SSN",
-        "IBAN_CODE",
-    }
-)
+# Detection flags only the entity types that `pii.fake` can regenerate.
+SUPPORTED_ENTITIES: frozenset[str] = FAKEABLE_ENTITIES
 
 
 # A categorical column of countries or cities is an analysis dimension, not PII, and
@@ -106,10 +96,6 @@ def _is_candidate(column: Column, df: pl.DataFrame) -> bool:
 
 SPACY_MODEL = "en_core_web_lg"
 SPACY_MODEL_INSTALL_COMMAND = "uv sync --all-extras"
-
-
-class PIIUnavailableError(RuntimeError):
-    """PII detection cannot run because the pinned spaCy model is not installed."""
 
 
 def spacy_model_available() -> bool:

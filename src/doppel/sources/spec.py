@@ -22,14 +22,18 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
-import typer
-
+from doppel.errors import InvalidInputError
 from doppel.locations import AUTH_REQUIRED_SCHEMES, FilePath, detect_scheme, expand_env_vars
 
 # Supported schemes for SQL sources. `postgresql` is accepted as an alias for
 # `postgres` because SQLAlchemy and most drivers accept both.
 DatabaseScheme = Literal["duckdb", "snowflake", "postgres", "postgresql"]
 _SUPPORTED_SCHEMES: frozenset[str] = frozenset(["duckdb", "snowflake", "postgres", "postgresql"])
+
+# The connection and query timeout for SQL sources, in seconds.
+DEFAULT_CONNECTION_TIMEOUT = 300
+# `--password-cmd` gets the connection timeout, but never more than a minute.
+_PASSWORD_CMD_TIMEOUT_CAP = 60
 
 _SECRET_QUERY_PARAM_RE = re.compile(r"(^|&)(password|pwd|token)=([^&]*)", re.IGNORECASE)
 
@@ -97,7 +101,7 @@ def _replace_password(uri: str, password: str) -> str:
 def _resolve_password_cmd(password_cmd: str, *, timeout: int) -> str:
     """Run `password_cmd` via the shell, return stdout (stripped) as the password.
 
-    Raises BadParameter with the subprocess's stderr if the command fails or
+    Raises InvalidInputError with the subprocess's stderr if the command fails or
     times out. Stripping trailing newlines is intentional: `op read` and most
     secret-managers emit a trailing newline."""
     try:
@@ -110,16 +114,20 @@ def _resolve_password_cmd(password_cmd: str, *, timeout: int) -> str:
             check=False,
         )
     except subprocess.TimeoutExpired as exc:
-        raise typer.BadParameter(
+        raise InvalidInputError(
             f"--password-cmd timed out after {timeout}s: {password_cmd!r}"
         ) from exc
     if result.returncode != 0:
         stderr = (result.stderr or "").strip() or "<no stderr output>"
-        raise typer.BadParameter(f"--password-cmd exited {result.returncode}: {stderr}")
+        raise InvalidInputError(f"--password-cmd exited {result.returncode}: {stderr}")
     password = (result.stdout or "").rstrip("\n")
     if not password:
-        raise typer.BadParameter("--password-cmd produced no output on stdout")
+        raise InvalidInputError("--password-cmd produced no output on stdout")
     return password
+
+
+def password_cmd_timeout(connection_timeout: int) -> int:
+    return min(connection_timeout, _PASSWORD_CMD_TIMEOUT_CAP)
 
 
 def _warn(message: str) -> None:
@@ -154,14 +162,12 @@ def parse_source_spec(
     if scheme is None:
         # File-path branch.
         if table is not None or query is not None:
-            raise typer.BadParameter(
-                "--table and --query apply only to URI sources, not file paths"
-            )
+            raise InvalidInputError("--table and --query apply only to URI sources, not file paths")
         path = Path(value)
         if not path.exists():
-            raise typer.BadParameter(f"path does not exist: {value!r}")
+            raise InvalidInputError(f"path does not exist: {value!r}")
         if not path.is_file():
-            raise typer.BadParameter(f"not a regular file: {value!r}")
+            raise InvalidInputError(f"not a regular file: {value!r}")
         return FilePath(path=path, null_values=null_values)
 
     return _parse_database_uri(
@@ -184,13 +190,13 @@ def _parse_database_uri(
     password_cmd_timeout: int,
 ) -> DatabaseUri:
     if scheme not in _SUPPORTED_SCHEMES:
-        raise typer.BadParameter(
+        raise InvalidInputError(
             f"unsupported URI scheme {scheme!r}. Supported: {sorted(_SUPPORTED_SCHEMES)}"
         )
     if table is None and query is None:
-        raise typer.BadParameter("URI sources require exactly one of --table or --query")
+        raise InvalidInputError("URI sources require exactly one of --table or --query")
     if table is not None and query is not None:
-        raise typer.BadParameter("--table and --query are mutually exclusive")
+        raise InvalidInputError("--table and --query are mutually exclusive")
 
     expanded = expand_env_vars(value)
     parsed = urllib.parse.urlsplit(expanded)
@@ -200,7 +206,7 @@ def _parse_database_uri(
     if password_cmd is not None:
         password = _resolve_password_cmd(password_cmd, timeout=password_cmd_timeout)
         if parsed.username is None and scheme in AUTH_REQUIRED_SCHEMES:
-            raise typer.BadParameter(
+            raise InvalidInputError(
                 "--password-cmd requires the URI to contain a username (scheme://user@host/...)"
             )
         if uri_has_password:
@@ -239,12 +245,14 @@ def emit_redacted_log(spec: DatabaseUri) -> None:
 
 
 __all__ = [
+    "DEFAULT_CONNECTION_TIMEOUT",
     "DatabaseScheme",
     "DatabaseUri",
     "FilePath",
     "SourceSpec",
     "emit_redacted_log",
     "parse_source_spec",
+    "password_cmd_timeout",
     "redact_text",
     "redact_uri",
 ]

@@ -21,16 +21,8 @@ def precheck_where(expression: str, source_df: pl.DataFrame) -> int:
 
     Returns match count. Caller maps errors to CLI messages.
     """
-    try:
-        predicate = expr_mod.compile_expression(expression, set(source_df.columns), mode="boolean")
-    except ValueError as exc:
-        raise ValueError(f"--where invalid: {exc}") from exc
-
-    matches = int(
-        source_df.select(predicate.alias("__doppel_where__"))["__doppel_where__"]
-        .fill_null(False)
-        .sum()
-    )
+    predicate = expr_mod.compile_where(expression, set(source_df.columns))
+    matches = int(expr_mod.predicate_holds(source_df, predicate).sum())
     if matches == 0:
         raise ValueError(
             f"no rows in source satisfy --where {expression!r}; "

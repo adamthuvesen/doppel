@@ -43,3 +43,4 @@ _GENERATORS: dict[str, Callable[[Any], str]] = {
     "US_SSN": lambda f: f.ssn(),
     "IBAN_CODE": lambda f: f.iban(),
 }
+FAKEABLE_ENTITIES: frozenset[str] = frozenset(_GENERATORS)

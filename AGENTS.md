@@ -8,7 +8,9 @@ User-level guidance (tone, principles, git etiquette) lives in `~/.claude/CLAUDE
 
 ```
 src/doppel/
-  cli/         Typer apps — thin, delegate to core
+  cli/         Typer apps: parse arguments, call one pipeline function, print, map errors to exit codes
+  pipeline/    One flow per command (gen single and multi, fit, sample, diff, quality summary)
+  errors.py    doppel's error types; only cli/ imports typer (import contract)
   dataset.py   The spine: Dataset = graph of Tables linked by ForeignKey edges
   sources/     File readers (CSV/Parquet/JSON/Arrow) returning Polars DataFrames
   sinks/       Symmetric writers

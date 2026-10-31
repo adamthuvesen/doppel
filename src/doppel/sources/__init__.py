@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import polars as pl
 
-from doppel.sources.spec import FilePath, SourceSpec
+from doppel.sources.spec import DEFAULT_CONNECTION_TIMEOUT, FilePath, SourceSpec
 
 
 def read(
@@ -15,7 +15,7 @@ def read(
     *,
     fit_rows: int | None = None,
     seed: int | None = None,
-    timeout: int = 300,
+    timeout: int = DEFAULT_CONNECTION_TIMEOUT,
 ) -> pl.DataFrame:
     """Read `spec` into a Polars DataFrame. Dispatches on the spec tag.
 

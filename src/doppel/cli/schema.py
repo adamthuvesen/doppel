@@ -9,11 +9,13 @@ from pydantic import ValidationError
 from rich.console import Console
 
 from doppel.cli import labels as cli_labels
+from doppel.cli.error_exits import map_errors
 from doppel.cli.options import ConnectionTimeoutOpt, NullValuesOpt, resolve_source
 from doppel.pipeline.prepare import table_name_for_source
 from doppel.schema import toml as schema_toml
 from doppel.schema.infer import infer_table
 from doppel.sources import read as source_read
+from doppel.sources.spec import DEFAULT_CONNECTION_TIMEOUT
 
 app = typer.Typer(
     name="schema",
@@ -25,6 +27,7 @@ console = Console()
 
 
 @app.command("infer")
+@map_errors
 def infer(
     input_path: str = typer.Argument(
         ...,
@@ -51,7 +54,7 @@ def infer(
         "--password-cmd",
         help='Shell command whose stdout is the SQL password (e.g. "op read op://vault/db/pw").',
     ),
-    connection_timeout: ConnectionTimeoutOpt = 300,
+    connection_timeout: ConnectionTimeoutOpt = DEFAULT_CONNECTION_TIMEOUT,
     null_values: NullValuesOpt = None,
 ) -> None:
     source_spec = resolve_source(
@@ -79,6 +82,7 @@ def infer(
 
 
 @app.command("check")
+@map_errors
 def check(
     input_path: str = typer.Argument(
         ...,
@@ -106,7 +110,7 @@ def check(
         "--password-cmd",
         help="Shell command whose stdout is the SQL password.",
     ),
-    connection_timeout: ConnectionTimeoutOpt = 300,
+    connection_timeout: ConnectionTimeoutOpt = DEFAULT_CONNECTION_TIMEOUT,
     null_values: NullValuesOpt = None,
 ) -> None:
     source_spec = resolve_source(

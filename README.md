@@ -52,7 +52,7 @@ Expected shape from the demo fixture:
 
 ```text
 ok wrote 1000 rows x 15 cols -> synth.csv
-quality | marginal=0.1005 | corr=0.1062 | dcr_p5=0.0507 | text_leaks=0
+quality | marginal=0.1005 | corr=0.1062 | dcr_p5=0.0507 | exact_rows=0.0% | text_leaks=0
 thresholds: all passed
 ```
 
@@ -233,7 +233,9 @@ doppel gen --schema schema.toml -n 1000 \
   --seed 1
 ```
 
-`-n` is rows per root table. Child rows are attached to generated parent keys. doppel
+`-n` is rows per root table. Child rows are attached to generated parent keys. To fit
+a large or uncounted warehouse table on a sample, set `fit_rows` on that table; see
+[docs/sql-connectors.md](docs/sql-connectors.md#multi-table-sql). doppel
 preserves foreign-key integrity, but it does not preserve cross-table correlations
 such as "larger customers place larger orders."
 
@@ -271,6 +273,10 @@ Metrics:
 | `corr_frobenius` | Correlation-matrix distance. Lower is closer. |
 | `dcr_p5` | 5th-percentile distance to closest real record. Higher means less near-copying. |
 | `verbatim_rate` | Fraction of text values copied from the source. |
+| `exact_row_match_rate` | Share of synthetic rows equal to a real row over the modelled columns (key columns and regenerated PII are left out). Small tables with few distinct values give high rates. doppel sets no threshold for it. |
+
+`gen` prints the same summary for each table of a multi-table run. `sample --real <file>`
+prints it against the source, because an artifact does not keep its source.
 
 Use `--sample-rows N` and `--max-dcr-rows N` for large comparisons.
 

@@ -104,8 +104,11 @@ doppel's privacy posture is **heuristic**, not formal:
   doesn't carry detection metadata to support round-trip regeneration. Without the
   `[pii]` extra, `fit` prints a warning that PII was not checked.
 - Free-text columns without detected PII are sampled with replacement and **may leak
-  original values**. `doppel diff` reports a distance-to-closest-record percentile
-  and a per-column verbatim-text fraction so you can spot row-level memorisation.
+  original values**. `doppel diff` reports a distance-to-closest-record percentile,
+  a per-column verbatim-text fraction, and the share of synthetic rows that equal a
+  real row, so you can spot row-level memorisation. `gen` and `sample --real` print
+  that share too. CART leaf sampling copies real rows on small tables: one 60-row,
+  4-column table gave 14 copies in 1,000 synthetic rows. doppel sets no threshold.
 - No differential privacy. If you need a formal privacy guarantee, doppel is not
   the right tool.
 - **A `.doppel` artifact is as sensitive as its source.** Sampling draws real values

@@ -10,11 +10,18 @@ from rich.console import Console
 from doppel.artifact import load as load_artifact
 from doppel.artifact import save as save_artifact
 from doppel.cli import labels as cli_labels
-from doppel.cli.display import fit_progress, print_repair_summary
-from doppel.cli.options import ConnectionTimeoutOpt, HashSaltOpt, NullValuesOpt, resolve_source
+from doppel.cli.display import fit_progress, print_quality_summary, print_repair_summary
+from doppel.cli.options import (
+    FIT_ROWS_HELP_FIT,
+    ConnectionTimeoutOpt,
+    HashSaltOpt,
+    NullValuesOpt,
+    resolve_source,
+)
 from doppel.pipeline.fitted import FitConfig, SampleConfig, fit_single_table, sample_fitted
 from doppel.pipeline.prepare import sample_frame, table_name_for_source
 from doppel.sinks.spec import parse_sink_spec
+from doppel.sources.spec import DEFAULT_CONNECTION_TIMEOUT
 from doppel.text_policy import TextPolicy
 
 console = Console()
@@ -46,12 +53,7 @@ def fit(
         None,
         "--fit-rows",
         min=0,
-        help=(
-            "Randomly sample this many source rows before fitting (useful for large files). "
-            "Defaults to min(100k) when source > 100k rows (gen uses min(rows*5, 100k)). "
-            "Pass 0 to disable the auto-cap and fit on the full source. "
-            "For SQL sources, pushes the sample into the warehouse via vendor-native syntax."
-        ),
+        help=FIT_ROWS_HELP_FIT,
     ),
     sql_table: str | None = typer.Option(
         None,
@@ -68,7 +70,7 @@ def fit(
         "--password-cmd",
         help='Shell command whose stdout is the SQL password (e.g. "op read op://vault/db/pw").',
     ),
-    connection_timeout: ConnectionTimeoutOpt = 300,
+    connection_timeout: ConnectionTimeoutOpt = DEFAULT_CONNECTION_TIMEOUT,
     null_values: NullValuesOpt = None,
 ) -> None:
     source_spec = resolve_source(
@@ -140,8 +142,29 @@ def sample(
         help="How to handle free-text columns in output: sample, hash, fake, or drop.",
     ),
     hash_salt: HashSaltOpt = None,
+    real: str | None = typer.Option(
+        None,
+        "--real",
+        help=(
+            "Real dataset (file path) to compare the sample against. Prints the quality "
+            "summary, with the exact-row-match rate. The artifact does not keep its source."
+        ),
+    ),
+    null_values: NullValuesOpt = None,
 ) -> None:
     sink_spec = parse_sink_spec(output)
+    real_spec = (
+        None
+        if real is None
+        else resolve_source(
+            real,
+            table=None,
+            query=None,
+            password_cmd=None,
+            connection_timeout=DEFAULT_CONNECTION_TIMEOUT,
+            null_values=null_values,
+        )
+    )
     console.print(f"[dim]loading[/] {artifact}")
     synth, manifest, schema_toml = load_artifact(artifact)
     console.print(
@@ -157,6 +180,7 @@ def sample(
             seed=seed,
             text_policy=text_policy,
             hash_salt=hash_salt,
+            real_spec=real_spec,
         ),
         synth,
         schema_toml,
@@ -169,6 +193,8 @@ def sample(
     out_df = result.out_df
     sink_label = cli_labels.sink_label(sink_spec)
     console.print(f"[green]ok[/] wrote {out_df.height} rows x {out_df.width} cols -> {sink_label}")
+    if result.quality is not None:
+        print_quality_summary(console, result.quality)
 
 
 def _dim(message: str) -> None:

@@ -46,3 +46,6 @@ report.json
 
 # Local-only demo recording
 assets/
+
+# Verification evidence (verify-doppel)
+.verify/

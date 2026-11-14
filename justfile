@@ -28,6 +28,9 @@ check:
     lane types uv run --no-sync basedpyright
     lane pytest uv run --no-sync pytest -q -m "not slow" -p no:cacheprovider
     lane boundaries scripts/check_boundaries.sh
+    lane ruff-verify uv run --no-sync ruff check --config .agents/skills/verify-doppel/ruff.toml .agents/skills/verify-doppel .agents/skills/verify-doppel/verify
+    lane ruff-format-verify uv run --no-sync ruff format --config .agents/skills/verify-doppel/ruff.toml --check .agents/skills/verify-doppel .agents/skills/verify-doppel/verify
+    lane types-verify uv run --no-sync basedpyright -p .agents/skills/verify-doppel/pyrightconfig.json
     failed=0
     for i in "${!names[@]}"; do
         if wait "${pids[$i]}"; then
@@ -45,10 +48,9 @@ fix:
     uv run ruff check --fix src tests
     uv run ruff format src tests
 
-# Drive the real CLI on synthetic data. There is no verify skill yet (Phase 7).
+# Drive the real CLI on seeded synthetic fixtures (verify-doppel). Args: all | list | control | doctor | <drive>...
 verify *args:
-    @echo "no verify skill yet" >&2
-    @exit 1
+    uv run --no-sync python .agents/skills/verify-doppel/verify {{args}}
 
 # Slow tests, with the coverage report.
 slow:

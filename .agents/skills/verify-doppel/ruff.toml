@@ -1,0 +1,6 @@
+extend = "../../../pyproject.toml"
+
+# The skill drives the CLI with subprocesses, builds hostile pickles on purpose, and opens DuckDB.
+[lint.per-file-ignores]
+"*.py" = ["TID251", "S301", "ANN", "S101", "N818"]
+"verify" = ["TID251", "S301", "ANN", "S101", "N818"]

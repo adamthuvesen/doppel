@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import sys
-import tomllib
 from collections.abc import Callable
 from pathlib import Path
 
@@ -341,8 +340,7 @@ def _dim(message: str) -> None:
 
 
 def _is_multi_table_file(path: Path) -> bool:
-    raw = tomllib.loads(path.read_text(encoding="utf-8"))
-    return multi_schema.is_multi_table(raw)
+    return multi_schema.is_multi_table(schema_toml_mod.parse_toml(path.read_text(encoding="utf-8")))
 
 
 def _print_explain(synth: CartSynthesizer, table: Table) -> None:

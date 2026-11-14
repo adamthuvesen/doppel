@@ -34,6 +34,9 @@ For every URI source, pass exactly one selector:
 
 For DuckDB, the path goes in the URI path component. For Snowflake and Postgres,
 the database, schema, and warehouse routing live in the path and query string.
+A Snowflake URI is `snowflake://user@account/database[/schema]`. Each query
+parameter (`warehouse`, `role`, `authenticator`, `private_key_file`, and so on)
+passes through to `snowflake.connector.connect` as a connection parameter.
 
 ## Auth
 
@@ -60,7 +63,8 @@ There are three password mechanisms. doppel applies them in this order:
    Use this only for throwaway local runs.
 
 doppel redacts secrets at the parser boundary. It replaces the URI password with
-`***` and masks the `password`, `pwd`, and `token` query parameters in the
+`***` and masks the value of every query parameter whose key contains
+`password`, `pwd`, `token`, `secret`, `passcode`, or `key` (in any case) in the
 log-safe URI, and it scrubs the raw URI and each secret from driver errors. The raw
 URI is kept separately and passed straight to the driver. It does not appear in
 logs, error messages, or `--explain` output.
@@ -107,7 +111,9 @@ be byte-identical across runs.
 Before reading from Snowflake or Postgres, doppel runs a cheap row-count
 query against the catalog:
 
-- Snowflake: `SELECT MAX(ROW_COUNT) FROM INFORMATION_SCHEMA.TABLES`
+- Snowflake: `SELECT MAX(ROW_COUNT) FROM INFORMATION_SCHEMA.TABLES`, filtered on
+  `TABLE_SCHEMA` and `TABLE_NAME`. A `db.schema.table` name reads
+  `"DB".INFORMATION_SCHEMA.TABLES`; a bare name filters on `CURRENT_SCHEMA()`.
 - Postgres: `SELECT reltuples::BIGINT FROM pg_class`
 - For `--query`: `SELECT COUNT(*) FROM (<query>) AS _doppel_probe`
 
@@ -187,15 +193,17 @@ permissions, and recovery. doppel leaves that to your normal ELT tooling.
 
 ## Connection lifecycle
 
-Each source URI opens one connection per CLI invocation. `--connection-timeout
-SECONDS` (default 300) is passed to the driver where supported, with a
-Python-side watchdog for the rest. Before opening the connection, doppel logs
+Each read opens its own connection, so the row-count probe and the data read are
+two connections. `--connection-timeout SECONDS` (default 300) is passed to the
+driver where supported (Snowflake: `login_timeout` and the session's
+`STATEMENT_TIMEOUT_IN_SECONDS`), with a Python-side watchdog for the rest. Before opening the connection, doppel logs
 the redacted URI to stderr at info level so failures still point at the right
 target.
 
 ## Per-vendor caveats
 
-- **Snowflake**: only password authentication is supported. The
+- **Snowflake**: password authentication is the tested path. Other
+  authenticators reach the driver through URI query parameters, untested. The
   `INFORMATION_SCHEMA.TABLES.ROW_COUNT` probe returns the value as of the
   last `ANALYZE`/`COMPACT`; it is accurate enough for the 1M threshold guard.
 - **Postgres**: `TABLESAMPLE BERNOULLI(p)` returns approximately `p%` of
@@ -207,6 +215,14 @@ target.
 
 ## Driver
 
-ConnectorX is the SQL read driver for Snowflake and Postgres. DuckDB reads
-use DuckDB directly. See [SECURITY.md](../SECURITY.md) for the threat-model
+Snowflake reads use the official `snowflake-connector-python` and fetch the
+result as one Arrow table (`fetch_arrow_all`) into polars. ConnectorX has no
+Snowflake source (connectorx 0.4.6 fails with "Source Unknown not supported"),
+so Snowflake reads never worked before this driver. Postgres reads use ConnectorX
+through `pl.read_database_uri`. DuckDB reads use DuckDB directly. Both warehouse
+drivers come with the `[sql]` extra.
+
+The Snowflake read is tested only against a fake connector at the
+`snowflake.connector.connect` boundary. Nothing has been run against a live
+Snowflake warehouse. See [SECURITY.md](../SECURITY.md) for the threat-model
 implications of native database drivers.

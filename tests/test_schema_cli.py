@@ -44,7 +44,7 @@ def test_schema_check_fails_when_column_missing(mixed_csv: Path, tmp_path: Path)
     )
     result = runner.invoke(app, ["schema", "check", str(mixed_csv), "--schema", str(schema_path)])
     assert result.exit_code != 0
-    assert "not in data" in result.stdout
+    assert "not in data" in result.stderr
 
 
 def test_schema_check_fails_when_constraint_column_missing(mixed_csv: Path, tmp_path: Path) -> None:
@@ -62,7 +62,7 @@ min = 0
     )
     result = runner.invoke(app, ["schema", "check", str(mixed_csv), "--schema", str(schema_path)])
     assert result.exit_code != 0
-    assert "unknown column" in result.stdout
+    assert "unknown column" in result.stderr
 
 
 def test_schema_check_rejects_unknown_schema_key_cleanly(mixed_csv: Path, tmp_path: Path) -> None:

@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import importlib.util
-from collections.abc import Iterator
+import weakref
+from collections.abc import Callable, Iterator
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -64,18 +65,87 @@ def _memoize_presidio_analyze() -> Iterator[None]:
     from presidio_analyzer import AnalyzerEngine
 
     original = AnalyzerEngine.analyze
-    cache: dict[tuple[int, str, str], Any] = {}
+    # Keyed on the engine object itself, held weakly: a later engine can never reuse a
+    # dead engine's entries, which an `id()` key would allow.
+    cache: weakref.WeakKeyDictionary[Any, dict[tuple[str, str], Any]] = weakref.WeakKeyDictionary()
 
     def analyze(self: Any, text: str, language: str, **kwargs: Any) -> Any:
         if kwargs:
             return original(self, text=text, language=language, **kwargs)
-        key = (id(self), language, text)
-        if key not in cache:
-            cache[key] = original(self, text=text, language=language)
-        return cache[key]
+        results = cache.setdefault(self, {})
+        key = (language, text)
+        if key not in results:
+            results[key] = original(self, text=text, language=language)
+        return results[key]
 
     setattr(AnalyzerEngine, "analyze", analyze)  # noqa: B010
     try:
         yield
     finally:
         setattr(AnalyzerEngine, "analyze", original)  # noqa: B010
+
+
+class FakeSnowflake:
+    """Stands in for `snowflake.connector`: records each connect and each SQL text, and
+    answers each query with the next frame in `results` (the last one repeats)."""
+
+    def __init__(self, results: list[pl.DataFrame], error: Exception | None = None) -> None:
+        self.results = results
+        self.error = error
+        self.connect_args: list[dict[str, Any]] = []
+        self.sql: list[str] = []
+
+    def connect(self, **kwargs: Any) -> FakeSnowflake:
+        self.connect_args.append(kwargs)
+        if self.error is not None:
+            raise self.error
+        return self
+
+    def __enter__(self) -> FakeSnowflake:
+        return self
+
+    def __exit__(self, *_exc: object) -> None:
+        return None
+
+    def cursor(self) -> FakeSnowflake:
+        return self
+
+    def execute(self, sql: str) -> None:
+        self.sql.append(sql)
+
+    def fetch_arrow_all(self, *, force_return_table: bool = False) -> Any:
+        assert force_return_table
+        frame = self.results.pop(0) if len(self.results) > 1 else self.results[0]
+        return frame.to_arrow()
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _no_real_snowflake() -> Iterator[None]:
+    """No test may open a Snowflake connection. A test that needs one installs a fake."""
+    if importlib.util.find_spec("snowflake.connector") is None:
+        yield
+        return
+    import snowflake.connector
+
+    def refuse(**_kwargs: Any) -> None:
+        raise AssertionError("a test tried to open a real Snowflake connection")
+
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(snowflake.connector, "connect", refuse)
+        yield
+
+
+InstallFakeSnowflake = Callable[..., FakeSnowflake]
+
+
+@pytest.fixture
+def fake_snowflake(monkeypatch: pytest.MonkeyPatch) -> InstallFakeSnowflake:
+    """Install a `FakeSnowflake` that answers with the given frames, or raises `error`."""
+    import snowflake.connector
+
+    def install(*results: pl.DataFrame, error: Exception | None = None) -> FakeSnowflake:
+        fake = FakeSnowflake(list(results) or [pl.DataFrame({"c": [1]})], error)
+        monkeypatch.setattr(snowflake.connector, "connect", fake.connect)
+        return fake
+
+    return install

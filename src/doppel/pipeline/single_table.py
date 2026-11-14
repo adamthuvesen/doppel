@@ -10,6 +10,7 @@ import polars as pl
 from doppel.constraints.engine import ConstraintReport, synthesize_with_constraints
 from doppel.dataset import Dataset
 from doppel.pii.detect import PIIDetection
+from doppel.pipeline.fit_rows import gen_fit_cap
 from doppel.pipeline.pii import strip_pii_if_available
 from doppel.pipeline.prepare import build_training_table, read_source_dataframe
 from doppel.pipeline.quality_summary import compute_quality_summary
@@ -45,7 +46,7 @@ def generate_single_table(
     real_df, fit_df = read_source_dataframe(
         config.source_spec,
         fit_rows=config.fit_rows,
-        requested_rows=config.rows,
+        fit_cap=gen_fit_cap(config.rows),
         seed=config.seed,
         connection_timeout=config.connection_timeout,
         sample_fit=sample_fit,

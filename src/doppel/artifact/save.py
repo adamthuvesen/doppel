@@ -66,8 +66,12 @@ def save(
         "columns": [asdict(c) for c in synth.original_columns],
     }
 
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp_fd, tmp_name = tempfile.mkstemp(prefix=".doppel-", suffix=".tmp", dir=path.parent)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp_fd, tmp_name = tempfile.mkstemp(prefix=".doppel-", suffix=".tmp", dir=path.parent)
+    except OSError as exc:
+        # Name the artifact path, not the temporary file beside it.
+        raise type(exc)(exc.errno, exc.strerror, str(path)) from None
     os.close(tmp_fd)
     tmp_path = Path(tmp_name)
     try:

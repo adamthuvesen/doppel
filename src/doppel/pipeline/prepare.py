@@ -43,7 +43,7 @@ def read_source_dataframe(
     source_spec: SourceSpec,
     *,
     fit_rows: int | None,
-    requested_rows: int,
+    fit_cap: int,
     seed: int | None,
     connection_timeout: int,
     sample_fit: Callable[[pl.DataFrame, int | None], pl.DataFrame],
@@ -62,7 +62,7 @@ def read_source_dataframe(
     effective = auto_fit_rows(
         fit_rows,
         full_df.height,
-        requested_rows,
+        fit_cap,
         notify=notify_fit_cap,
     )
     fit_df = sample_fit(full_df, effective)

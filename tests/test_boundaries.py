@@ -1,6 +1,6 @@
 """Checks that ruff's import bans cannot make.
 
-connectorx is loaded by string, so ruff cannot see it. Ruff's per-file ignores also lift every
+A warehouse driver can be loaded by string (connectorx always is), so ruff cannot see it. Ruff's per-file ignores also lift every
 ban in an owner file at once (a TID251 ignore cannot name one banned API), so the process and
 network bans are checked here over every file. `scripts/check_boundaries.sh` plants a violation
 for each test and requires it to fail, so an emptied detector fails `just check`.
@@ -11,9 +11,12 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
+import pytest
+
 SRC = Path(__file__).resolve().parents[1] / "src" / "doppel"
-# The SQL source loads the driver. `doctor` only probes that the module is present.
-CONNECTORX_OWNERS = frozenset({"sources/sql.py", "cli/doctor.py"})
+# The SQL source loads each driver. `doctor` only probes that the module is present.
+DRIVER_OWNERS = frozenset({"sources/sql.py", "cli/doctor.py"})
+DRIVERS = ("connectorx", "snowflake.connector")
 # `--password-cmd` runs the user's secret command.
 PROCESS_OWNERS = frozenset({"sources/spec.py"})
 
@@ -80,12 +83,14 @@ def _users(modules: frozenset[str], attributes: dict[str, frozenset[str]]) -> di
     return users
 
 
-def test_connectorx_is_named_only_in_its_owner_files() -> None:
-    assert _files_mentioning("connectorx") <= CONNECTORX_OWNERS
+@pytest.mark.parametrize("driver", DRIVERS)
+def test_driver_is_named_only_in_its_owner_files(driver: str) -> None:
+    assert _files_mentioning(driver) <= DRIVER_OWNERS
 
 
-def test_connectorx_detector_still_finds_the_real_use() -> None:
-    assert "sources/sql.py" in _files_mentioning("connectorx")
+@pytest.mark.parametrize("driver", DRIVERS)
+def test_driver_detector_still_finds_the_real_use(driver: str) -> None:
+    assert "sources/sql.py" in _files_mentioning(driver)
 
 
 def test_only_the_password_command_owner_starts_a_process() -> None:

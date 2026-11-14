@@ -66,6 +66,7 @@ import pty
 import random
 import requests
 import secrets
+import snowflake.connector
 import socket
 import spacy
 import subprocess
@@ -93,6 +94,11 @@ cat >"$pkg/connectorx_planted.py" <<'PY'
 import importlib
 
 importlib.import_module("connectorx")
+PY
+cat >"$pkg/snowflake_planted.py" <<'PY'
+import importlib
+
+importlib.import_module("snowflake.connector")
 PY
 # Owner files lift every ruff ban at once, so plant process and network uses in two of them.
 printf '\nimport subprocess  # noqa: E402, F401\n' >>"$pkg/pii/fake.py"
@@ -122,7 +128,7 @@ banned=(
   socket http.client urllib.request requests
   pickle marshal joblib numpy.load
   random uuid.uuid4 os.urandom numpy.random secrets
-  duckdb presidio_analyzer spacy faker
+  duckdb snowflake presidio_analyzer spacy faker
 )
 for name in "${banned[@]}"; do
   if ! grep -qF "TID251 \`$name\` is banned" <<<"$ruff_output"; then
@@ -136,7 +142,8 @@ for name in pickle numpy.load; do
 done
 
 ast_checks=(
-  "test_connectorx_is_named_only_in_its_owner_files:a planted importlib.import_module(\"connectorx\")"
+  "test_driver_is_named_only_in_its_owner_files[connectorx]:a planted importlib.import_module(\"connectorx\")"
+  "test_driver_is_named_only_in_its_owner_files[snowflake.connector]:a planted importlib.import_module(\"snowflake.connector\")"
   "test_only_the_password_command_owner_starts_a_process:a planted import subprocess in pii/fake.py"
   "test_no_module_opens_a_network_client:a planted import socket in pii/detect.py"
 )

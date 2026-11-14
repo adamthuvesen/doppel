@@ -14,7 +14,6 @@ from __future__ import annotations
 import io
 import math
 import tarfile
-import tomllib
 import zipfile
 from dataclasses import dataclass
 from pathlib import Path
@@ -34,7 +33,7 @@ from doppel.artifact.manifest import (
     Manifest,
 )
 from doppel.errors import ArtifactError
-from doppel.schema.toml import SchemaToml
+from doppel.schema.toml import SchemaToml, parse_toml
 from doppel.synth.cart import CartSynthesizer
 from doppel.synth.cart_state import StoredCart
 
@@ -172,7 +171,7 @@ def _parse_schema(payload: bytes | None) -> SchemaToml | None:
     if payload is None:
         return None
     try:
-        return SchemaToml.model_validate(tomllib.loads(payload.decode("utf-8")))
+        return SchemaToml.model_validate(parse_toml(payload.decode("utf-8")))
     except ValueError as exc:
         raise ArtifactError(f"{SCHEMA_TOML_MEMBER} is malformed: {exc}") from exc
 

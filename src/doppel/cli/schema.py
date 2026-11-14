@@ -7,6 +7,7 @@ from pathlib import Path
 import typer
 from pydantic import ValidationError
 from rich.console import Console
+from rich.markup import escape
 
 from doppel.cli import labels as cli_labels
 from doppel.cli.error_exits import map_errors
@@ -24,6 +25,7 @@ app = typer.Typer(
 )
 
 console = Console()
+err_console = Console(stderr=True)
 
 
 @app.command("infer")
@@ -130,7 +132,7 @@ def check(
         schema = schema_toml.load(schema_file)
         schema_toml.validate_against_table(inferred, schema)
     except (ValidationError, ValueError) as exc:
-        console.print(f"[red]err[/] {exc}")
+        err_console.print(f"[red]err[/] {escape(str(exc))}")
         raise typer.Exit(code=1) from None
 
     console.print(

@@ -455,8 +455,18 @@ class CartSynthesizer:
         table = dataset.only()
         if table.data is None:
             raise ValueError(f"table {table.name!r} has no data attached")
+        if table.data.height == 0:
+            raise ValueError(f"table {table.name!r} has no rows; doppel needs at least one")
         for col in table.columns:
             reject_reserved_column_name(col.name)
+            dtype = table.data[col.name].dtype if col.name in table.data.columns else None
+            if col.type is ColumnType.DATETIME and not (
+                dtype == pl.Date or isinstance(dtype, pl.Datetime)
+            ):
+                raise ValueError(
+                    f"column {col.name!r} has dtype {dtype}; doppel models Date and Datetime "
+                    "columns only. Drop the column, or cast it to a number before the run."
+                )
         self._table_name = table.name
         self._original_columns = list(table.columns)
         self._primary_key = table.primary_key

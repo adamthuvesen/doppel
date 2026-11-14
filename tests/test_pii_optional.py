@@ -88,4 +88,5 @@ def test_fit_warns_that_pii_was_not_checked_without_extra(
     )
 
     assert result.exit_code == 0, result.output
-    assert "PII not checked" in result.output
+    assert "PII not checked: the optional [pii] extra is not installed" in result.stderr
+    assert 'uv tool install "doppeldata[pii]' in result.stderr

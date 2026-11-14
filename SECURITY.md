@@ -77,8 +77,9 @@ and Postgres via database URIs. The threat surface and mitigations:
    warning** that the password appears in shell history. Prefer (1) or (2).
 
 **Redaction.** `redact_uri` ([src/doppel/sources/spec.py](src/doppel/sources/spec.py))
-replaces the URI password with `***` and also masks the `password`, `pwd`, and
-`token` query parameters. `redact_text` removes the raw URI and each secret
+replaces the URI password with `***` and also masks the value of every query
+parameter whose key contains `password`, `pwd`, `token`, `secret`, `passcode`, or
+`key`, in any case. `redact_text` removes the raw URI and each secret
 from driver errors. **Only** the redacted form appears in logs, error messages,
 or `--explain` output. The raw form is held in a separate field and passed
 straight to the driver. A regression test drives a connection failure and
@@ -104,9 +105,10 @@ the warehouse, so a malicious query is an own-goal, not a doppel
 vulnerability. We document this in CLI help and treat the query string the
 same way `bash -c` treats its argument.
 
-**Vendor driver vulnerabilities.** ConnectorX is the SQL read driver and
-ships its own native code. A vulnerability in ConnectorX or its underlying
-libraries (Arrow, libpq, etc.) is out of scope for the doppel threat
+**Vendor driver vulnerabilities.** `snowflake-connector-python` (Snowflake) and
+ConnectorX (Postgres) are the SQL read drivers and ship their own native code. A
+vulnerability in either driver or its underlying libraries (Arrow, libpq, etc.)
+is out of scope for the doppel threat
 model — keep your `[sql]` extra current with `uv sync --upgrade --all-extras`
 (or reinstall the tool with `uv tool install --reinstall`).
 

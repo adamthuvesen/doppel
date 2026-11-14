@@ -145,12 +145,32 @@ def test_redact_uri_with_password() -> None:
     assert ":***@" in redacted
 
 
-@pytest.mark.parametrize("param", ["password", "pwd", "token", "Password"])
+@pytest.mark.parametrize(
+    "param",
+    [
+        "password",
+        "pwd",
+        "token",
+        "Password",
+        "client_secret",
+        "passcode",
+        "private_key_file_pwd",
+        "PRIVATE_KEY",
+        "authenticator_token",
+    ],
+)
 def test_redact_uri_query_secrets(param: str) -> None:
     redacted = redact_uri(f"postgres://user@host/db?sslmode=require&{param}=s3cret")
     assert "s3cret" not in redacted
     assert f"{param}=***" in redacted
     assert "sslmode=require" in redacted
+
+
+def test_redact_uri_keeps_ipv6_brackets() -> None:
+    assert (
+        redact_uri("postgres://user:s3cret@[2001:db8::1]:5432/db")
+        == "postgres://user:***@[2001:db8::1]:5432/db"
+    )
 
 
 def test_expand_env_vars_passes_through(monkeypatch: pytest.MonkeyPatch) -> None:

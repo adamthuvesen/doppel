@@ -20,6 +20,7 @@ from doppel.cli.options import (
     resolve_source,
 )
 from doppel.pipeline.fitted import FitConfig, SampleConfig, fit_single_table, sample_fitted
+from doppel.pipeline.pii import PII_INSTALL_HINT
 from doppel.pipeline.prepare import sample_frame, table_name_for_source
 from doppel.sinks.spec import parse_sink_spec
 from doppel.sources.spec import DEFAULT_CONNECTION_TIMEOUT
@@ -99,8 +100,8 @@ def fit(
             sample_fit=lambda df, n: sample_frame(df, n, seed=seed, label="fit", notify=_dim),
             fit_progress=cb,
             notify_fit_cap=lambda msg: console.print(f"[dim]fit-rows:[/] {msg}"),
-            notify_pii_unchecked=lambda: console.print(
-                "[yellow]warn[/]: PII not checked: the optional [pii] extra is not installed"
+            notify_pii_unchecked=lambda: _warn(
+                f"PII not checked: the optional [pii] extra is not installed. {PII_INSTALL_HINT}"
             ),
         )
 

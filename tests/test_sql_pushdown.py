@@ -148,12 +148,21 @@ def test_count_sql_snowflake_table() -> None:
     assert "USERS" in sql
 
 
-def test_count_sql_snowflake_qualified_name_uses_last_segment() -> None:
-    sql = build_count_sql("snowflake", table="MY_DB.MY_SCHEMA.USERS", query=None)
-    # Should pull the last segment (table name).
-    assert "USERS" in sql
-    # Should NOT match on the database name.
-    assert "MY_DB" not in sql
+@pytest.mark.parametrize(
+    ("table", "catalog", "schema"),
+    [
+        ("my_db.my_schema.users", '"MY_DB".', "'MY_SCHEMA'"),
+        ("my_schema.users", "", "'MY_SCHEMA'"),
+        ("users", "", "CURRENT_SCHEMA()"),
+    ],
+)
+def test_count_sql_snowflake_reads_the_named_database_and_schema(
+    table: str, catalog: str, schema: str
+) -> None:
+    assert build_count_sql("snowflake", table=table, query=None) == (
+        f"SELECT MAX(ROW_COUNT) AS c FROM {catalog}INFORMATION_SCHEMA.TABLES "
+        f"WHERE TABLE_SCHEMA = {schema} AND TABLE_NAME = 'USERS'"
+    )
 
 
 def test_count_sql_postgres_table() -> None:

@@ -24,7 +24,10 @@ def _slow_read(**kwargs: Any) -> pl.DataFrame:
 
 
 @pytest.mark.extras
-def test_connection_timeout_redacts_password() -> None:
+def test_connection_timeout_redacts_password(monkeypatch: pytest.MonkeyPatch) -> None:
+    import snowflake.connector
+
+    monkeypatch.setattr(snowflake.connector, "connect", _slow_read)
     spec = parse_source_spec(
         "snowflake://user:hunter2@account/db/s?warehouse=WH",
         table="USERS",
@@ -35,7 +38,6 @@ def test_connection_timeout_redacts_password() -> None:
 
     with (
         patch("doppel.sources.sql._probe_row_count", return_value=100),
-        patch("doppel.sources.sql.pl.read_database_uri", side_effect=_slow_read),
         pytest.raises(WarehouseConnectionError) as exc_info,
     ):
         source_sql.read(spec, fit_rows=None, seed=1, timeout=1)

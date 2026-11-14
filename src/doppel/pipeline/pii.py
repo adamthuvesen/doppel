@@ -9,6 +9,10 @@ from collections.abc import Callable, Collection
 from doppel.dataset import Table
 from doppel.pii.detect import PIIDetection
 
+PII_INSTALL_HINT = (
+    'Install with: uv tool install "doppeldata[pii] @ git+https://github.com/adamthuvesen/doppel"'
+)
+
 # The `pii` extra pulls these. `doppel.pii.detect` / `.text` import fine without them
 # (Presidio/Faker are constructed lazily inside the functions), so probe the
 # underlying packages at the point of use. Detection needs only Presidio; the
@@ -62,7 +66,7 @@ def strip_pii_if_available(
         warnings.warn(
             "PII detection skipped: the optional [pii] extra is not installed. "
             "Free-text columns are passed through unmodified and may leak source "
-            'values. Install with: uv tool install "doppeldata[pii] @ git+https://github.com/adamthuvesen/doppel"',
+            f"values. {PII_INSTALL_HINT}",
             stacklevel=2,
         )
         return unchanged

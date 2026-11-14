@@ -2,22 +2,26 @@
 
 The driver layer is intentionally thin: per-vendor sample-pushdown SQL and
 row-count probes live here as **pure functions** so they can be unit-tested
-without a database. The actual driver invocation is one call site per scheme
-(DuckDB → in-process; Snowflake/Postgres → `pl.read_database_uri`).
+without a database. The actual driver invocation is one call site per scheme:
+DuckDB runs in-process, Snowflake goes through `snowflake-connector-python`
+(ConnectorX has no Snowflake source), and Postgres goes through
+`pl.read_database_uri` with ConnectorX.
 
 Pyright strictness: ConnectorX has no stubs. The narrow `Any` casts live at
 the driver boundary; nothing else relaxes."""
 
 from __future__ import annotations
 
+import importlib
 import threading
+import urllib.parse
 import warnings
 from typing import Any, cast
 
 import polars as pl
 
 from doppel.errors import InvalidInputError, RowCountProbeError, WarehouseConnectionError
-from doppel.locations import quote_table_name, table_name_parts
+from doppel.locations import quote_identifier, quote_table_name, table_name_parts
 from doppel.sources.spec import DatabaseUri, emit_redacted_log, redact_text
 
 ROW_COUNT_THRESHOLD = 1_000_000
@@ -27,6 +31,7 @@ ROW_COUNT_THRESHOLD = 1_000_000
 _FRACTION_OVERSAMPLE = 1.05
 # Snowflake accepts a SEED from 0 to 2147483647 inclusive.
 _SNOWFLAKE_SEED_MODULUS = 2**31
+_SQL_EXTRA_HINT = 'Install it with: uv tool install "doppeldata[sql] @ git+https://github.com/adamthuvesen/doppel"'
 
 
 def build_pushdown_sql(
@@ -95,18 +100,30 @@ def build_count_sql(scheme: str, *, table: str | None, query: str | None) -> str
     if table is None:
         raise ValueError("build_count_sql requires either `table` or `query`")
     if scheme == "snowflake":
-        # ROW_COUNT in INFORMATION_SCHEMA is millisecond-cheap. It is NULL for a view.
-        last_segment = table_name_parts(scheme, table)[-1]
-        return (
-            "SELECT MAX(ROW_COUNT) AS c "
-            "FROM INFORMATION_SCHEMA.TABLES "
-            f"WHERE TABLE_NAME = {_string_literal(last_segment)}"
-        )
+        return _snowflake_count_sql(table_name_parts(scheme, table))
     if scheme in {"postgres", "postgresql"}:
         # reltuples is the planner's estimate: -1 until the table is analysed.
         regclass = _string_literal(quote_table_name(scheme, table))
         return f"SELECT reltuples::BIGINT AS c FROM pg_class WHERE oid = {regclass}::regclass"
     return f"SELECT COUNT(*) AS c FROM {quote_table_name(scheme, table)}"
+
+
+def _snowflake_count_sql(parts: list[str]) -> str:
+    """ROW_COUNT in INFORMATION_SCHEMA is millisecond-cheap. It is NULL for a view.
+
+    A `db.schema.table` name reads that database's INFORMATION_SCHEMA. Every form
+    filters on the schema too, the session's current one when the name has none, so a
+    table of the same name in another schema does not answer."""
+    *qualifiers, name = parts
+    if len(qualifiers) > 2:
+        raise InvalidInputError(f"Snowflake table name has too many parts: {parts}")
+    catalog = f"{quote_identifier(qualifiers[0])}." if len(qualifiers) == 2 else ""
+    schema = _string_literal(qualifiers[-1]) if qualifiers else "CURRENT_SCHEMA()"
+    return (
+        "SELECT MAX(ROW_COUNT) AS c "
+        f"FROM {catalog}INFORMATION_SCHEMA.TABLES "
+        f"WHERE TABLE_SCHEMA = {schema} AND TABLE_NAME = {_string_literal(name)}"
+    )
 
 
 def _string_literal(value: str) -> str:
@@ -123,8 +140,9 @@ def read(
     """Top-level entry: read `spec` into a Polars DataFrame.
 
     Applies sample pushdown (when `fit_rows` is set) and the row-count probe
-    (Snowflake/Postgres only). DuckDB reads run in-process via `duckdb.connect`;
-    Snowflake/Postgres reads go through `pl.read_database_uri` with ConnectorX.
+    (Snowflake/Postgres only). DuckDB reads run in-process via `duckdb.connect`,
+    Snowflake reads through `snowflake-connector-python`, and Postgres reads through
+    `pl.read_database_uri` with ConnectorX.
 
     Wraps every driver exception as `WarehouseConnectionError` with the
     redacted URI so traceback chains never carry the raw password."""
@@ -151,8 +169,14 @@ def read(
             stacklevel=2,
         )
 
+    return _run_sql(spec, sql, timeout=timeout)
+
+
+def _run_sql(spec: DatabaseUri, sql: str, *, timeout: int) -> pl.DataFrame:
     if spec.scheme == "duckdb":
         return _read_duckdb(spec, sql, timeout=timeout)
+    if spec.scheme == "snowflake":
+        return _read_snowflake(spec, sql, timeout=timeout)
     return _read_via_connectorx(spec, sql, timeout=timeout)
 
 
@@ -201,10 +225,7 @@ def _probe_row_count(spec: DatabaseUri, *, timeout: int) -> int | None:
     view or a missing catalog entry also returns)."""
     sql = build_count_sql(spec.scheme, table=spec.table, query=spec.query)
     try:
-        if spec.scheme == "duckdb":
-            df = _read_duckdb(spec, sql, timeout=timeout)
-        else:
-            df = _read_via_connectorx(spec, sql, timeout=timeout)
+        df = _run_sql(spec, sql, timeout=timeout)
     except WarehouseConnectionError:
         # Re-raise — the user-facing error is more useful than a silent skip.
         raise
@@ -224,8 +245,6 @@ def _probe_row_count(spec: DatabaseUri, *, timeout: int) -> int | None:
 def _read_duckdb(spec: DatabaseUri, sql: str, *, timeout: int) -> pl.DataFrame:
     """In-process DuckDB read. Avoids the ConnectorX hop for the local case
     (and works without the `[sql]` extra installed)."""
-    import urllib.parse
-
     parsed = urllib.parse.urlsplit(spec.raw_uri)
     # `duckdb:///abs/path.db` → path='/abs/path.db'.
     # `duckdb://?table=T` (in-memory) → path='', netloc=''.
@@ -241,7 +260,12 @@ def _read_duckdb(spec: DatabaseUri, sql: str, *, timeout: int) -> pl.DataFrame:
         ) from exc
 
     def _do_read() -> pl.DataFrame:
-        con = duckdb.connect(db_path, read_only=db_path != ":memory:")
+        try:
+            con = duckdb.connect(db_path, read_only=db_path != ":memory:")
+        except duckdb.Error as exc:
+            raise WarehouseConnectionError(
+                f"failed to open {spec.uri}: {str(exc).splitlines()[0]}"
+            ) from None
         try:
             result = con.execute(sql)
             description = result.description
@@ -265,21 +289,72 @@ def _read_duckdb(spec: DatabaseUri, sql: str, *, timeout: int) -> pl.DataFrame:
     return _run_with_timeout(_do_read, timeout=timeout, spec=spec)
 
 
+def snowflake_connect_args(raw_uri: str, *, timeout: int) -> dict[str, Any]:
+    """Keyword arguments for `snowflake.connector.connect` from
+    `snowflake://user[:password]@account/database[/schema]?warehouse=WH&role=R`.
+
+    Each query parameter passes through as a connection parameter, so a key-pair or
+    SSO setup can name `authenticator` or `private_key_file`. `timeout` bounds the login
+    and each statement; 0 means no limit."""
+    parsed = urllib.parse.urlsplit(raw_uri)
+    if not parsed.hostname:
+        raise InvalidInputError("a Snowflake URI needs an account: snowflake://user@account/db")
+    args: dict[str, Any] = {
+        "account": parsed.hostname,
+        "login_timeout": timeout,
+        "session_parameters": {"STATEMENT_TIMEOUT_IN_SECONDS": timeout},
+    }
+    if parsed.username is not None:
+        args["user"] = urllib.parse.unquote(parsed.username)
+    if parsed.password is not None:
+        args["password"] = urllib.parse.unquote(parsed.password)
+    path = [urllib.parse.unquote(part) for part in parsed.path.split("/") if part]
+    if len(path) > 2:
+        raise InvalidInputError("a Snowflake URI path is /database or /database/schema")
+    args.update(zip(("database", "schema"), path, strict=False))
+    for key, values in urllib.parse.parse_qs(parsed.query, keep_blank_values=True).items():
+        if len(values) != 1:
+            raise InvalidInputError(f"Snowflake URI parameter {key!r} is set more than once")
+        args[key] = values[0]
+    return args
+
+
+def _read_snowflake(spec: DatabaseUri, sql: str, *, timeout: int) -> pl.DataFrame:
+    """Snowflake read via `snowflake-connector-python`, fetched as one Arrow table."""
+    try:
+        import snowflake.connector as connector
+    except ImportError as exc:
+        raise InvalidInputError(
+            f"the snowflake:// scheme requires the optional [sql] extra. {_SQL_EXTRA_HINT}"
+        ) from exc
+    connect_args = snowflake_connect_args(spec.raw_uri, timeout=max(timeout, 0))
+
+    def _do_read() -> pl.DataFrame:
+        try:
+            with connector.connect(**connect_args) as connection:
+                cursor = connection.cursor()
+                cursor.execute(sql)
+                frame = pl.from_arrow(cursor.fetch_arrow_all(force_return_table=True))
+        except Exception as exc:
+            detail = redact_text(str(exc), spec.raw_uri)
+            raise WarehouseConnectionError(f"failed to read from {spec.uri}: {detail}") from None
+        return cast("pl.DataFrame", frame)
+
+    return _run_with_timeout(_do_read, timeout=timeout, spec=spec)
+
+
 def _read_via_connectorx(spec: DatabaseUri, sql: str, *, timeout: int) -> pl.DataFrame:
-    """Snowflake / Postgres read via Polars + ConnectorX.
+    """Postgres read via Polars + ConnectorX.
 
     The `[sql]` extra is required here. We catch the ImportError raised by
     Polars when ConnectorX isn't present and re-raise a clear install hint."""
     try:
         # Importing connectorx eagerly gives us a deterministic error message
         # before Polars' own optional-import path runs.
-        import importlib
-
         importlib.import_module("connectorx")
     except ImportError as exc:
         raise InvalidInputError(
-            f"the {spec.scheme}:// scheme requires the optional [sql] extra. "
-            'Install it with: uv tool install "doppeldata[sql] @ git+https://github.com/adamthuvesen/doppel"'
+            f"the {spec.scheme}:// scheme requires the optional [sql] extra. {_SQL_EXTRA_HINT}"
         ) from exc
 
     def _do_read() -> pl.DataFrame:
@@ -345,4 +420,5 @@ __all__ = [
     "build_count_sql",
     "build_pushdown_sql",
     "read",
+    "snowflake_connect_args",
 ]

@@ -36,7 +36,6 @@ table would orphan its child rows, so a table that other tables reference takes 
 
 from __future__ import annotations
 
-import tomllib
 from pathlib import Path
 from typing import Any
 
@@ -46,7 +45,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from doppel.dataset import Dataset, ForeignKey, Table
 from doppel.schema.infer import infer_table
-from doppel.schema.toml import ColumnSpec, merge_columns, validate_primary_key
+from doppel.schema.toml import ColumnSpec, merge_columns, parse_toml, validate_primary_key
 from doppel.sources import file as source_file
 from doppel.sources import sql as source_sql
 from doppel.sources.spec import (
@@ -129,8 +128,7 @@ def is_multi_table(raw: dict[str, Any]) -> bool:
 
 
 def load(path: Path) -> MultiSchemaToml:
-    raw = tomllib.loads(path.read_text(encoding="utf-8"))
-    return MultiSchemaToml.model_validate(raw)
+    return MultiSchemaToml.model_validate(parse_toml(path.read_text(encoding="utf-8")))
 
 
 def save(schema: MultiSchemaToml, path: Path) -> None:
@@ -234,6 +232,8 @@ def _read_table_data(
     table name so multi-table schemas report which entry failed."""
     if spec.file is not None:
         path = (base_dir / spec.file).resolve()
+        if not path.is_file():
+            raise ValueError(f"table {name!r}: file does not exist: {path}")
         df = source_file.read(path, null_values=null_values)
         if spec.fit_rows and spec.fit_rows < df.height:
             return df.sample(n=spec.fit_rows, seed=sample_seed(seed), shuffle=True)

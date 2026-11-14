@@ -82,6 +82,9 @@ def compile_expression(
         raise ValueError("expression is too deeply nested") from None
 
 
+_HOLDS = "__doppel_where_holds__"
+
+
 def compile_where(expression: str, columns: set[str]) -> pl.Expr:
     """Compile a `--where` predicate over `columns`."""
     try:
@@ -91,12 +94,14 @@ def compile_where(expression: str, columns: set[str]) -> pl.Expr:
 
 
 def predicate_holds(df: pl.DataFrame, predicate: pl.Expr) -> pl.Series:
-    """True for each row of `df` where `predicate` holds.
+    """True for each row of `df` where `predicate` holds, one value per row.
 
-    NULL counts as not holding. A row of unknown truth never satisfies a `where`:
+    A predicate that names no column, such as `1 == 1`, holds for every row or for
+    none. NULL counts as not holding. A row of unknown truth never satisfies a `where`:
     reject-resample counts it as a violation, a filter drops it, and the support
     count leaves it out."""
-    return df.select(predicate).to_series().fill_null(False)
+    # `with_columns` broadcasts a scalar result to the frame height; `select` would not.
+    return df.with_columns(predicate.alias(_HOLDS)).get_column(_HOLDS).fill_null(False)
 
 
 def apply(

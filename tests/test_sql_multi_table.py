@@ -16,6 +16,7 @@ from typer.testing import CliRunner
 
 from doppel.cli import app
 from doppel.schema import multi as multi_schema
+from tests.conftest import InstallFakeSnowflake
 
 
 @pytest.fixture
@@ -246,7 +247,7 @@ def test_parent_table_rejects_a_fit_rows_sample(two_table_duckdb: Path, tmp_path
 @pytest.mark.extras
 @pytest.mark.parametrize(("fit_rows", "exit_code"), [(None, 2), (0, 0)])
 def test_unknown_row_count_table_needs_schema_fit_rows(
-    tmp_path: Path, fit_rows: int | None, exit_code: int
+    tmp_path: Path, fit_rows: int | None, exit_code: int, fake_snowflake: InstallFakeSnowflake
 ) -> None:
     from unittest.mock import patch
 
@@ -279,10 +280,8 @@ parent_column = "user_id"
         encoding="utf-8",
     )
 
-    with (
-        patch("doppel.sources.sql._probe_row_count", return_value=None),
-        patch("doppel.sources.sql.pl.read_database_uri", return_value=orders),
-    ):
+    fake_snowflake(orders)
+    with patch("doppel.sources.sql._probe_row_count", return_value=None):
         result = CliRunner().invoke(
             app,
             ["gen", "--schema", str(schema_path), "-o", str(tmp_path / "out"), "-n", "10"],

@@ -13,7 +13,7 @@ import sys
 import polars as pl
 import pytest
 
-from doppel.constraints.expr import Mode, compile_expression
+from doppel.constraints.expr import Mode, compile_expression, compile_where, predicate_holds
 
 # Happy paths ──────────────────────────────────────────────────────────────────
 
@@ -190,3 +190,13 @@ def test_deep_expression_under_the_cap_raises_value_error() -> None:
     finally:
         sys.setrecursionlimit(previous)
     assert compile_expression(expression, {"x"}) is not None
+
+
+@pytest.mark.parametrize(("expression", "matches"), [("1 == 1", 5), ("1 == 2", 0)])
+def test_a_predicate_with_no_column_holds_for_every_row_or_none(
+    expression: str, matches: int
+) -> None:
+    df = pl.DataFrame({"a": [1, 2, 3, 4, 5]})
+    holds = predicate_holds(df, compile_where(expression, {"a"}))
+    assert holds.len() == 5
+    assert int(holds.sum()) == matches

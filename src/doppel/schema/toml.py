@@ -110,8 +110,16 @@ class SchemaToml(BaseModel):
 
 
 def load(path: Path) -> SchemaToml:
-    raw = tomllib.loads(path.read_text(encoding="utf-8"))
-    return SchemaToml.model_validate(raw)
+    return SchemaToml.model_validate(parse_toml(path.read_text(encoding="utf-8")))
+
+
+def parse_toml(text: str) -> dict[str, Any]:
+    """Parse a TOML document. A document nested past the parser's recursion limit is a
+    `ValueError`, like any other malformed TOML."""
+    try:
+        return tomllib.loads(text)
+    except RecursionError:
+        raise ValueError("the TOML document is nested too deeply") from None
 
 
 def save(schema: SchemaToml, path: Path) -> None:

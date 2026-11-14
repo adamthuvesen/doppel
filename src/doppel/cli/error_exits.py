@@ -2,8 +2,9 @@
 
 - `ValueError`, which covers `InvalidInputError` and Pydantic's `ValidationError`:
   the input is one doppel rejects. Usage error, exit code 2.
-- Any other `DoppelError`: a failure at run time. `error: <message>` on stderr,
-  exit code 1, no traceback."""
+- Any other `DoppelError`, or an `OSError` such as an output directory that cannot be
+  written: a failure at run time. `error: <message>` on stderr, exit code 1, no
+  traceback."""
 
 from __future__ import annotations
 
@@ -26,7 +27,7 @@ def map_errors[**P](command: Callable[P, None]) -> Callable[P, None]:
             command(*args, **kwargs)
         except ValueError as exc:
             raise typer.BadParameter(str(exc)) from exc
-        except DoppelError as exc:
+        except (DoppelError, OSError) as exc:
             typer.echo(f"error: {exc}", err=True)
             raise typer.Exit(code=RUNTIME_ERROR_EXIT_CODE) from None
 

@@ -12,7 +12,7 @@ just verify all      # drive the real CLI on seeded fixtures (just verify list s
 just slow            # slow tests
 ```
 
-A change is done when `just check` is green. Prove user-facing changes with the `verify-doppel` skill in `.agents/skills/verify-doppel`. A bare `uv run` drops the extras, so use `just` or `uv run --no-sync`. Mark a test `@pytest.mark.extras` when it needs the `pii` or `sql` extra.
+A change is done when `just check` is green. Prove user-facing changes with the `verify-doppel` skill in `.agents/skills/verify-doppel`. Use `just` or `uv run --no-sync`. A bare `uv run` keeps the installed extras (its sync is not exact), but it syncs the environment before each command. Mark a test `@pytest.mark.extras` when it needs the `pii` or `sql` extra.
 
 ## Layout
 
@@ -42,12 +42,12 @@ tests/  docs/  examples/  benchmarks/  scripts/
 | No module opens a network client | `pyproject.toml::socket.msg`, `pyproject.toml::requests.msg`, `tests/test_boundaries.py::test_no_module_opens_a_network_client` |
 | No unsafe loading: no pickle, marshal, joblib, and `numpy.load` only in `artifact/load.py` | `pyproject.toml::pickle.msg`, `pyproject.toml::numpy.load.msg`, `tests/test_artifact.py::test_no_source_module_imports_a_code_executing_loader` |
 | No nondeterminism: all randomness comes from `Rng` | `pyproject.toml::tool.ruff.lint.flake8-tidy-imports.banned-api.random.msg`, `pyproject.toml::uuid.uuid4.msg`, `pyproject.toml::numpy.random.msg`, `src/doppel/synth/seed.py::Rng` |
-| Warehouse drivers stay in `sources/sql.py` and `sinks/sql.py` | `pyproject.toml::duckdb.msg`, `tests/test_boundaries.py::test_connectorx_is_named_only_in_its_owner_files` |
+| Warehouse drivers stay in `sources/sql.py` and `sinks/sql.py` (DuckDB), `sources/sql.py` (Snowflake, ConnectorX) | `pyproject.toml::duckdb.msg`, `pyproject.toml::snowflake.msg`, `tests/test_boundaries.py::test_driver_is_named_only_in_its_owner_files` |
 | Presidio, spaCy, and Faker stay in `pii/`; the spaCy model is never downloaded | `pyproject.toml::presidio_analyzer.msg`, `pyproject.toml::faker.msg`, `tests/test_pii_model.py::test_missing_spacy_model_raises_with_install_command_and_downloads_nothing` |
 | An artifact holds data only, is size-capped, and keeps no source row order | `src/doppel/artifact/load.py::_MEMBER_LIMITS`, `tests/test_artifact.py::test_load_never_calls_pickle`, `tests/test_artifact.py::test_no_stored_array_keeps_source_row_order` |
 | Constraint expressions stay on the allowlist and under the size caps | `src/doppel/constraints/expr.py::_ALLOWED_ARITH_OPS`, `src/doppel/constraints/expr.py::_MAX_AST_NODES`, `tests/test_where_expr.py::test_boolean_rejects_hostile_node` |
 | Table names are quoted in SQL, and DuckDB sources open read-only | `src/doppel/locations.py::quote_table_name`, `tests/test_sql_duckdb.py::test_source_table_injection_does_not_run`, `tests/test_sql_duckdb.py::test_duckdb_source_opens_read_only` |
-| An unknown or large warehouse row count needs `--fit-rows` | `src/doppel/sources/sql.py::_enforce_row_count_threshold`, `tests/test_sql_e2e.py::test_row_count_probe_unknown_count_requires_fit_rows` |
+| An unknown or large warehouse row count needs `--fit-rows` | `src/doppel/sources/sql.py::_enforce_row_count_threshold`, `tests/test_sql_e2e.py::test_postgres_unknown_row_count_requires_fit_rows` |
 | A sink never writes to a file the run reads: the source file path, or any table in the source DuckDB file, in single-table and multi-table `gen` | `src/doppel/pipeline/sink_guard.py::reject_outputs_matching_sources`, `tests/test_sql_duckdb.py::test_sink_in_the_source_duckdb_file_is_refused`, `tests/test_sinks.py::test_file_sink_equal_to_the_file_source_is_refused`, `tests/test_sinks.py::test_multi_table_output_equal_to_a_source_file_is_refused` |
 | Warehouse passwords never reach logs or errors | `src/doppel/sources/spec.py::redact_uri`, `tests/test_source_spec.py::test_info_log_redacted` |
 | PII is stripped in every `gen` path, single and multi-table | `tests/test_pii.py::test_doppel_gen_replaces_emails_in_output`, `tests/test_pii.py::test_doppel_gen_multi_table_regenerates_pii` |

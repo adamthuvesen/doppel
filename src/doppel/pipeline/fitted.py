@@ -12,9 +12,9 @@ from pathlib import Path
 import polars as pl
 
 from doppel.constraints.engine import synthesize_with_constraints
-from doppel.dataset import Dataset, Table
+from doppel.dataset import Dataset
 from doppel.errors import InvalidInputError
-from doppel.pipeline.fit_rows import AUTO_FIT_CAP, AUTO_FIT_MULTIPLIER
+from doppel.pipeline.fit_rows import AUTO_FIT_CAP
 from doppel.pipeline.pii import detect_pii_if_available
 from doppel.pipeline.prepare import build_training_table, read_source_dataframe
 from doppel.pipeline.quality_summary import QualitySummary, compute_quality_summary
@@ -27,9 +27,6 @@ from doppel.synth.cart import CartSynthesizer, FitProgress, RepairSummary
 from doppel.synth.seed import Rng, sample_seed
 from doppel.text_policy import TextPolicy
 from doppel.text_policy import apply as apply_text_policy
-
-# `fit` has no requested row count, so the auto-cap uses the largest one: AUTO_FIT_CAP.
-FIT_CAP_REQUESTED_ROWS = AUTO_FIT_CAP // AUTO_FIT_MULTIPLIER
 
 
 @dataclass(frozen=True)
@@ -44,7 +41,6 @@ class FitConfig:
 @dataclass(frozen=True)
 class FitResult:
     synth: CartSynthesizer
-    table: Table
     schema_toml: SchemaToml | None
     training_row_count: int
 
@@ -83,7 +79,7 @@ def fit_single_table(
     _full_df, fit_df = read_source_dataframe(
         config.source_spec,
         fit_rows=config.fit_rows,
-        requested_rows=FIT_CAP_REQUESTED_ROWS,
+        fit_cap=AUTO_FIT_CAP,
         seed=config.seed,
         connection_timeout=config.connection_timeout,
         sample_fit=sample_fit,
@@ -105,7 +101,6 @@ def fit_single_table(
     synth.fit(Dataset.single(table), Rng.from_seed(config.seed), progress=fit_progress)
     return FitResult(
         synth=synth,
-        table=table,
         schema_toml=prepared.schema_toml,
         training_row_count=fit_df.height,
     )

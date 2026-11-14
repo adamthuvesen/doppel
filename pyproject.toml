@@ -44,7 +44,10 @@ dependencies = [
 
 [project.optional-dependencies]
 pii = ["presidio-analyzer>=2.2.362", "faker>=40.54", "spacy>=3.8.18", "en-core-web-lg"]
-sql = ["connectorx>=0.4.6"]
+sql = [
+    "connectorx>=0.4.6",
+    "snowflake-connector-python[pyarrow]>=5.2.0",
+]
 all = ["doppeldata[pii,sql]"]
 
 [project.scripts]
@@ -144,6 +147,7 @@ ignore = [
 "numpy.random".msg = "Nondeterminism is banned. All randomness comes from doppel.synth.seed.Rng (owner: synth/seed.py)."
 "secrets".msg = "secrets is banned. The owner is text_policy.py (hash salt)."
 "duckdb".msg = "duckdb is banned outside sources/sql.py and sinks/sql.py."
+"snowflake".msg = "The Snowflake driver is banned outside sources/sql.py."
 "presidio_analyzer".msg = "Presidio and spaCy are banned outside pii/detect.py."
 "spacy".msg = "Presidio and spaCy are banned outside pii/detect.py."
 "faker".msg = "Faker is banned outside pii/fake.py."
@@ -183,7 +187,7 @@ reportUnknownArgumentType = false
 reportUnknownParameterType = false
 reportUnknownLambdaType = false
 executionEnvironments = [
-    { root = "tests", extraPaths = ["src"], reportMissingParameterType = false, reportPrivateUsage = false },
+    { root = "tests", extraPaths = ["src", "."], reportMissingParameterType = false, reportPrivateUsage = false },
     { root = "src" },
 ]
 

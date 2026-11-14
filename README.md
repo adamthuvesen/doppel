@@ -53,7 +53,7 @@ Expected shape from the demo fixture:
 
 ```text
 ok wrote 1000 rows x 15 cols -> synth.csv
-quality | marginal=0.1005 | corr=0.1062 | dcr_p5=0.0507 | exact_rows=0.0% | text_leaks=0
+quality | marginal=0.0951 | corr=0.0929 | dcr_p5=0.0515 | exact_rows=0.0% | text_leaks=0
 thresholds: all passed
 ```
 
@@ -204,6 +204,9 @@ doppel gen "postgres://adam@host/dbname" \
 Password lookup order: `--password-cmd`, then `${ENV_VAR}` interpolation in the URI,
 then a URI-embedded password. URI passwords warn because they can appear in shell history.
 
+Snowflake reads use `snowflake-connector-python`, and Postgres reads use ConnectorX.
+The Snowflake path is tested against a fake connector only, never a live warehouse.
+
 Snowflake and Postgres tables above 1,000,000 rows require `--fit-rows N` or
 `--fit-rows 0`. SQL sinks are DuckDB only; write files for other warehouses and load
 them with your normal data load process.
@@ -309,7 +312,8 @@ its source. See [SECURITY.md](SECURITY.md).
 - Multi-table correlations are not preserved.
 - `--where` is scoped to one table.
 - Datetime values are modeled as epoch seconds plus calendar features; sub-second
-  precision is dropped.
+  precision is dropped. Only Date and Datetime columns are modeled: a Duration or Time
+  column is refused at fit, so drop it or cast it to a number first.
 - Warehouse writes are DuckDB only.
 - `fit` refuses detected PII; use `gen` for one-shot PII handling.
 - `KEY` columns generate fresh IDs. Integer-like keys become `1..n`; string keys named

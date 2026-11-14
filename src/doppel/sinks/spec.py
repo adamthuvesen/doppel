@@ -10,7 +10,13 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from doppel.errors import InvalidInputError
-from doppel.locations import AUTH_REQUIRED_SCHEMES, FilePath, detect_scheme, expand_env_vars
+from doppel.locations import (
+    AUTH_REQUIRED_SCHEMES,
+    FilePath,
+    detect_scheme,
+    expand_env_vars,
+    file_format,
+)
 
 
 @dataclass(frozen=True)
@@ -27,12 +33,15 @@ SinkSpec = FilePath | DuckDbSink
 def parse_sink_spec(value: str) -> SinkSpec:
     """Parse a CLI `-o`/`--output` value into a SinkSpec.
 
-    File paths route to `FilePath`; `duckdb://...?table=T` URIs route to
+    File paths route to `FilePath` and must have a supported extension, so a bad one
+    fails before any read or fit; `duckdb://...?table=T` URIs route to
     `DuckDbSink`. Snowflake/Postgres URIs raise InvalidInputError at parse time.
     Unknown schemes also raise."""
     scheme = detect_scheme(value)
     if scheme is None:
-        return FilePath(path=Path(value))
+        path = Path(value)
+        file_format(path, role="sink")
+        return FilePath(path=path)
     if scheme == "duckdb":
         return _parse_duckdb_sink(value)
     if scheme in AUTH_REQUIRED_SCHEMES:

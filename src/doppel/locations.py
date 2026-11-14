@@ -103,10 +103,11 @@ def table_name_parts(scheme: str, name: str) -> list[str]:
 
 def quote_table_name(scheme: str, name: str) -> str:
     """Return `name` as a double-quoted, dot-joined SQL identifier for `scheme`."""
-    return ".".join(_quote_identifier(part) for part in table_name_parts(scheme, name))
+    return ".".join(quote_identifier(part) for part in table_name_parts(scheme, name))
 
 
-def _quote_identifier(part: str) -> str:
+def quote_identifier(part: str) -> str:
+    """One SQL identifier in double quotes, with any embedded quote doubled."""
     return '"' + part.replace('"', '""') + '"'
 
 

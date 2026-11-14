@@ -7,6 +7,7 @@ from pathlib import Path
 
 import polars as pl
 
+from doppel.errors import InvalidInputError
 from doppel.locations import FileFormat, file_format
 
 # Only the empty string is NULL by default: "NA" is also North America and "None" a
@@ -17,6 +18,13 @@ _DATE_PREFIX_RE = r"^\d{4}-\d{2}-\d{2}([T ][0-9]{2}:[0-9]{2}:[0-9]{2})?"
 
 
 def read(path: Path, *, null_values: Collection[str] = DEFAULT_NULL_VALUES) -> pl.DataFrame:
+    try:
+        return _read(path, null_values)
+    except pl.exceptions.NoDataError:
+        raise InvalidInputError(f"source file is empty: {path}") from None
+
+
+def _read(path: Path, null_values: Collection[str]) -> pl.DataFrame:
     match file_format(path, role="source"):
         case FileFormat.CSV:
             return _normalise_strings(pl.read_csv(path, try_parse_dates=True), null_values)

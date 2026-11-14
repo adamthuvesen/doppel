@@ -405,9 +405,7 @@ def sql_safety(ctx: Ctx) -> str:
         text = squash(done.stderr + done.stdout)
         ctx.check(done.returncode != 0, NOT_REFUSED, f"{name}: exit 0")
         ctx.check(token is None or token in text, NOT_REFUSED, f"{name}: {text[-300:]}")
-        # A missing table prints a rich traceback today (reported as a product gap), so only the
-        # refusal path is held to a clean message.
-        ctx.check(token is None or "Traceback" not in text, TRACEBACK, f"{name}: traceback")
+        ctx.check("Traceback" not in text, TRACEBACK, f"{name}: traceback")
         ctx.check(not (ctx.work / f"{name}.csv").exists(), NOT_REFUSED, f"{name}: wrote output")
     sink_run = results[len(payloads)]
     sink_text = squash(sink_run.stderr + sink_run.stdout)

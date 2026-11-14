@@ -22,6 +22,7 @@ import pytest
 from typer.testing import CliRunner
 
 from doppel.artifact import ARTIFACT_VERSION, ArtifactError, Manifest, load, save
+from doppel.artifact.load import inspect_artifact
 from doppel.cli import app
 from doppel.dataset import Dataset
 from doppel.schema.infer import infer_table
@@ -564,6 +565,19 @@ def test_load_refuses_an_array_header_that_declares_more_than_it_holds(
 
     with pytest.raises(ArtifactError, match="declares"):
         load(artifact)
+
+
+def test_a_deeply_nested_embedded_schema_is_an_artifact_error(
+    mixed_df: pl.DataFrame, tmp_path: Path
+) -> None:
+    synth, n = _fit_synth(mixed_df)
+    artifact = tmp_path / "model.doppel"
+    save(synth, artifact, training_row_count=n)
+    _replace_member(artifact, "schema.toml", b"x = " + b"[" * 5000 + b"]" * 5000 + b"\n")
+
+    for read in (load, inspect_artifact):
+        with pytest.raises(ArtifactError, match="nested too deeply"):
+            read(artifact)
 
 
 def test_save_refuses_a_dtype_it_cannot_store(tmp_path: Path) -> None:

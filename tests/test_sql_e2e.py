@@ -1,12 +1,13 @@
 """Mocked Snowflake / Postgres tests, row-count probe, and sink rejection.
 
-These tests patch `pl.read_database_uri` and the row-count probe helpers so
-we can drive the SQL connector through its full code path without an actual
-warehouse. End-to-end DuckDB is in test_sql_duckdb.py; pure SQL-building
+These tests patch the driver boundary (`snowflake.connector.connect` for Snowflake,
+`pl.read_database_uri` for Postgres) and the row-count probe helpers so we can drive
+the SQL connector through its full code path without an actual warehouse. End-to-end DuckDB is in test_sql_duckdb.py; pure SQL-building
 tests are in test_sql_pushdown.py."""
 
 from __future__ import annotations
 
+import sys
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
@@ -20,6 +21,7 @@ from doppel.cli import app
 from doppel.errors import InvalidInputError, WarehouseConnectionError
 from doppel.sources import sql as source_sql
 from doppel.sources.spec import DatabaseUri, parse_source_spec
+from tests.conftest import InstallFakeSnowflake
 
 
 @pytest.fixture
@@ -37,8 +39,8 @@ def mock_df() -> pl.DataFrame:
 
 
 @pytest.fixture
-def patch_snowflake(mock_df: pl.DataFrame) -> Iterator[MagicMock]:
-    """Patch the connectorx read path to return `mock_df` and capture the SQL."""
+def patch_connectorx(mock_df: pl.DataFrame) -> Iterator[MagicMock]:
+    """Patch the connectorx (Postgres) read path to return `mock_df` and capture the SQL."""
     with patch("doppel.sources.sql.pl.read_database_uri") as m:
         m.return_value = mock_df
         yield m
@@ -56,16 +58,20 @@ def patch_probe() -> Iterator[MagicMock]:
 
 
 @pytest.mark.extras
-def test_snowflake_read_uses_connectorx(
-    patch_snowflake: MagicMock, patch_probe: MagicMock, tmp_path: Path
+def test_snowflake_read_uses_the_snowflake_connector(
+    fake_snowflake: InstallFakeSnowflake,
+    patch_connectorx: MagicMock,
+    patch_probe: MagicMock,
+    mock_df: pl.DataFrame,
+    tmp_path: Path,
 ) -> None:
+    fake = fake_snowflake(mock_df)
     out = tmp_path / "synth.csv"
-    runner = CliRunner()
-    result = runner.invoke(
+    result = CliRunner().invoke(
         app,
         [
             "gen",
-            "snowflake://user@account/db/schema?warehouse=WH",
+            "snowflake://user:hunter2@account/db/schema?warehouse=WH&role=R",
             "--table",
             "USERS",
             "-n",
@@ -79,15 +85,27 @@ def test_snowflake_read_uses_connectorx(
         catch_exceptions=False,
     )
     assert result.exit_code == 0, result.stdout
-    assert patch_snowflake.called
-    # Should have been called with the raw URI containing the user.
-    kwargs = patch_snowflake.call_args.kwargs
-    assert "snowflake://user@account/db/schema" in kwargs["uri"]
+    assert pl.read_csv(out).height == 50
+    assert not patch_connectorx.called
+    assert fake.connect_args == [
+        {
+            "account": "account",
+            "user": "user",
+            "password": "hunter2",
+            "database": "db",
+            "schema": "schema",
+            "warehouse": "WH",
+            "role": "R",
+            "login_timeout": 300,
+            "session_parameters": {"STATEMENT_TIMEOUT_IN_SECONDS": 300},
+        }
+    ]
+    assert fake.sql == ['SELECT * FROM "USERS"']
 
 
 @pytest.mark.extras
 def test_postgres_read_uses_connectorx(
-    patch_snowflake: MagicMock, patch_probe: MagicMock, tmp_path: Path
+    patch_connectorx: MagicMock, patch_probe: MagicMock, tmp_path: Path
 ) -> None:
     out = tmp_path / "synth.csv"
     runner = CliRunner()
@@ -109,15 +127,19 @@ def test_postgres_read_uses_connectorx(
         catch_exceptions=False,
     )
     assert result.exit_code == 0, result.stdout
-    kwargs = patch_snowflake.call_args.kwargs
+    kwargs = patch_connectorx.call_args.kwargs
     assert '"public"."users"' in kwargs["query"]
 
 
 @pytest.mark.extras
 def test_pushdown_sql_sent_to_driver_snowflake(
-    patch_snowflake: MagicMock, patch_probe: MagicMock, tmp_path: Path
+    fake_snowflake: InstallFakeSnowflake,
+    patch_probe: MagicMock,
+    mock_df: pl.DataFrame,
+    tmp_path: Path,
 ) -> None:
     """When --fit-rows is set, the SQL submitted contains the SAMPLE clause."""
+    fake = fake_snowflake(mock_df)
     out = tmp_path / "synth.csv"
     runner = CliRunner()
     result = runner.invoke(
@@ -140,9 +162,8 @@ def test_pushdown_sql_sent_to_driver_snowflake(
         catch_exceptions=False,
     )
     assert result.exit_code == 0, result.stdout
-    # The final read sends the sampled SQL; the probe call (if any) goes
-    # through duckdb, not connectorx. Only the last call here is the data read.
-    sent_sql = patch_snowflake.call_args.kwargs["query"]
+    # The probe is patched, so the one SQL text is the data read.
+    [sent_sql] = fake.sql
     assert "SAMPLE SYSTEM (" in sent_sql
     assert "SEED (42)" in sent_sql
     assert "LIMIT 1000" in sent_sql
@@ -150,7 +171,7 @@ def test_pushdown_sql_sent_to_driver_snowflake(
 
 @pytest.mark.extras
 def test_pushdown_sql_sent_to_driver_postgres(
-    patch_snowflake: MagicMock, patch_probe: MagicMock, tmp_path: Path
+    patch_connectorx: MagicMock, patch_probe: MagicMock, tmp_path: Path
 ) -> None:
     patch_probe.return_value = 500_000  # under threshold, probe still ran
     out = tmp_path / "synth.csv"
@@ -175,7 +196,7 @@ def test_pushdown_sql_sent_to_driver_postgres(
         catch_exceptions=False,
     )
     assert result.exit_code == 0, result.stdout
-    sent_sql = patch_snowflake.call_args.kwargs["query"]
+    sent_sql = patch_connectorx.call_args.kwargs["query"]
     assert "TABLESAMPLE BERNOULLI" in sent_sql
     assert "REPEATABLE (42)" in sent_sql
 
@@ -183,9 +204,11 @@ def test_pushdown_sql_sent_to_driver_postgres(
 # ---------- Row-count probe ----------
 
 
+@pytest.mark.extras
 def test_row_count_probe_rejects_huge_table_without_fit_rows(
-    patch_snowflake: MagicMock, patch_probe: MagicMock, tmp_path: Path
+    fake_snowflake: InstallFakeSnowflake, patch_probe: MagicMock, tmp_path: Path
 ) -> None:
+    fake = fake_snowflake()
     patch_probe.return_value = 5_000_000
     out = tmp_path / "synth.csv"
     runner = CliRunner()
@@ -213,13 +236,17 @@ def test_row_count_probe_rejects_huge_table_without_fit_rows(
     # message-content check.
     assert result.exit_code == 2
     # And no rows must have been streamed.
-    assert not patch_snowflake.called
+    assert fake.sql == []
 
 
 @pytest.mark.extras
 def test_row_count_probe_with_fit_rows_zero_proceeds(
-    patch_snowflake: MagicMock, patch_probe: MagicMock, tmp_path: Path
+    fake_snowflake: InstallFakeSnowflake,
+    patch_probe: MagicMock,
+    mock_df: pl.DataFrame,
+    tmp_path: Path,
 ) -> None:
+    fake = fake_snowflake(mock_df)
     patch_probe.return_value = 5_000_000
     out = tmp_path / "synth.csv"
     runner = CliRunner()
@@ -243,12 +270,12 @@ def test_row_count_probe_with_fit_rows_zero_proceeds(
         catch_exceptions=False,
     )
     assert result.exit_code == 0, result.stdout
-    assert patch_snowflake.called
+    assert len(fake.sql) == 1
 
 
 @pytest.mark.extras
 def test_row_count_probe_under_threshold_proceeds(
-    patch_snowflake: MagicMock, patch_probe: MagicMock, tmp_path: Path
+    patch_connectorx: MagicMock, patch_probe: MagicMock, tmp_path: Path
 ) -> None:
     patch_probe.return_value = 500_000  # under 1M
     out = tmp_path / "synth.csv"
@@ -272,7 +299,7 @@ def test_row_count_probe_under_threshold_proceeds(
     )
     assert result.exit_code == 0, result.stdout
     assert pl.read_csv(out).height == 50
-    assert "TABLESAMPLE" not in patch_snowflake.call_args.kwargs["query"]
+    assert "TABLESAMPLE" not in patch_connectorx.call_args.kwargs["query"]
 
 
 def _table_spec(uri: str, table: str) -> DatabaseUri:
@@ -282,33 +309,38 @@ def _table_spec(uri: str, table: str) -> DatabaseUri:
 
 
 @pytest.mark.extras
-@pytest.mark.parametrize(
-    ("uri", "probe_value"),
-    [
-        ("postgres://user@host/db", -1),
-        ("snowflake://user@account/db/schema?warehouse=WH", 0),
-        ("snowflake://user@account/db/schema?warehouse=WH", None),
-    ],
-)
-def test_row_count_probe_unknown_count_requires_fit_rows(
-    patch_snowflake: MagicMock, uri: str, probe_value: int | None
-) -> None:
-    patch_snowflake.return_value = pl.DataFrame({"c": [probe_value]})
-    spec = _table_spec(uri, "users")
+def test_postgres_unknown_row_count_requires_fit_rows(patch_connectorx: MagicMock) -> None:
+    patch_connectorx.return_value = pl.DataFrame({"c": [-1]})
+    spec = _table_spec("postgres://user@host/db", "users")
     with pytest.raises(InvalidInputError, match="unknown number of rows"):
         source_sql.read(spec, fit_rows=None, seed=None, timeout=0)
-    assert patch_snowflake.call_count == 1
+    assert patch_connectorx.call_count == 1
+
+
+@pytest.mark.extras
+@pytest.mark.parametrize("probe_value", [0, None])
+def test_snowflake_unknown_row_count_requires_fit_rows(
+    fake_snowflake: InstallFakeSnowflake, probe_value: int | None
+) -> None:
+    fake = fake_snowflake(pl.DataFrame({"c": [probe_value]}, schema={"c": pl.Int64}))
+    spec = _table_spec("snowflake://user@account/db/schema?warehouse=WH", "users")
+    with pytest.raises(InvalidInputError, match="unknown number of rows"):
+        source_sql.read(spec, fit_rows=None, seed=None, timeout=0)
+    assert fake.sql == [
+        "SELECT MAX(ROW_COUNT) AS c FROM INFORMATION_SCHEMA.TABLES "
+        "WHERE TABLE_SCHEMA = CURRENT_SCHEMA() AND TABLE_NAME = 'USERS'"
+    ]
 
 
 @pytest.mark.extras
 def test_row_count_probe_unknown_count_proceeds_with_fit_rows(
-    patch_snowflake: MagicMock, mock_df: pl.DataFrame
+    patch_connectorx: MagicMock, mock_df: pl.DataFrame
 ) -> None:
-    patch_snowflake.side_effect = [pl.DataFrame({"c": [-1]}), mock_df]
+    patch_connectorx.side_effect = [pl.DataFrame({"c": [-1]}), mock_df]
     spec = _table_spec("postgres://user@host/db", "users")
     df = source_sql.read(spec, fit_rows=50, seed=1, timeout=0)
     assert df.height == mock_df.height
-    assert "TABLESAMPLE BERNOULLI (100.0000)" in patch_snowflake.call_args.kwargs["query"]
+    assert "TABLESAMPLE BERNOULLI (100.0000)" in patch_connectorx.call_args.kwargs["query"]
 
 
 # ---------- Sink rejection ----------
@@ -353,31 +385,21 @@ def test_postgres_sink_rejected(tmp_path: Path) -> None:
 
 
 @pytest.mark.extras
-def test_connection_error_redacts_password(mock_df: pl.DataFrame) -> None:
+def test_connection_error_redacts_password(fake_snowflake: InstallFakeSnowflake) -> None:
     """If the driver raises, the error message must not contain the raw password."""
-
-    def raise_with_pw(**kwargs: Any) -> pl.DataFrame:
-        raise RuntimeError(f"connection refused for {kwargs['uri']}")
-
-    with (
-        patch("doppel.sources.sql.pl.read_database_uri", side_effect=raise_with_pw),
-        patch("doppel.sources.sql._probe_row_count", return_value=100),
-    ):
-        spec = parse_source_spec(
-            "snowflake://user:hunter2@account/db/s?warehouse=WH&token=t0ken&PWD=s3cret",
-            table="USERS",
-            query=None,
-            password_cmd=None,
-        )
+    uri = "snowflake://user:hunter2@account/db/s?warehouse=WH&token=t0ken&PWD=s3cret"
+    fake_snowflake(error=RuntimeError(f"connection refused for {uri} (password hunter2)"))
+    with patch("doppel.sources.sql._probe_row_count", return_value=100):
+        spec = parse_source_spec(uri, table="USERS", query=None, password_cmd=None)
         assert isinstance(spec, DatabaseUri)
         with pytest.raises(WarehouseConnectionError) as exc_info:
             source_sql.read(spec, fit_rows=None, seed=1, timeout=300)
-        message = str(exc_info.value)
-        for secret in ("hunter2", "t0ken", "s3cret"):
-            assert secret not in message
-        assert ":***@" in message
-        assert exc_info.value.__cause__ is None
-        assert exc_info.value.__suppress_context__
+    message = str(exc_info.value)
+    for secret in ("hunter2", "t0ken", "s3cret"):
+        assert secret not in message
+    assert ":***@" in message
+    assert exc_info.value.__cause__ is None
+    assert exc_info.value.__suppress_context__
 
 
 @pytest.mark.extras
@@ -385,12 +407,13 @@ def test_connection_error_redacts_password(mock_df: pl.DataFrame) -> None:
     "uri",
     ["postgres://user:hunter2@host/db", "snowflake://user:hunter2@account/db/s?warehouse=WH"],
 )
-def test_driver_error_prints_one_clean_error_line(uri: str, tmp_path: Path) -> None:
+def test_driver_error_prints_one_clean_error_line(
+    uri: str, tmp_path: Path, fake_snowflake: InstallFakeSnowflake
+) -> None:
+    error = RuntimeError('relation "nope" does not exist')
+    fake_snowflake(error=error)
     with (
-        patch(
-            "doppel.sources.sql.pl.read_database_uri",
-            side_effect=RuntimeError('relation "nope" does not exist'),
-        ),
+        patch("doppel.sources.sql.pl.read_database_uri", side_effect=error),
         patch("doppel.sources.sql._probe_row_count", return_value=100),
     ):
         result = CliRunner().invoke(
@@ -409,24 +432,25 @@ def test_driver_error_prints_one_clean_error_line(uri: str, tmp_path: Path) -> N
 # ---------- Missing [sql] extra (simulated) ----------
 
 
-def test_missing_sql_extra_raises_install_hint(mock_df: pl.DataFrame) -> None:
-    """When importlib can't find connectorx, raise BadParameter with install hint."""
-
-    spec = parse_source_spec(
-        "snowflake://user@account/db/s?warehouse=WH",
-        table="USERS",
-        query=None,
-        password_cmd=None,
-    )
+@pytest.mark.parametrize(
+    ("uri", "driver"),
+    [
+        ("snowflake://user@account/db/s?warehouse=WH", "snowflake.connector"),
+        ("postgres://user@host/db", "connectorx"),
+    ],
+)
+def test_missing_sql_extra_raises_install_hint(
+    monkeypatch: pytest.MonkeyPatch, uri: str, driver: str
+) -> None:
+    """When the driver cannot be imported, raise an input error with the install hint."""
+    spec = parse_source_spec(uri, table="USERS", query=None, password_cmd=None)
     assert isinstance(spec, DatabaseUri)
-
+    monkeypatch.setitem(sys.modules, driver, None)
     with (
         patch("doppel.sources.sql._probe_row_count", return_value=100),
-        patch("importlib.import_module") as importer,
+        pytest.raises(InvalidInputError, match=r"\[sql\] extra"),
     ):
-        importer.side_effect = ImportError("No module named 'connectorx'")
-        with pytest.raises(InvalidInputError, match=r"\[sql\] extra"):
-            source_sql.read(spec, fit_rows=None, seed=1, timeout=300)
+        source_sql.read(spec, fit_rows=None, seed=1, timeout=300)
 
 
 # ---------- DuckDB does not need [sql] extra ----------
@@ -461,3 +485,32 @@ def test_duckdb_works_without_sql_extra(tmp_path: Path) -> None:
     with patch("importlib.import_module", side_effect=fail_connectorx):
         df = source_sql.read(spec, fit_rows=None, seed=1, timeout=300)
     assert df.height == 2
+
+
+def test_snowflake_connect_args_decode_the_uri() -> None:
+    args = source_sql.snowflake_connect_args(
+        "snowflake://me%40corp:p%40ss@xy12345.eu-west-1/sales?authenticator=externalbrowser",
+        timeout=0,
+    )
+    assert args == {
+        "account": "xy12345.eu-west-1",
+        "user": "me@corp",
+        "password": "p@ss",
+        "database": "sales",
+        "authenticator": "externalbrowser",
+        "login_timeout": 0,
+        "session_parameters": {"STATEMENT_TIMEOUT_IN_SECONDS": 0},
+    }
+
+
+@pytest.mark.parametrize(
+    "uri",
+    [
+        "snowflake:///db",
+        "snowflake://u@acct/db/schema/extra",
+        "snowflake://u@acct/db?role=a&role=b",
+    ],
+)
+def test_snowflake_connect_args_refuse_a_malformed_uri(uri: str) -> None:
+    with pytest.raises(InvalidInputError):
+        source_sql.snowflake_connect_args(uri, timeout=10)

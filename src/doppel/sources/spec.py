@@ -35,7 +35,10 @@ DEFAULT_CONNECTION_TIMEOUT = 300
 # `--password-cmd` gets the connection timeout, but never more than a minute.
 _PASSWORD_CMD_TIMEOUT_CAP = 60
 
-_SECRET_QUERY_PARAM_RE = re.compile(r"(^|&)(password|pwd|token)=([^&]*)", re.IGNORECASE)
+# Any query key that names a secret, such as `private_key_file_pwd` or `authenticator_token`.
+_SECRET_QUERY_PARAM_RE = re.compile(
+    r"(^|&)([^&=]*(?:password|pwd|token|secret|passcode|key)[^&=]*)=([^&]*)", re.IGNORECASE
+)
 
 
 @dataclass(frozen=True)
@@ -55,19 +58,23 @@ SourceSpec = FilePath | DatabaseUri
 
 
 def redact_uri(uri: str) -> str:
-    """Return a log-safe form of `uri`: the netloc password becomes `:***`, and
-    the `password`, `pwd`, and `token` query parameters become `***`."""
+    """Return a log-safe form of `uri`: the netloc password becomes `:***`, and the
+    value of each query key that contains `password`, `pwd`, `token`, `secret`,
+    `passcode`, or `key` (in any case) becomes `***`."""
     parsed = urllib.parse.urlsplit(uri)
     netloc = parsed.netloc
     if parsed.password is not None:
         user = parsed.username or ""
-        host = parsed.hostname or ""
-        port = f":{parsed.port}" if parsed.port is not None else ""
-        netloc = f"{user}:***@{host}{port}"
+        netloc = f"{user}:***@{_host_port(parsed)}"
     query = _SECRET_QUERY_PARAM_RE.sub(r"\1\2=***", parsed.query)
     if netloc == parsed.netloc and query == parsed.query:
         return uri
     return urllib.parse.urlunsplit((parsed.scheme, netloc, parsed.path, query, parsed.fragment))
+
+
+def _host_port(parsed: urllib.parse.SplitResult) -> str:
+    """The netloc after `@`, with an IPv6 host kept in its brackets."""
+    return parsed.netloc.rpartition("@")[2]
 
 
 def redact_text(text: str, raw_uri: str) -> str:
@@ -90,9 +97,7 @@ def _replace_password(uri: str, password: str) -> str:
     if parsed.username is None:
         return uri
     quoted = urllib.parse.quote(password, safe="")
-    host = parsed.hostname or ""
-    port = f":{parsed.port}" if parsed.port is not None else ""
-    new_netloc = f"{parsed.username}:{quoted}@{host}{port}"
+    new_netloc = f"{parsed.username}:{quoted}@{_host_port(parsed)}"
     return urllib.parse.urlunsplit(
         (parsed.scheme, new_netloc, parsed.path, parsed.query, parsed.fragment)
     )

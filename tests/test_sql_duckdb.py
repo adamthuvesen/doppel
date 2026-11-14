@@ -486,3 +486,16 @@ def test_unknown_source_table_prints_one_clean_error_line(
     assert error_line.startswith("error: failed to read from duckdb://")
     assert "does not exist" in error_line
     assert "Traceback" not in output
+
+
+def test_missing_duckdb_file_prints_one_clean_error_line(tmp_path: Path) -> None:
+    missing = tmp_path / "missing.db"
+    result = CliRunner().invoke(
+        app,
+        ["gen", f"duckdb:///{missing}", "--table", "t", "-n", "5", "-o", str(tmp_path / "o.csv")],
+    )
+    assert result.exit_code == 1
+    assert result.exception is None or isinstance(result.exception, SystemExit)
+    assert "failed to open" in result.stderr
+    assert "Traceback" not in result.stderr
+    assert not missing.exists()

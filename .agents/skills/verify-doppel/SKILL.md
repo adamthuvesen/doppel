@@ -58,7 +58,6 @@ The scratch dir (code copy, HOME, work dirs, tripwires) is removed on every exit
 
 ## Limits
 
-- `multi-table` allows exactly one guard line, a blocked connect to the dead proxy. Presidio's email recognizer calls `tldextract`, which tries to fetch the public suffix list when it checks an email. The guard blocks it and `tldextract` falls back to its bundled copy. This is a product gap: PII detection makes a network attempt. The drive fails on any other guard line.
 - An unknown DuckDB table (including the harmless `accounts; DROP TABLE accounts`) prints a rich traceback. The refusal paths (invalid table name, sink equal to source, artifact refusals, missing model) are held to a clean message. Unknown-table output is not.
 - `multi-table` reports `exact_rows=100.0%` for `customers` after PII columns are regenerated. The drive does not assert on it.
 - The PII model is hidden by making `importlib.metadata.distribution` raise for `en_core_web_lg` inside the child. That is how `spacy.util.is_package` looks it up, so the product code path is real, but a model that is installed and broken is not covered.

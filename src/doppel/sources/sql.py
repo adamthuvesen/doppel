@@ -274,7 +274,7 @@ def _read_via_connectorx(spec: DatabaseUri, sql: str, *, timeout: int) -> pl.Dat
     except ImportError as exc:
         raise InvalidInputError(
             f"the {spec.scheme}:// scheme requires the optional [sql] extra. "
-            'Install it with: pip install "doppeldata[sql]"'
+            'Install it with: uv tool install "doppeldata[sql] @ git+https://github.com/adamthuvesen/doppel"'
         ) from exc
 
     def _do_read() -> pl.DataFrame:

@@ -113,6 +113,7 @@ def analyzer_engine() -> Any:
     Presidio downloads a missing model with a pip subprocess. The model is locked in
     uv.lock instead, so a missing model is an error and nothing is downloaded.
     """
+    import tldextract.tldextract as tld_module
     from presidio_analyzer import AnalyzerEngine
     from presidio_analyzer.nlp_engine import NlpEngineProvider
 
@@ -121,6 +122,9 @@ def analyzer_engine() -> Any:
             f"PII detection needs the spaCy model {SPACY_MODEL}, which is not installed. "
             f"Install it with: {SPACY_MODEL_INSTALL_COMMAND}"
         )
+    # Presidio's email recognizer calls `tldextract.extract`, which fetches the public suffix
+    # list and caches it under HOME. Use the bundled snapshot: no network, no disk cache.
+    tld_module.TLD_EXTRACTOR = tld_module.TLDExtract(suffix_list_urls=(), cache_dir=None)
     nlp_engine = NlpEngineProvider(
         nlp_configuration={
             "nlp_engine_name": "spacy",

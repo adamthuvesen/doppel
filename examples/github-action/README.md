@@ -22,7 +22,9 @@ Then edit:
     better; lower means row-level memorisation risk).
   - `--fail-on-verbatim-text` — any TEXT column copying a source value verbatim
     trips the gate.
-- **Python version** matrix.
+- **Python version** matrix. doppel needs Python 3.14 or newer.
+- **Install** step. doppel is not on PyPI, so the workflow installs it from git with
+  `uv tool install`. Pin a tag or commit (`...doppel@<ref>`) for a reproducible gate.
 
 ## Output
 

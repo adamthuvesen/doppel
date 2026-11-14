@@ -1,64 +1,63 @@
 # AGENTS.md — doppel
 
-doppel is a Python CLI + library that generates synthetic tabular data preserving the statistical fingerprint of a source dataset (marginals, correlations, null patterns, referential structure). PyPI name `doppeldata`; CLI binary + import name `doppel`; repo folder `doppel`.
+doppel is a Python CLI and library that writes synthetic tabular data with the statistical fingerprint of a source dataset. Package `doppeldata` (not on PyPI), CLI and import name `doppel`. Python 3.14 with **uv**. Human overview: [README.md](README.md). Terms: [GLOSSARY.md](GLOSSARY.md). Decisions: [docs/adr/](docs/adr/). User-level rules live in `~/.claude/CLAUDE.md` and are not repeated here.
 
-User-level guidance (tone, principles, git etiquette) lives in `~/.claude/CLAUDE.md` and `~/dotfiles/agents/AGENTS.md` and is *not* duplicated here. This file is for project-specific facts.
+## Commands
+
+```bash
+just setup           # uv sync --locked --all-extras, then doppel doctor
+just check           # ruff, format, basedpyright strict, import contracts and bans, fast tests; CI runs the same
+just fix             # ruff --fix and format
+just verify all      # drive the real CLI on seeded fixtures (just verify list shows the drives)
+just slow            # slow tests
+```
+
+A change is done when `just check` is green. Prove user-facing changes with the `verify-doppel` skill in `.agents/skills/verify-doppel`. A bare `uv run` drops the extras, so use `just` or `uv run --no-sync`. Mark a test `@pytest.mark.extras` when it needs the `pii` or `sql` extra.
 
 ## Layout
 
 ```
 src/doppel/
   cli/         Typer apps: parse arguments, call one pipeline function, print, map errors to exit codes
-  pipeline/    One flow per command (gen single and multi, fit, sample, diff, quality summary)
-  errors.py    doppel's error types; only cli/ imports typer (import contract)
-  dataset.py   The spine: Dataset = graph of Tables linked by ForeignKey edges
-  sources/     File readers (CSV/Parquet/JSON/Arrow) returning Polars DataFrames
-  sinks/       Symmetric writers
-  schema/      Column types, inference, datetime decompose/recompose, TOML model, FK schema
-  constraints/ TOML DSL (range/inequality/derived) + AST-based expression evaluator
-  synth/       CartSynthesizer (single-table) + HierarchicalSynthesizer (multi-table)
-  pii/         Presidio detection + Faker regeneration
-  quality/     KS/TVD marginals, mixed-type correlation Frobenius, DCR percentiles
-  report/      HTML/JSON/terminal renderers (separate from metric computation)
-  artifact/    Versioned save/load of fitted models (.doppel = gzipped tar)
-tests/         Regression + CLI e2e tests
-docs/          Deeper subsystem docs — see Index
+  pipeline/    One flow per command (gen single and multi, fit, sample, diff, quality summary, sink guard)
+  errors.py    Error types; locations.py: source and sink paths and SQL identifier quoting
+  dataset.py   Dataset = tables linked by declared ForeignKey edges
+  sources/ sinks/   File and warehouse readers and writers
+  schema/      Column types, inference, datetime and null handling, TOML schema files
+  constraints/ TOML constraint DSL, the expression allowlist (expr.py), reject-resample
+  synth/       CartSynthesizer, HierarchicalSynthesizer, Rng (seed.py), decision-tree arrays
+  pii/         Presidio detection, Faker regeneration; text_policy.py: sample, hash, fake, drop
+  quality/ report/  Metrics, then HTML, JSON, and terminal renderers
+  artifact/    Save and load of .doppel files (JSON plus a plain npz)
+tests/  docs/  examples/  benchmarks/  scripts/
 ```
 
-## Quickstart
+## Enforced Rules
 
-```bash
-just setup    # uv sync --locked --all-extras, then doppel doctor
-just check    # ruff, format check, basedpyright strict, pytest -m "not slow"
-just fix      # ruff --fix and format
-just slow     # slow tests
-just verify   # not built yet
-```
+| Rule | Enforced by |
+| --- | --- |
+| Only `cli/` imports typer, and nothing else imports `cli/` | `pyproject.toml::Only the CLI imports typer`, `pyproject.toml::Nothing in core imports the CLI` |
+| Layers import in one direction (sources, sinks, synth, quality, report, pii do not reach up) | `pyproject.toml::Sources is a leaf`, `pyproject.toml::Synth does not reach up`, `pyproject.toml::Quality is pure metrics over the schema`, `pyproject.toml::Schema layers` |
+| No module starts a process, except `sources/spec.py` for `--password-cmd` | `pyproject.toml::tool.ruff.lint.flake8-tidy-imports.banned-api.subprocess.msg`, `pyproject.toml::os.system.msg` |
+| No module opens a network client | `pyproject.toml::socket.msg`, `pyproject.toml::requests.msg` |
+| No unsafe loading: no pickle, marshal, joblib, and `numpy.load` only in `artifact/load.py` | `pyproject.toml::pickle.msg`, `pyproject.toml::numpy.load.msg`, `tests/test_artifact.py::test_no_source_module_imports_a_code_executing_loader` |
+| No nondeterminism: all randomness comes from `Rng` | `pyproject.toml::tool.ruff.lint.flake8-tidy-imports.banned-api.random.msg`, `pyproject.toml::uuid.uuid4.msg`, `pyproject.toml::numpy.random.msg`, `src/doppel/synth/seed.py::Rng` |
+| Warehouse drivers stay in `sources/sql.py` and `sinks/sql.py` | `pyproject.toml::duckdb.msg`, `tests/test_boundaries.py::test_connectorx_is_named_only_in_its_owner_files` |
+| Presidio, spaCy, and Faker stay in `pii/`; the spaCy model is never downloaded | `pyproject.toml::presidio_analyzer.msg`, `pyproject.toml::faker.msg`, `tests/test_pii_model.py::test_missing_spacy_model_raises_with_install_command_and_downloads_nothing` |
+| An artifact holds data only, is size-capped, and keeps no source row order | `src/doppel/artifact/load.py::_MEMBER_LIMITS`, `tests/test_artifact.py::test_load_never_calls_pickle`, `tests/test_artifact.py::test_no_stored_array_keeps_source_row_order` |
+| Constraint expressions stay on the allowlist and under the size caps | `src/doppel/constraints/expr.py::_ALLOWED_ARITH_OPS`, `src/doppel/constraints/expr.py::_MAX_AST_NODES`, `tests/test_where_expr.py::test_boolean_rejects_hostile_node` |
+| Table names are quoted in SQL, and DuckDB sources open read-only | `src/doppel/locations.py::quote_table_name`, `tests/test_sql_duckdb.py::test_source_table_injection_does_not_run`, `tests/test_sql_duckdb.py::test_duckdb_source_opens_read_only` |
+| An unknown or large warehouse row count needs `--fit-rows` | `src/doppel/sources/sql.py::_enforce_row_count_threshold`, `tests/test_sql_e2e.py::test_row_count_probe_unknown_count_requires_fit_rows` |
+| A sink never overwrites its source | `src/doppel/pipeline/sink_guard.py::reject_sink_matching_source`, `tests/test_sql_duckdb.py::test_sink_matching_source_is_refused` |
+| Warehouse passwords never reach logs or errors | `src/doppel/sources/spec.py::redact_uri`, `tests/test_source_spec.py::test_info_log_redacted` |
+| PII is stripped in every `gen` path, single and multi-table | `tests/test_pii.py::test_doppel_gen_replaces_emails_in_output`, `tests/test_pii.py::test_doppel_gen_multi_table_regenerates_pii` |
+| The same seed gives byte-identical output across processes | `tests/test_gen_e2e.py::test_gen_is_byte_identical_across_processes_with_different_hash_seeds` |
 
-A change isn't done until `just check` is green. CI runs the same recipe, plus a base-install job (`uv sync --locked`, `pytest -m "not extras"`). Mark a test `@pytest.mark.extras` when it needs the `pii` or `sql` extra. A bare `uv run` drops the extras, so use `just` or `uv run --no-sync`.
+## Limits code cannot enforce
 
-## Critical Conventions
-
-- **Determinism is a hard contract.** Use `Rng.from_seed` / `rng.spawn()`; never call `uuid.uuid4()`, `random.*`, or `np.random.*` directly. See [docs/determinism.md](docs/determinism.md).
-- **Polars nullable dtypes are the canonical NULL.** Don't mix `nan`/`None`/`pd.NA`. Use `encode_feature` ([src/doppel/schema/nullable.py](src/doppel/schema/nullable.py)) when handing a Series to sklearn — median for numerics, `__doppel_null__` for categoricals.
-- **CART never sees raw nanoseconds.** Datetime columns decompose to Int64 epoch-seconds before fitting and recompose at output; route new modeling paths through [src/doppel/schema/datetime.py](src/doppel/schema/datetime.py) `decompose`/`recompose`.
-- **`primary_key` auto-promotes to `ColumnType.KEY`** so the synthesizer generates unique values rather than modelling them. Preserve this in `apply_overrides` and `multi.to_dataset`.
-- **Artifacts hold data, never code.** A `.doppel` is JSON (strict Pydantic, `synth/cart_state.py`) plus one `.npz` read with `allow_pickle=False`. `pickle`/`marshal`/`joblib` are banned everywhere. New synthesizer state goes into `CartSynthesizer.to_state`/`from_state`, with a format-version bump in `artifact/manifest.py`. See [SECURITY.md](SECURITY.md).
-- **No new dependencies without justification.** The stack is locked: Polars + DuckDB + sklearn + scipy + Pydantic + Typer + Rich + PyArrow + Presidio + Faker + tomli-w. Python is 3.14 and the spaCy model `en_core_web_lg` is locked in `uv.lock` (never downloaded at run time).
-- **No CHANGELOG file.** Git history + GitHub Releases carry change communication.
-- **FKs are never auto-detected at gen-time.** Heuristics live only in `schema infer`, which writes them to TOML for review; multi-table `gen`/`fit` requires an explicit `[[foreign_keys]]` block.
-- **Don't loosen the AST evaluator** in [src/doppel/constraints/derived.py](src/doppel/constraints/derived.py): only `Name | Constant(int|float) | UnaryOp(-) | BinOp(+,-,*,/)`. Calls, attribute access, and starred forms stay blocked.
-- **basedpyright strict, no `# type: ignore`.** The checker reads only `# pyright: ignore[rule]  # reason`, and `tests/test_suppressions.py` enforces it. `scipy-stubs` types scipy results. Presidio and Faker stay untyped boundaries (`Any`/`cast`). `typer.Argument(...)`/`typer.Option(...)` defaults are canonical (`B008` whitelisted in `pyproject.toml`).
-- **Tests are real.** Most edits land with a regression test; use the `mixed_df` / `mixed_csv` / `mixed_parquet` fixtures for the common small mixed-dtype case.
-- **Never commit secrets, `.env`, or AI-attribution lines.**
-
-## Read The Docs First
-
-Before editing a subsystem, read the matching doc:
-
-- **Determinism / seeding** → [docs/determinism.md](docs/determinism.md)
-- **SQL warehouse connectors (DuckDB / Snowflake / Postgres)** → [docs/sql-connectors.md](docs/sql-connectors.md)
-- **Artifact format and safety, privacy posture** → [SECURITY.md](SECURITY.md)
-- **Known limitations** → [docs/limitations.md](docs/limitations.md)
-
-If a doc disagrees with code, fix the doc in the same change.
+- Foreign keys are declared in `[[foreign_keys]]`, never detected ([ADR 0001](docs/adr/0001-foreign-keys-are-declared-never-detected.md)).
+- New synthesizer state goes into `CartSynthesizer.to_state` and `from_state`, with a version bump in `artifact/manifest.py`. An older version is refused, not migrated.
+- A `.doppel` file is as sensitive as its source. Never commit one made from real data.
+- Add a dependency only with a stated reason. The spaCy model `en_core_web_lg` is locked in `uv.lock`.
+- No CHANGELOG file: git history carries change communication.
+- If a doc disagrees with the code, fix the doc in the same change.

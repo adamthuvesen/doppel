@@ -45,6 +45,30 @@ def test_detect_identifies_email_column() -> None:
     assert by_name["email"].confidence >= 0.5
 
 
+def test_email_detection_opens_no_socket(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    import socket
+
+    import tldextract.tldextract as tld_module
+
+    from doppel.pii.detect import analyzer_engine
+
+    attempts: list[object] = []
+
+    def refuse(self: socket.socket, address: object) -> None:
+        attempts.append(address)
+        raise OSError("network blocked")
+
+    # Start from a fresh extractor with an empty cache, as on a new machine.
+    monkeypatch.setattr(
+        tld_module, "TLD_EXTRACTOR", tld_module.TLDExtract(cache_dir=str(tmp_path / "tld"))
+    )
+    monkeypatch.setattr(socket.socket, "connect", refuse)
+    analyzer_engine.cache_clear()
+    df = _emails_df()
+    detect(df, infer_table("t", df).columns, sample_size=20, min_confidence=0.5)
+    assert attempts == []
+
+
 def test_faker_generates_n_values_per_entity_type() -> None:
     rng = Rng.from_seed(0)
     emails = generate("EMAIL_ADDRESS", 5, rng)

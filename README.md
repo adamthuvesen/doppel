@@ -16,22 +16,23 @@ privacy guarantee; text-heavy datasets and rare rows still need care.
 
 ## Quick Start
 
-Install the repo dependencies and check the CLI:
+doppel is not on PyPI. Install the CLI from git, with every extra:
 
 ```bash
-uv sync
+uv tool install "doppeldata[all] @ git+https://github.com/adamthuvesen/doppel"
+doppel doctor
+```
+
+Use `doppeldata[sql]` for warehouse reads or `doppeldata[pii]` for PII regeneration, or
+leave the extras off for the base install. In a checkout, install the dependencies and
+check the CLI:
+
+```bash
+uv sync --all-extras
 uv run doppel --help
 ```
 
-Add extras when you need warehouse reads or PII regeneration:
-
-```bash
-uv sync --extra sql
-uv sync --extra pii
-uv sync --all-extras
-```
-
-CLI and import name: `doppel`.
+CLI and import name: `doppel`. Python 3.14 or newer.
 
 Run the bundled SaaS fixture, then compare the synthetic output with the source:
 
@@ -123,8 +124,10 @@ Common flags:
 | `--where EXPR` | Keep generated rows matching a boolean expression. Supports `== != < <= > >=` plus `and` / `or`. |
 | `--max-oversample N` | Raise this when `--where` or constraints are rare. Default: `4`. |
 | `--text-policy sample|hash|fake|drop` | Handle free-text columns. `fake` requires `[pii]`. |
-| `--hash-salt VALUE` | Salt for `--text-policy hash`. Without it each run uses a random salt. |
+| `--hash-salt VALUE` | Salt for `--text-policy hash`. Without it each run uses a random salt, so hashes differ between runs. |
 | `--null-values NA,?` | File sources: extra string values to read as NULL. Only the empty string is NULL by default. |
+| `--no-quality` | Skip the quality summary after generation. |
+| `--json-summary PATH` | Write a machine-readable summary (row count, timing, quality) to `PATH`. |
 | `--schema PATH` | Override types, declare keys, and add constraints. |
 | `--explain` | Print per-column modeling choices after fit. |
 
@@ -166,7 +169,8 @@ doppel sample sales.doppel -n 1000000 -o synth.parquet --seed 1
 doppel artifact info sales.doppel
 ```
 
-`doppel fit` refuses sources with detected PII. Use `doppel gen` for one-shot PII
+`doppel sample --real <file>` prints the quality summary against the source, because
+an artifact does not keep its source. `doppel fit` refuses sources with detected PII. Use `doppel gen` for one-shot PII
 regeneration. A `.doppel` file holds JSON and plain numpy arrays, not a pickle, so
 loading it cannot run code. It does hold real values from every modelled column, so
 keep it as private as the source data.
@@ -275,19 +279,22 @@ Metrics:
 | `verbatim_rate` | Fraction of text values copied from the source. |
 | `exact_row_match_rate` | Share of synthetic rows equal to a real row over the modelled columns (key columns and regenerated PII are left out). Small tables with few distinct values give high rates. doppel sets no threshold for it. |
 
-`gen` prints the same summary for each table of a multi-table run. `sample --real <file>`
-prints it against the source, because an artifact does not keep its source.
+`gen` prints the same summary for each table of a multi-table run, and `sample --real`
+prints it too. `gen --no-quality` turns it off.
 
-Use `--sample-rows N` and `--max-dcr-rows N` for large comparisons.
+Use `--sample-rows N` and `--max-dcr-rows N` for large comparisons. `--sample-seed N`
+(default `0`) fixes which rows `--sample-rows` selects.
 
 ## Privacy and Security
 
 doppel has no differential privacy guarantee.
 
-With the `[pii]` extra installed, detected PII can be regenerated. Free-text columns
+With the `[pii]` extra installed, detected PII in text columns and string categorical
+columns (except location-only ones) is regenerated, in single-table and multi-table `gen`.
+The spaCy model `en_core_web_lg` is locked in `uv.lock`; doppel never downloads it. Free-text columns
 that are not detected as PII may copy real strings into the output. For text-heavy
 datasets, choose an explicit text policy and check the result with `doppel diff`:
-`--text-policy hash|fake|drop`.
+`--text-policy hash|fake|drop`. `hash` pseudonymises: it is not anonymisation.
 
 `.doppel` files hold JSON and plain numpy arrays, so loading one cannot run code. A
 `.doppel` file holds real values from every modelled column and is as sensitive as
@@ -317,8 +324,12 @@ its source. See [SECURITY.md](SECURITY.md).
 
 ```bash
 just setup   # install every extra and the locked spaCy model
-just check   # ruff, format check, basedpyright, fast tests
+just check   # ruff, format check, basedpyright, import contracts, fast tests
+just verify all   # drive the real CLI on seeded fixtures
 ```
+
+Agents and contributors: read [AGENTS.md](AGENTS.md) and [GLOSSARY.md](GLOSSARY.md). Design
+decisions are in [docs/adr/](docs/adr/).
 
 ## License
 

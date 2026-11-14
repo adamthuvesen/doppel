@@ -90,7 +90,8 @@ def run() -> None:
     if any_required_missing:
         console.print(
             "[red]one or more required dependencies are missing. "
-            "reinstall with `uv tool install doppeldata` or `pip install doppeldata`.[/]"
+            "reinstall with `uv tool install --reinstall git+https://github.com/adamthuvesen/doppel` "
+            "or, in a checkout, `uv sync --all-extras`.[/]"
         )
         raise typer.Exit(code=1)
 

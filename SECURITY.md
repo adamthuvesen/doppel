@@ -68,11 +68,26 @@ and Postgres via database URIs. The threat surface and mitigations:
    Polars accepts this form natively, but **doppel emits a one-line stderr
    warning** that the password appears in shell history. Prefer (1) or (2).
 
-The parser substitutes `:***@` into a redacted form of the URI at the
-parser boundary; **only** the redacted form appears in logs, error
-messages, or `--explain` output. The raw form is held in a separate field
-and passed straight to the driver. We have a regression test that drives a
-connection failure and asserts the raw password is absent from the message.
+**Redaction.** `redact_uri` ([src/doppel/sources/spec.py](src/doppel/sources/spec.py))
+replaces the URI password with `***` and also masks the `password`, `pwd`, and
+`token` query parameters. `redact_text` removes the raw URI and each secret
+from driver errors. **Only** the redacted form appears in logs, error messages,
+or `--explain` output. The raw form is held in a separate field and passed
+straight to the driver. A regression test drives a connection failure and
+asserts the raw password is absent from the message.
+
+**Identifiers are quoted.** `--table` is a name, not SQL. `quote_table_name`
+([src/doppel/locations.py](src/doppel/locations.py)) double-quotes every part
+of a dotted name and doubles any embedded quote, so a table name cannot add a
+clause. DuckDB sources open read-only (`read_only=True`), and a DuckDB sink that
+names the source table is refused
+([src/doppel/pipeline/sink_guard.py](src/doppel/pipeline/sink_guard.py)).
+
+**Row counts gate cost.** Reading a Snowflake or Postgres table of more than
+1,000,000 rows needs `--fit-rows N` (or `0` for all rows), because streaming a
+huge table is a cost mistake. An unknown count (a view, or a Postgres table never
+analysed) counts as over the threshold. For a multi-table schema, set `fit_rows`
+on the table.
 
 **`--query` is developer-trust input.** Doppel does **not** sanitise the
 `--query` argument against SQL injection. The user owns the credentials and
@@ -83,8 +98,8 @@ same way `bash -c` treats its argument.
 **Vendor driver vulnerabilities.** ConnectorX is the SQL read driver and
 ships its own native code. A vulnerability in ConnectorX or its underlying
 libraries (Arrow, libpq, etc.) is out of scope for the doppel threat
-model — keep your `[sql]` extra current with `pip install -U
-"doppeldata[sql]"`.
+model — keep your `[sql]` extra current with `uv sync --upgrade --all-extras`
+(or reinstall the tool with `uv tool install --reinstall`).
 
 **Warehouse writes are explicitly out of scope.** Snowflake and Postgres
 sinks raise at parse time. DuckDB writes are file writes — same blast
@@ -99,7 +114,9 @@ doppel's privacy posture is **heuristic**, not formal:
   regenerated via Faker at sample time. Presidio scans free-text columns and
   string categorical columns. A categorical tagged only as a location (a country
   or city column) is kept, because it is an analysis dimension. Primary-key and
-  foreign-key columns are never stripped.
+  foreign-key columns are never stripped. The spaCy model `en_core_web_lg` is
+  locked in `uv.lock` and never downloaded at run time. If it is missing, doppel
+  stops with the install command, and `doppel doctor` reports it.
 - `doppel fit` refuses any source where Presidio detects PII; the artifact format
   doesn't carry detection metadata to support round-trip regeneration. Without the
   `[pii]` extra, `fit` prints a warning that PII was not checked.
@@ -107,8 +124,13 @@ doppel's privacy posture is **heuristic**, not formal:
   original values**. `doppel diff` reports a distance-to-closest-record percentile,
   a per-column verbatim-text fraction, and the share of synthetic rows that equal a
   real row, so you can spot row-level memorisation. `gen` and `sample --real` print
-  that share too. CART leaf sampling copies real rows on small tables: one 60-row,
-  4-column table gave 14 copies in 1,000 synthetic rows. doppel sets no threshold.
+  that share too (the exact-row-match rate). CART leaf sampling copies real rows on
+  small tables: one 60-row, 4-column table gave 14 copies in 1,000 synthetic rows.
+  doppel sets no threshold.
+- `--text-policy hash` is pseudonymisation, not anonymisation. Without
+  `--hash-salt`, each run draws a random salt, so hashes differ between runs and a
+  dictionary cannot rebuild them. A fixed salt gives repeatable hashes. Keep it
+  secret.
 - No differential privacy. If you need a formal privacy guarantee, doppel is not
   the right tool.
 - **A `.doppel` artifact is as sensitive as its source.** Sampling draws real values
@@ -119,7 +141,7 @@ doppel's privacy posture is **heuristic**, not formal:
   side. Each column's values are still there. Store and share a `.doppel` file under
   the same rules as the source data.
 
-### 3. Constraint expression evaluator
+### 4. Constraint expression evaluator
 
 `doppel` exposes a small Python-expression DSL in two places:
 
@@ -131,6 +153,10 @@ Both are parsed with the stdlib `ast` module and walked under a strict allowlist
 
 **Numeric mode (`derived`).** Allowed nodes: `Name`, `Constant(int|float)`,
 `UnaryOp(USub)`, `BinOp(Add|Sub|Mult|Div)`.
+
+**Size caps.** An expression longer than 10,000 characters or with more than 1,000
+syntax nodes is rejected before the walker runs (`_MAX_EXPRESSION_CHARS` and
+`_MAX_AST_NODES` in [src/doppel/constraints/expr.py](src/doppel/constraints/expr.py)).
 
 **Boolean mode (`where`).** Numeric subgrammar plus: `Compare` with one of
 `Eq|NotEq|Lt|LtE|Gt|GtE` (single op only — chained `0 < x < 10` is rejected),
@@ -144,11 +170,14 @@ RCE pattern is rejected because `Call` itself is not allowed.
 
 Regression coverage: `tests/test_constraints.py` (numeric) +
 `tests/test_where_expr.py` (boolean, parametrised over every rejected node).
+See [ADR 0002](docs/adr/0002-the-expression-allowlist.md).
 
 ## Reproducibility
 
 `--seed` makes all fit + sample randomness deterministic: sklearn estimators,
 leaf-sampling, UUID-typed keys, Faker-generated PII. Same seed = byte-identical
-output. If you find a path that breaks this, it's a bug — please report.
+output. One exception: `--text-policy hash` uses a random salt for each run, so
+it needs `--hash-salt` too. If you find another path that breaks this, it's a
+bug — please report.
 
 Full contract in [docs/determinism.md](docs/determinism.md).

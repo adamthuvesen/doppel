@@ -62,7 +62,7 @@ def strip_pii_if_available(
         warnings.warn(
             "PII detection skipped: the optional [pii] extra is not installed. "
             "Free-text columns are passed through unmodified and may leak source "
-            'values. Install with: pip install "doppeldata[pii]"',
+            'values. Install with: uv tool install "doppeldata[pii] @ git+https://github.com/adamthuvesen/doppel"',
             stacklevel=2,
         )
         return unchanged

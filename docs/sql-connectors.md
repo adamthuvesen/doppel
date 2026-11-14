@@ -7,8 +7,10 @@ extra work.
 DuckDB works with the base install. Snowflake and Postgres need the SQL extra:
 
 ```bash
-pip install "doppeldata[sql]"
+uv tool install "doppeldata[sql] @ git+https://github.com/adamthuvesen/doppel"
 ```
+
+In a checkout, run `uv sync --extra sql` instead.
 
 DuckDB writes are also supported. Snowflake and Postgres are read-only from
 doppel's point of view; write a file or a DuckDB table, then load it with your
@@ -57,9 +59,11 @@ There are three password mechanisms. doppel applies them in this order:
    one-line stderr warning because the password can appear in shell history.
    Use this only for throwaway local runs.
 
-doppel redacts passwords at the parser boundary by substituting `:***@` into
-the log-safe URI. The raw URI is kept separately and passed straight to the
-driver. It should not appear in logs, error messages, or `--explain` output.
+doppel redacts secrets at the parser boundary. It replaces the URI password with
+`***` and masks the `password`, `pwd`, and `token` query parameters in the
+log-safe URI, and it scrubs the raw URI and each secret from driver errors. The raw
+URI is kept separately and passed straight to the driver. It does not appear in
+logs, error messages, or `--explain` output.
 
 ## Sample pushdown
 
@@ -169,6 +173,9 @@ The `-o`/`--output` flag accepts:
 
 - a file path (any extension supported by `sinks.file`); or
 - a DuckDB URI of the form `duckdb:///path.db?table=NAME`.
+
+A DuckDB sink that names the table the run reads from is refused, so a run cannot
+overwrite its own source. DuckDB sources open read-only.
 
 Snowflake and Postgres sink URIs are rejected at parse time (exit code 2). Warehouse
 writes need decisions about transactions, idempotency, table creation, schema

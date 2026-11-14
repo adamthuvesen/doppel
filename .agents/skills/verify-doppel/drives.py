@@ -26,10 +26,6 @@ ACCOUNTS = FIXTURE_DIR / "accounts.csv"
 CUSTOMERS = FIXTURE_DIR / "customers.csv"
 SCHEMA = FIXTURE_DIR / "schema.toml"
 HASH_SALT = "verify-salt"
-# Presidio's email recognizer calls tldextract, which tries to fetch the public suffix list. The
-# guard blocks it, tldextract falls back to its bundled copy, and the attempt is logged as this line
-# (the proxy address is the dead proxy). A product gap, reported in SKILL.md under Limits.
-PUBLIC_SUFFIX_FETCH = "socket.connect ('127.0.0.1', 9)"
 EMAIL = re.compile(r"[\w.+-]+@[\w-]+\.[\w.-]+")
 
 # Strings the product prints when it refuses. No constant exists in the code, so each is held here.
@@ -147,7 +143,6 @@ def fit_sample(ctx: Ctx) -> str:
 
 
 def multi_table(ctx: Ctx) -> str:
-    ctx.allowed_hits = (PUBLIC_SUFFIX_FETCH,)
     out = ctx.work / "out"
     done = ctx.doppel(
         "gen", *("gen", "--schema", str(SCHEMA), "-o", str(out), "-n", "30", "--seed", "5")
@@ -182,12 +177,10 @@ def multi_table(ctx: Ctx) -> str:
         REAL_VALUE_LEAKED,
         "a real person name is in the output",
     )
-    extra = {h for h in ctx.guard_hits() if h != PUBLIC_SUFFIX_FETCH}
-    ctx.check(not extra, "unexpected-guard-hit", f"{sorted(extra)}")
+    ctx.check(not ctx.guard_hits(), "unexpected-guard-hit", f"{ctx.guard_hits()}")
     return (
         f"{customers.height} customers, {orders.height} orders, 0 orphans; "
-        f"0 of {len(emails)} output emails among {CUSTOMER_ROWS} real ones; "
-        f"{len(ctx.guard_hits())} public-suffix fetch attempts blocked"
+        f"0 of {len(emails)} output emails among {CUSTOMER_ROWS} real ones"
     )
 
 

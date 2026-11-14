@@ -42,7 +42,7 @@ Where real data comes from: a file, or a DuckDB, Snowflake, or Postgres table or
 _Avoid_: Input, reader
 
 **Sink**:
-Where synthetic data goes: a file or a DuckDB table (`src/doppel/sinks/`). A sink never overwrites its source.
+Where synthetic data goes: a file or a DuckDB table (`src/doppel/sinks/`). A sink never writes to a file the run reads: the same CSV or Parquet path, or any table in the source's DuckDB file.
 _Avoid_: Output, target
 
 **Synthesizer**:

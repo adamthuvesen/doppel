@@ -31,7 +31,7 @@ EMAIL = re.compile(r"[\w.+-]+@[\w-]+\.[\w.-]+")
 # Strings the product prints when it refuses. No constant exists in the code, so each is held here.
 REFUSAL_PICKLE_MEMBER = "no longer loads pickles"
 REFUSAL_OBJECT_ARRAY = "holds an array doppel cannot read"
-REFUSAL_SINK_IS_SOURCE = "is the source table"
+REFUSAL_SINK_IS_SOURCE = "is the source file"
 REFUSAL_INVALID_TABLE = "invalid table name"
 # The install hint and the model name come from the code (`doppel.pii.detect`).
 INSTALL_HINT = SPACY_MODEL_INSTALL_COMMAND

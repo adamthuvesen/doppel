@@ -174,8 +174,12 @@ The `-o`/`--output` flag accepts:
 - a file path (any extension supported by `sinks.file`); or
 - a DuckDB URI of the form `duckdb:///path.db?table=NAME`.
 
-A DuckDB sink that names the table the run reads from is refused, so a run cannot
-overwrite its own source. DuckDB sources open read-only.
+A sink that writes to a file the run reads is refused with exit code 2, before
+any read or fit. This covers a file sink at the path of the file source, and a
+DuckDB sink into the source's DuckDB file, whatever table either side names: a
+`--query` or a view can read any table in that file, so no table there is
+provably safe. A multi-table `gen` refuses an output file that is one of the
+schema's `file` sources or DuckDB files. DuckDB sources open read-only.
 
 Snowflake and Postgres sink URIs are rejected at parse time (exit code 2). Warehouse
 writes need decisions about transactions, idempotency, table creation, schema

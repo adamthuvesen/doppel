@@ -246,6 +246,11 @@ def _read_duckdb(spec: DatabaseUri, sql: str, *, timeout: int) -> pl.DataFrame:
             result = con.execute(sql)
             description = result.description
             rows = result.fetchall()
+        except duckdb.Error as exc:
+            # DuckDB errors span several lines (hint, query, caret); the first is the cause.
+            raise WarehouseConnectionError(
+                f"failed to read from {spec.uri}: {str(exc).splitlines()[0]}"
+            ) from None
         finally:
             con.close()
         if not description:

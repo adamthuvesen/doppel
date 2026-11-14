@@ -40,7 +40,7 @@ Drives run in parallel threads. The helper does not retry. A failed drive is FAI
 
 Each run writes `.verify/runs/<utc>-<sha7>[-dirty]/`: `manifest.txt` (one block per drive), `summary.json`, and one `<drive>.<n>-<step>.json` per child command (argv, exit, stdout, stderr; values of `KEY`, `TOKEN`, `SECRET`, `PASSWORD` variables redacted). The run prints `PASS|FAIL <drive> <seconds> <detail>` per drive and ends with the evidence path. `.verify/` is gitignored.
 
-- **Control.** `just verify control` builds a DuckDB source, then re-drives the sink step with the wrong expectation: a write whose output table is the source table (`Main.ACCOUNTS` for source table `accounts`) must succeed. It passes only when the step fails with exit code 2 and the refusal `is the source table` (`REFUSAL_SINK_IS_SOURCE`). Any other failure, a tripwire hit, or a success fails the control.
+- **Control.** `just verify control` builds a DuckDB source, then re-drives the sink step with the wrong expectation: a write whose output table is the source table (`Main.ACCOUNTS` for source table `accounts`) must succeed. It passes only when the step fails with exit code 2 and the refusal `is the source file` (`REFUSAL_SINK_IS_SOURCE`). Any other failure, a tripwire hit, or a success fails the control.
 
 ## Cleanup
 
@@ -58,8 +58,6 @@ The scratch dir (code copy, HOME, work dirs, tripwires) is removed on every exit
 
 ## Limits
 
-- An unknown DuckDB table (including the harmless `accounts; DROP TABLE accounts`) prints a rich traceback. The refusal paths (invalid table name, sink equal to source, artifact refusals, missing model) are held to a clean message. Unknown-table output is not.
-- `multi-table` reports `exact_rows=100.0%` for `customers` after PII columns are regenerated. The drive does not assert on it.
 - The PII model is hidden by making `importlib.metadata.distribution` raise for `en_core_web_lg` inside the child. That is how `spacy.util.is_package` looks it up, so the product code path is real, but a model that is installed and broken is not covered.
 - Detection of emails needs a real TLD: `.example` addresses are not detected as emails. The customer fixture uses `example.com`.
 - Snowflake, Postgres, and `--password-cmd` need a warehouse or a subprocess and are not driven.

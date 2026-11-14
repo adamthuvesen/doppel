@@ -185,3 +185,18 @@ parent_column = "user_id"
     tables = json.loads(summary.read_text())["tables"]
     assert set(tables) == {"users", "orders"}
     assert all("exact_row_match_rate" in t["quality"] for t in tables.values())
+
+
+def test_regenerated_columns_are_left_out_of_the_comparison() -> None:
+    columns = [
+        Column(name="id", type=ColumnType.KEY),
+        Column(name="email", type=ColumnType.TEXT),
+        Column(name="tier", type=ColumnType.CATEGORICAL),
+    ]
+    real = pl.DataFrame({"id": [1, 2], "email": ["a@x.io", "b@x.io"], "tier": ["pro", "free"]})
+    synth = pl.DataFrame({"id": [7, 8], "email": ["c@y.io", "d@y.io"], "tier": ["pro", "free"]})
+
+    # The regenerated email is excluded, so the rows match on the one low-cardinality column.
+    assert exact_row_match_rate(real, synth, columns, exclude={"email"}) == 1.0
+    # With every comparable column regenerated, nothing is compared and the rate is undefined.
+    assert math.isnan(exact_row_match_rate(real, synth, columns, exclude={"email", "tier"}))

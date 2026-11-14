@@ -79,8 +79,9 @@ asserts the raw password is absent from the message.
 **Identifiers are quoted.** `--table` is a name, not SQL. `quote_table_name`
 ([src/doppel/locations.py](src/doppel/locations.py)) double-quotes every part
 of a dotted name and doubles any embedded quote, so a table name cannot add a
-clause. DuckDB sources open read-only (`read_only=True`), and a DuckDB sink that
-names the source table is refused
+clause. DuckDB sources open read-only (`read_only=True`), and a sink that writes
+to a file the run reads (the same CSV or Parquet path, or any table in the
+source's DuckDB file, in single-table and multi-table `gen`) is refused
 ([src/doppel/pipeline/sink_guard.py](src/doppel/pipeline/sink_guard.py)).
 
 **Row counts gate cost.** Reading a Snowflake or Postgres table of more than

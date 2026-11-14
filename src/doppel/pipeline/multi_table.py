@@ -13,9 +13,11 @@ from doppel.constraints.multi_where import (
     resolve_where_table,
 )
 from doppel.dataset import Dataset
+from doppel.locations import detect_scheme, expand_env_vars
 from doppel.pii.detect import PIIDetection
 from doppel.pipeline.pii import strip_pii_if_available
 from doppel.pipeline.quality_summary import QualitySummary, compute_quality_summary
+from doppel.pipeline.sink_guard import duckdb_file, reject_outputs_matching_sources
 from doppel.schema import multi as multi_schema
 from doppel.sinks import write as sink_write
 from doppel.sources.spec import DEFAULT_CONNECTION_TIMEOUT, FilePath
@@ -78,6 +80,10 @@ def generate_multi_table(
             notify(message)
 
     schema = multi_schema.load(config.schema_path)
+    outputs = {name: _output_path(schema, name, config.output_dir) for name in schema.tables}
+    reject_outputs_matching_sources(
+        _source_files(schema, config.schema_path.parent), outputs.values()
+    )
     dataset = multi_schema.to_dataset(
         schema,
         config.schema_path.parent,
@@ -122,13 +128,7 @@ def generate_multi_table(
     run_salt = resolve_hash_salt(config.hash_salt)
     written: list[WrittenTable] = []
     for name, out_table in out_dataset.tables.items():
-        spec = schema.tables.get(name)
-        suffix = (
-            Path(spec.file).suffix
-            if spec is not None and spec.file and spec.file.strip()
-            else DEFAULT_OUTPUT_SUFFIX
-        )
-        dest = config.output_dir / f"{name}{suffix}"
+        dest = outputs[name]
         assert out_table.data is not None
         out_df = out_table.data
         if name in pii_by_table:
@@ -187,6 +187,25 @@ def run_summary_payload(
             for t in result.tables
         },
     }
+
+
+def _output_path(schema: multi_schema.MultiSchemaToml, name: str, output_dir: Path) -> Path:
+    spec = schema.tables[name]
+    suffix = Path(spec.file).suffix if spec.file and spec.file.strip() else DEFAULT_OUTPUT_SUFFIX
+    return output_dir / f"{name}{suffix}"
+
+
+def _source_files(schema: multi_schema.MultiSchemaToml, base_dir: Path) -> list[Path]:
+    """Every local file the schema reads: each `file`, and each DuckDB `uri` file."""
+    paths: list[Path] = []
+    for spec in schema.tables.values():
+        if spec.file is not None:
+            paths.append(base_dir / spec.file)
+        elif spec.uri is not None and detect_scheme(spec.uri) == "duckdb":
+            path = duckdb_file(expand_env_vars(spec.uri))
+            if path is not None:
+                paths.append(path)
+    return paths
 
 
 def plan_root_rows(dataset: Dataset, rows: int, overrides: Mapping[str, int]) -> dict[str, int]:

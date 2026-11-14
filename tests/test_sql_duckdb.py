@@ -430,37 +430,59 @@ def test_sink_table_injection_does_not_run(duckdb_fixture: Path, tmp_path: Path)
 
 
 @pytest.mark.parametrize(
-    ("source_table", "sink_table"),
+    ("source", "sink_table"),
     [
-        ("users", "users"),
-        ("users", "USERS"),
-        ("users", '"users"'),
-        ("users", "main.users"),
-        ("main.users", "users"),
-        ("users", "source.main.users"),
+        (("--table", "users"), "users"),
+        (("--table", "users"), "Main.USERS"),
+        (("--table", "users"), "source.main.users"),
+        (("--table", "users"), "synth_users"),
+        (("--query", "SELECT * FROM users"), "users"),
+        (("--table", "users_view"), "users"),
     ],
 )
-def test_sink_matching_source_is_refused(
-    duckdb_fixture: Path, tmp_path: Path, source_table: str, sink_table: str
+def test_sink_in_the_source_duckdb_file_is_refused(
+    duckdb_fixture: Path, source: tuple[str, str], sink_table: str
 ) -> None:
-    con = duckdb.connect(str(duckdb_fixture), read_only=True)
-    before = con.execute("SELECT count(*) FROM users").fetchone()
+    con = duckdb.connect(str(duckdb_fixture))
+    con.execute("CREATE VIEW users_view AS SELECT * FROM users")
     con.close()
+    before = _duckdb_tables(duckdb_fixture)
     result = CliRunner().invoke(
         app,
         [
             "gen",
             f"duckdb:///{duckdb_fixture}",
-            "--table",
-            source_table,
+            *source,
             "-n",
-            "10",
+            "5",
             "-o",
             f"duckdb:///{duckdb_fixture}?table={sink_table}",
             "--no-quality",
         ],
     )
-    assert result.exit_code == 2
+    assert result.exit_code == 2, result.output
+    assert "is the source file" in " ".join(result.output.replace("│", "").split())
+    assert _duckdb_tables(duckdb_fixture) == before
     con = duckdb.connect(str(duckdb_fixture), read_only=True)
-    assert con.execute("SELECT count(*) FROM users").fetchone() == before
+    assert con.execute("SELECT count(*) FROM users").fetchone() == (200,)
     con.close()
+
+
+@pytest.mark.parametrize("table", ["missing_table", "users; DROP TABLE users"])
+def test_unknown_source_table_prints_one_clean_error_line(
+    duckdb_fixture: Path, tmp_path: Path, table: str
+) -> None:
+    result = CliRunner().invoke(
+        app,
+        [
+            *("gen", f"duckdb:///{duckdb_fixture}", "--table", table),
+            *("-n", "10", "-o", str(tmp_path / "out.csv"), "--no-quality"),
+        ],
+    )
+    assert result.exit_code == 1
+    assert result.exception is None or isinstance(result.exception, SystemExit)
+    output = result.stdout + result.stderr
+    error_line = output.strip().splitlines()[-1]
+    assert error_line.startswith("error: failed to read from duckdb://")
+    assert "does not exist" in error_line
+    assert "Traceback" not in output

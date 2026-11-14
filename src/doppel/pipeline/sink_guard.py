@@ -1,43 +1,47 @@
-"""Refuse an output that would overwrite the input."""
+"""Refuse an output that would overwrite the input.
+
+The guard compares files, not tables. A `--query` or a view can read any table in a
+DuckDB file, so no sink inside the source's DuckDB file is provably safe."""
 
 from __future__ import annotations
 
 import urllib.parse
+from collections.abc import Iterable
 from pathlib import Path
 
 from doppel.errors import InvalidInputError
-from doppel.locations import table_name_parts
-from doppel.sinks.spec import DuckDbSink, SinkSpec
-from doppel.sources.spec import DatabaseUri, SourceSpec
-
-# DuckDB resolves an unqualified table name in this schema.
-_DUCKDB_DEFAULT_SCHEMA = "main"
+from doppel.locations import FilePath
+from doppel.sinks.spec import SinkSpec
+from doppel.sources.spec import SourceSpec
 
 
 def reject_sink_matching_source(source: SourceSpec, sink: SinkSpec) -> None:
-    """Refuse a DuckDB sink that would overwrite the table it reads from."""
-    if not (isinstance(source, DatabaseUri) and isinstance(sink, DuckDbSink)):
-        return
-    if source.scheme != "duckdb" or source.table is None:
-        return
-    source_path = Path(urllib.parse.urlsplit(source.raw_uri).path)
-    if source_path.resolve() != sink.path.resolve():
-        return
-    catalog = sink.path.stem
-    if _duckdb_table_key(source.table, catalog) == _duckdb_table_key(sink.table, catalog):
-        raise InvalidInputError(
-            f"output table {sink.table!r} is the source table; "
-            "write to a different table or DuckDB file"
-        )
+    """Refuse a sink whose file is the source file: the same CSV or Parquet path, or the
+    same DuckDB file, whatever table either side names."""
+    source_path = source_file(source)
+    if source_path is not None:
+        reject_outputs_matching_sources([source_path], [sink.path])
 
 
-def _duckdb_table_key(name: str, catalog: str) -> tuple[str, ...]:
-    """`(schema, table)` with the default schema filled in and the file's own catalog dropped.
+def reject_outputs_matching_sources(sources: Iterable[Path], outputs: Iterable[Path]) -> None:
+    """Refuse any output path that resolves to one of the source paths."""
+    resolved = {path.resolve() for path in sources}
+    for output in outputs:
+        if output.resolve() in resolved:
+            raise InvalidInputError(
+                f"output {str(output)!r} is the source file; write to a different file"
+            )
 
-    DuckDB matches identifiers without regard to case, quoted or not."""
-    parts = [part.lower() for part in table_name_parts("duckdb", name)]
-    if len(parts) == 3 and parts[0] == catalog.lower():
-        parts = parts[1:]
-    if len(parts) == 1:
-        parts = [_DUCKDB_DEFAULT_SCHEMA, *parts]
-    return tuple(parts)
+
+def source_file(source: SourceSpec) -> Path | None:
+    """The local file a source reads, or None for a warehouse or in-memory DuckDB."""
+    if isinstance(source, FilePath):
+        return source.path
+    if source.scheme != "duckdb":
+        return None
+    return duckdb_file(source.raw_uri)
+
+
+def duckdb_file(uri: str) -> Path | None:
+    path = urllib.parse.urlsplit(uri).path
+    return Path(path) if path not in {"", "/"} else None

@@ -380,6 +380,32 @@ def test_connection_error_redacts_password(mock_df: pl.DataFrame) -> None:
         assert exc_info.value.__suppress_context__
 
 
+@pytest.mark.extras
+@pytest.mark.parametrize(
+    "uri",
+    ["postgres://user:hunter2@host/db", "snowflake://user:hunter2@account/db/s?warehouse=WH"],
+)
+def test_driver_error_prints_one_clean_error_line(uri: str, tmp_path: Path) -> None:
+    with (
+        patch(
+            "doppel.sources.sql.pl.read_database_uri",
+            side_effect=RuntimeError('relation "nope" does not exist'),
+        ),
+        patch("doppel.sources.sql._probe_row_count", return_value=100),
+    ):
+        result = CliRunner().invoke(
+            app,
+            ["gen", uri, "--table", "nope", "-n", "10", "-o", str(tmp_path / "out.csv")],
+        )
+    assert result.exit_code == 1
+    output = result.stdout + result.stderr
+    error_line = output.strip().splitlines()[-1]
+    assert error_line.startswith("error: failed to read from ")
+    assert "does not exist" in error_line
+    assert "hunter2" not in output
+    assert "Traceback" not in output
+
+
 # ---------- Missing [sql] extra (simulated) ----------
 
 

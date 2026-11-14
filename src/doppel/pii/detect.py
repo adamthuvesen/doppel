@@ -1,4 +1,4 @@
-"""PII detection over TEXT and string CATEGORICAL columns using Microsoft Presidio.
+"""PII detection over TEXT and string-valued CATEGORICAL columns using Microsoft Presidio.
 
 Heuristic: sample each candidate column, run Presidio's analyzer on each value, and tally
 detected entity types. If a dominant entity type covers more than `min_confidence` of
@@ -13,6 +13,7 @@ column and is as sensitive as its source.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from functools import lru_cache
 from typing import Any
@@ -36,8 +37,17 @@ SUPPORTED_ENTITIES: frozenset[str] = FAKEABLE_ENTITIES
 
 
 # A categorical column of countries or cities is an analysis dimension, not PII, and
-# Presidio tags it LOCATION. Regenerating it would destroy its distribution.
+# Presidio tags it LOCATION. Regenerating it would destroy its distribution. A categorical
+# of street addresses is PII all the same, so LOCATION stays on when a value looks like one.
 _CATEGORICAL_ENTITIES: frozenset[str] = SUPPORTED_ENTITIES - {"LOCATION"}
+
+# A street address: a house number and a street word ("12 Baker Street", "77 Kungsgatan").
+_STREET_TOKEN_RE = re.compile(
+    r"\b(?:street|st|road|rd|avenue|ave|lane|ln|drive|dr|boulevard|blvd|way|court|ct|place"
+    r"|pl|square|sq|terrace|rue|via|calle|avenida)\b"
+    r"|\w(?:gatan|gata|vägen|väg|straße|strasse|gade|vej|weg|laan)\b",
+    re.IGNORECASE,
+)
 
 
 # Cap per-cell text length so a column of multi-MB blobs doesn't hang spaCy.
@@ -82,7 +92,11 @@ def detect(
             continue
         top_entity = max(entity_score, key=lambda k: entity_score[k])
         confidence = min(1.0, entity_score[top_entity] / len(sample))
-        supported = SUPPORTED_ENTITIES if col.type is ColumnType.TEXT else _CATEGORICAL_ENTITIES
+        supported = (
+            SUPPORTED_ENTITIES
+            if col.type is ColumnType.TEXT or any(map(_looks_like_street_address, sample))
+            else _CATEGORICAL_ENTITIES
+        )
         if confidence >= min_confidence and top_entity in supported:
             out.append(PIIDetection(name=col.name, entity_type=top_entity, confidence=confidence))
     return out
@@ -91,7 +105,13 @@ def detect(
 def _is_candidate(column: Column, df: pl.DataFrame) -> bool:
     if column.type is ColumnType.TEXT:
         return True
-    return column.type is ColumnType.CATEGORICAL and df[column.name].dtype == pl.String
+    dtype = df[column.name].dtype
+    is_string = dtype == pl.String or isinstance(dtype, pl.Categorical | pl.Enum)
+    return column.type is ColumnType.CATEGORICAL and is_string
+
+
+def _looks_like_street_address(value: str) -> bool:
+    return any(ch.isdigit() for ch in value) and _STREET_TOKEN_RE.search(value) is not None
 
 
 SPACY_MODEL = "en_core_web_lg"

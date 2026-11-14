@@ -38,8 +38,8 @@ tests/  docs/  examples/  benchmarks/  scripts/
 | --- | --- |
 | Only `cli/` imports typer, and nothing else imports `cli/` | `pyproject.toml::Only the CLI imports typer`, `pyproject.toml::Nothing in core imports the CLI` |
 | Layers import in one direction (sources, sinks, synth, quality, report, pii do not reach up) | `pyproject.toml::Sources is a leaf`, `pyproject.toml::Synth does not reach up`, `pyproject.toml::Quality is pure metrics over the schema`, `pyproject.toml::Schema layers` |
-| No module starts a process, except `sources/spec.py` for `--password-cmd` | `pyproject.toml::tool.ruff.lint.flake8-tidy-imports.banned-api.subprocess.msg`, `pyproject.toml::os.system.msg` |
-| No module opens a network client | `pyproject.toml::socket.msg`, `pyproject.toml::requests.msg` |
+| No module starts a process, except `sources/spec.py` for `--password-cmd` | `pyproject.toml::tool.ruff.lint.flake8-tidy-imports.banned-api.subprocess.msg`, `tests/test_boundaries.py::test_only_the_password_command_owner_starts_a_process` (covers the owner files that ruff's per-file ignores exempt) |
+| No module opens a network client | `pyproject.toml::socket.msg`, `pyproject.toml::requests.msg`, `tests/test_boundaries.py::test_no_module_opens_a_network_client` |
 | No unsafe loading: no pickle, marshal, joblib, and `numpy.load` only in `artifact/load.py` | `pyproject.toml::pickle.msg`, `pyproject.toml::numpy.load.msg`, `tests/test_artifact.py::test_no_source_module_imports_a_code_executing_loader` |
 | No nondeterminism: all randomness comes from `Rng` | `pyproject.toml::tool.ruff.lint.flake8-tidy-imports.banned-api.random.msg`, `pyproject.toml::uuid.uuid4.msg`, `pyproject.toml::numpy.random.msg`, `src/doppel/synth/seed.py::Rng` |
 | Warehouse drivers stay in `sources/sql.py` and `sinks/sql.py` | `pyproject.toml::duckdb.msg`, `tests/test_boundaries.py::test_connectorx_is_named_only_in_its_owner_files` |

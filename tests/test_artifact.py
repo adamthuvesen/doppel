@@ -8,7 +8,9 @@ import importlib
 import io
 import json
 import pickle
+import re
 import tarfile
+import zipfile
 from collections.abc import Callable
 from datetime import date, datetime, timedelta
 from pathlib import Path
@@ -423,6 +425,144 @@ def test_load_refuses_a_tampered_tree(mixed_df: pl.DataFrame, tmp_path: Path) ->
     _replace_member(artifact, "arrays.npz", planted.getvalue())
 
     with pytest.raises(ArtifactError, match="inconsistent"):
+        load(artifact)
+
+
+def _saved_arrays(artifact: Path) -> dict[str, np.ndarray]:
+    with np.load(io.BytesIO(_members(artifact)["arrays.npz"]), allow_pickle=False) as npz:
+        return {name: npz[name] for name in npz.files}
+
+
+def _replace_arrays(artifact: Path, arrays: dict[str, np.ndarray]) -> None:
+    planted = io.BytesIO()
+    np.savez(planted, allow_pickle=False, **arrays)
+    _replace_member(artifact, "arrays.npz", planted.getvalue())
+
+
+def test_load_refuses_a_tree_whose_nodes_share_a_child(
+    mixed_df: pl.DataFrame, tmp_path: Path
+) -> None:
+    """The `/tmp/dprev/chain.py` shape: a chain whose every right child is one shared leaf.
+
+    It is small on disk but every row walks the whole chain, so sampling runs for hours."""
+    synth, n = _fit_synth(mixed_df)
+    artifact = tmp_path / "model.doppel"
+    save(synth, artifact, training_row_count=n)
+    arrays = _saved_arrays(artifact)
+    key = next(k for k in arrays if k.endswith(".value_tree.left_child")).split(".")[0]
+    chain = 2_000
+    arrays[f"{key}.value_tree.left_child"] = np.concatenate(
+        (np.arange(1, chain + 1), [-1, -1])
+    ).astype(np.int64)
+    arrays[f"{key}.value_tree.right_child"] = np.concatenate(
+        (np.full(chain, chain + 1), [-1, -1])
+    ).astype(np.int64)
+    arrays[f"{key}.value_tree.feature"] = np.zeros(chain + 2, dtype=np.int64)
+    arrays[f"{key}.value_tree.threshold"] = np.full(chain + 2, np.inf)
+    arrays[f"{key}.value_tree.missing_go_to_left"] = np.zeros(chain + 2, dtype=np.bool_)
+    arrays[f"{key}.leaf_ids"] = np.array([chain, chain + 1], dtype=np.int64)
+    pool_size = int(arrays[f"{key}.leaf_offsets"][-1])
+    arrays[f"{key}.leaf_offsets"] = np.array([0, 1, pool_size], dtype=np.int64)
+    _replace_arrays(artifact, arrays)
+
+    with pytest.raises(ArtifactError, match="exactly one parent"):
+        load(artifact)
+
+
+def test_load_refuses_a_tree_deeper_than_its_training_rows_allow(
+    mixed_df: pl.DataFrame, tmp_path: Path
+) -> None:
+    synth, _ = _fit_synth(mixed_df)
+    artifact = tmp_path / "model.doppel"
+    save(synth, artifact, training_row_count=4)
+
+    with pytest.raises(ArtifactError, match="deeper than 0 levels"):
+        load(artifact)
+
+
+def _temporal_artifact(tmp_path: Path) -> Path:
+    n = 120
+    df = pl.DataFrame(
+        {
+            "amount": [float(i % 17) for i in range(n)],
+            "day": [date(2024, 1, 1) + timedelta(days=i % 40) for i in range(n)],
+            "ts": [datetime(2024, 1, 1) + timedelta(hours=7 * i) for i in range(n)],
+        }
+    )
+    synth, rows = _fit_synth(df)
+    artifact = tmp_path / "temporal.doppel"
+    save(synth, artifact, training_row_count=rows)
+    return artifact
+
+
+def _numeric_pool_as_strings(model: dict[str, Any], arrays: dict[str, np.ndarray]) -> None:
+    """`/tmp/dprev/hostile_build.py` case A: a NUMERIC column whose pool is text."""
+    index = next(i for i, c in enumerate(model["columns"]) if c["name"] == "amount")
+    size = len(arrays[f"c{index}.pool"])
+    arrays[f"c{index}.pool"] = np.frombuffer(b"x" * size, dtype=np.uint8).copy()
+    arrays[f"c{index}.pool.offsets"] = np.arange(size + 1, dtype=np.int64)
+    model["column_synths"][index]["pool"] = "str"
+
+
+def _date_with_hour_feature(model: dict[str, Any], _arrays: dict[str, np.ndarray]) -> None:
+    model["calendar_features"]["day"] = ["hour", "dow"]
+
+
+@pytest.mark.parametrize(
+    ("mutate", "message"),
+    [
+        (_numeric_pool_as_strings, "numeric column 'amount' stores str pool"),
+        # Case B: a datetime column stored as String.
+        (
+            lambda m, _a: m["datetime_dtypes"].__setitem__("day", {"name": "String"}),
+            "datetime column 'day' is stored with dtype String",
+        ),
+        # Case J: a time zone no zone database knows.
+        (
+            lambda m, _a: m["datetime_dtypes"].__setitem__(
+                "ts", {"name": "Datetime", "time_unit": "us", "time_zone": "Not/AZone"}
+            ),
+            "'Not/AZone' is not a known time zone",
+        ),
+        (_date_with_hour_feature, "Date column 'day' is stored with a time-of-day feature"),
+    ],
+)
+def test_load_refuses_values_sampling_would_trust(
+    tmp_path: Path,
+    mutate: Callable[[dict[str, Any], dict[str, np.ndarray]], None],
+    message: str,
+) -> None:
+    artifact = _temporal_artifact(tmp_path)
+    model = json.loads(_members(artifact)["model.json"])
+    arrays = _saved_arrays(artifact)
+    mutate(model, arrays)
+    _replace_member(artifact, "model.json", json.dumps(model).encode())
+    _replace_arrays(artifact, arrays)
+
+    with pytest.raises(ArtifactError, match=re.escape(message)):
+        load(artifact)
+
+
+@pytest.mark.parametrize("shape", [(2**31,), (2**44,)])
+def test_load_refuses_an_array_header_that_declares_more_than_it_holds(
+    mixed_df: pl.DataFrame, tmp_path: Path, shape: tuple[int, ...]
+) -> None:
+    """`/tmp/dprev/npzbomb.py`: numpy would allocate the declared shape before reading."""
+    from numpy.lib import format as npy_format
+
+    synth, n = _fit_synth(mixed_df)
+    artifact = tmp_path / "model.doppel"
+    save(synth, artifact, training_row_count=n)
+    header = io.BytesIO()
+    npy_format.write_array_header_1_0(
+        header, {"descr": "<i8", "fortran_order": False, "shape": shape}
+    )
+    bomb = io.BytesIO()
+    with zipfile.ZipFile(bomb, "w") as archive:
+        archive.writestr("c0.pool.npy", header.getvalue() + b"\0" * 64)
+    _replace_member(artifact, "arrays.npz", bomb.getvalue())
+
+    with pytest.raises(ArtifactError, match="declares"):
         load(artifact)
 
 

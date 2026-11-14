@@ -6,6 +6,7 @@ from pathlib import Path
 
 import typer
 from rich.console import Console
+from rich.markup import escape
 
 from doppel.artifact import load as load_artifact
 from doppel.artifact import save as save_artifact
@@ -25,6 +26,7 @@ from doppel.sources.spec import DEFAULT_CONNECTION_TIMEOUT
 from doppel.text_policy import TextPolicy
 
 console = Console()
+err_console = Console(stderr=True)
 
 
 def fit(
@@ -184,6 +186,7 @@ def sample(
         ),
         synth,
         schema_toml,
+        notify_real_columns=_warn,
     )
     if result.constraint_count:
         console.print(f"[dim]applied[/] {result.constraint_count} constraints from embedded schema")
@@ -195,6 +198,10 @@ def sample(
     console.print(f"[green]ok[/] wrote {out_df.height} rows x {out_df.width} cols -> {sink_label}")
     if result.quality is not None:
         print_quality_summary(console, result.quality)
+
+
+def _warn(message: str) -> None:
+    err_console.print(f"[yellow]warn[/]: {escape(message)}")
 
 
 def _dim(message: str) -> None:

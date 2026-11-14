@@ -12,6 +12,7 @@ uses it to show metadata without rebuilding the model.
 from __future__ import annotations
 
 import io
+import math
 import tarfile
 import tomllib
 import zipfile
@@ -19,6 +20,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
+from numpy.lib import format as npy_format
 from numpy.lib.npyio import NpzFile
 from pydantic import ValidationError
 
@@ -85,7 +87,9 @@ def load(path: Path) -> tuple[CartSynthesizer, Manifest, SchemaToml | None]:
         raise ArtifactError(f"{path}: {MODEL_MEMBER} is malformed: {exc}") from exc
     arrays = _read_arrays(payloads[ARRAYS_MEMBER])
     try:
-        synth = CartSynthesizer.from_state(state, arrays)
+        synth = CartSynthesizer.from_state(
+            state, arrays, training_row_count=manifest.training_row_count
+        )
     except ValueError as exc:
         raise ArtifactError(f"{path}: the stored synthesizer is inconsistent: {exc}") from exc
     return synth, manifest, _parse_schema(payloads.get(SCHEMA_TOML_MEMBER))
@@ -189,8 +193,31 @@ def _read_arrays(payload: bytes) -> dict[str, np.ndarray]:
         if sum(entry.file_size for entry in entries) > _MEMBER_LIMITS[ARRAYS_MEMBER]:
             raise ArtifactError(f"{ARRAYS_MEMBER} expands past its size limit")
         try:
+            for entry in entries:
+                _check_declared_size(npz.zip, entry)
             return {name: npz[name] for name in npz.files}
-        except _NPZ_ERRORS as exc:
+        except (*_NPZ_ERRORS, MemoryError) as exc:
+            detail = str(exc) or type(exc).__name__
             raise ArtifactError(
-                f"{ARRAYS_MEMBER} holds an array doppel cannot read: {exc}"
+                f"{ARRAYS_MEMBER} holds an array doppel cannot read: {detail}"
             ) from exc
+
+
+def _check_declared_size(archive: zipfile.ZipFile, entry: zipfile.ZipInfo) -> None:
+    """Refuse an array whose header declares more data than its member holds.
+
+    numpy allocates the declared shape before it reads, so a header that lies about the
+    shape asks for any amount of memory from a few bytes."""
+    with archive.open(entry) as handle:
+        version = npy_format.read_magic(handle)
+        if version == (1, 0):
+            shape, _, dtype = npy_format.read_array_header_1_0(handle)
+        else:
+            shape, _, dtype = npy_format.read_array_header_2_0(handle)
+        header_size = handle.tell()
+    declared = math.prod(shape) * dtype.itemsize
+    if declared != entry.file_size - header_size:
+        raise ValueError(
+            f"array {entry.filename!r} declares {declared} bytes but holds "
+            f"{entry.file_size - header_size}"
+        )

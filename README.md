@@ -170,7 +170,9 @@ doppel artifact info sales.doppel
 ```
 
 `doppel sample --real <file>` prints the quality summary against the source, because
-an artifact does not keep its source. `doppel fit` refuses sources with detected PII. Use `doppel gen` for one-shot PII
+an artifact does not keep its source. It reads `--real` before it writes any output,
+refuses a file that shares no column with the artifact, and warns with the names of
+artifact columns that `--real` lacks. `doppel fit` refuses sources with detected PII. Use `doppel gen` for one-shot PII
 regeneration. A `.doppel` file holds JSON and plain numpy arrays, not a pickle, so
 loading it cannot run code. It does hold real values from every modelled column, so
 keep it as private as the source data.
@@ -289,8 +291,10 @@ Use `--sample-rows N` and `--max-dcr-rows N` for large comparisons. `--sample-se
 
 doppel has no differential privacy guarantee.
 
-With the `[pii]` extra installed, detected PII in text columns and string categorical
-columns (except location-only ones) is regenerated, in single-table and multi-table `gen`.
+With the `[pii]` extra installed, detected PII in text columns and categorical
+columns of strings (polars String, Categorical, or Enum) is regenerated. A location-only
+categorical, such as a country or city column, is kept unless a value looks like a street
+address. This holds in single-table and multi-table `gen`.
 The spaCy model `en_core_web_lg` is locked in `uv.lock`; doppel never downloads it. Free-text columns
 that are not detected as PII may copy real strings into the output. For text-heavy
 datasets, choose an explicit text policy and check the result with `doppel diff`:

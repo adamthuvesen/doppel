@@ -13,6 +13,7 @@ import polars as pl
 
 from doppel.constraints.engine import synthesize_with_constraints
 from doppel.dataset import Dataset, Table
+from doppel.errors import InvalidInputError
 from doppel.pipeline.fit_rows import AUTO_FIT_CAP, AUTO_FIT_MULTIPLIER
 from doppel.pipeline.pii import detect_pii_if_available
 from doppel.pipeline.prepare import build_training_table, read_source_dataframe
@@ -114,10 +115,30 @@ def sample_fitted(
     config: SampleConfig,
     synth: CartSynthesizer,
     schema_toml: SchemaToml | None,
+    *,
+    notify_real_columns: Callable[[str], None] | None = None,
 ) -> SampleResult:
     """Sample `config.rows` rows, apply the embedded constraints and the text policy, and write.
 
-    An artifact does not keep its source, so the quality summary needs `config.real_spec`."""
+    An artifact does not keep its source, so the quality summary needs `config.real_spec`.
+    It is read and checked before anything is written: a real table that shares no column
+    with the artifact is refused, and the summary covers only the shared columns."""
+    real_df: pl.DataFrame | None = None
+    quality_columns = synth.original_columns
+    if config.real_spec is not None:
+        real_df = source_read(config.real_spec, timeout=config.connection_timeout)
+        quality_columns = [c for c in synth.original_columns if c.name in real_df.columns]
+        missing = [c.name for c in synth.original_columns if c.name not in real_df.columns]
+        if not quality_columns:
+            raise InvalidInputError(
+                "--real shares no columns with the artifact; "
+                f"the artifact has {[c.name for c in synth.original_columns]}"
+            )
+        if missing and notify_real_columns is not None:
+            notify_real_columns(
+                f"--real lacks artifact columns {missing}; "
+                "the quality summary compares only the shared columns"
+            )
     constraints = schema_toml.constraints if schema_toml is not None else []
     if constraints:
         out_ds, _ = synthesize_with_constraints(
@@ -135,12 +156,13 @@ def sample_fitted(
         salt=config.hash_salt,
     )
     sink_write(out_df, config.sink_spec)
-    quality = None
-    if config.real_spec is not None:
-        real_df = source_read(config.real_spec, timeout=config.connection_timeout)
-        quality = compute_quality_summary(
-            real_df, out_df, synth.original_columns, sample_seed=sample_seed(config.seed)
+    quality = (
+        compute_quality_summary(
+            real_df, out_df, quality_columns, sample_seed=sample_seed(config.seed)
         )
+        if real_df is not None
+        else None
+    )
     return SampleResult(
         out_df=out_df,
         constraint_count=len(constraints),

@@ -47,11 +47,15 @@ class DecisionTree:
         threshold: np.ndarray,
         missing_go_to_left: np.ndarray,
         n_features: int,
+        max_depth: int | None = None,
     ) -> DecisionTree:
         """Build a tree, and reject arrays that do not describe a finite binary tree.
 
         A child index is always larger than its parent's index (sklearn adds a parent
-        before its children), so every walk ends at a leaf.
+        before its children), so every walk ends at a leaf. Every node but the root has
+        exactly one parent, so nodes are not shared and the tree is no larger than its
+        arrays. With `max_depth`, a deeper tree is refused, because each sampled row
+        walks one node per level.
         """
         expected = {
             "left_child": (left_child, np.int64),
@@ -80,6 +84,11 @@ class DecisionTree:
                 raise ValueError("tree child index is out of range")
         if np.any((feature[internal] < 0) | (feature[internal] >= n_features)):
             raise ValueError("tree feature index is out of range")
+        children = np.concatenate((left_child[internal], right_child[internal]))
+        if not np.all(np.bincount(children, minlength=n_nodes)[1:] == 1):
+            raise ValueError("tree node does not have exactly one parent")
+        if max_depth is not None and _depth(left_child, right_child) > max_depth:
+            raise ValueError(f"tree is deeper than {max_depth} levels")
         return cls(
             left_child=left_child,
             right_child=right_child,
@@ -105,3 +114,14 @@ class DecisionTree:
                 np.isnan(value), self.missing_go_to_left[at], value <= self.threshold[at]
             )
             node[rows] = np.where(go_left, self.left_child[at], self.right_child[at])
+
+
+def _depth(left_child: np.ndarray, right_child: np.ndarray) -> int:
+    """The number of edges on the longest root-to-leaf path. Each node is visited once."""
+    level = np.zeros(1, dtype=np.int64)
+    depth = -1
+    while level.size:
+        depth += 1
+        level = level[left_child[level] != _LEAF]
+        level = np.concatenate((left_child[level], right_child[level]))
+    return depth

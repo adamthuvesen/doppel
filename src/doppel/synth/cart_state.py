@@ -9,6 +9,7 @@ Nothing here can hold an object array, so a stored synthesizer has no executable
 from __future__ import annotations
 
 import itertools
+import zoneinfo
 from typing import Literal
 
 import numpy as np
@@ -146,6 +147,8 @@ def encode_dtype(dtype: pl.DataType) -> StoredDtype:
 def decode_dtype(stored: StoredDtype) -> pl.DataType:
     match stored.name:
         case "Datetime" if stored.time_unit is not None:
+            if stored.time_zone is not None:
+                _require_time_zone(stored.time_zone)
             return pl.Datetime(stored.time_unit, stored.time_zone)
         case "Duration" if stored.time_unit is not None:
             return pl.Duration(stored.time_unit)
@@ -167,6 +170,13 @@ def decode_dtype(stored: StoredDtype) -> pl.DataType:
             return _PLAIN_DTYPES[name]
         case _:
             raise ValueError(f"unknown or incomplete stored dtype {stored!r}")
+
+
+def _require_time_zone(name: str) -> None:
+    try:
+        zoneinfo.ZoneInfo(name)
+    except (zoneinfo.ZoneInfoNotFoundError, ValueError) as exc:
+        raise ValueError(f"stored time zone {name!r} is not a known time zone") from exc
 
 
 def encode_column(col: Column) -> StoredColumn:
@@ -277,7 +287,9 @@ def put_tree(arrays: dict[str, np.ndarray], key: str, tree: DecisionTree) -> Non
     arrays[f"{key}.missing_go_to_left"] = tree.missing_go_to_left
 
 
-def take_tree(arrays: dict[str, np.ndarray], key: str, n_features: int) -> DecisionTree:
+def take_tree(
+    arrays: dict[str, np.ndarray], key: str, n_features: int, max_depth: int
+) -> DecisionTree:
     return DecisionTree.from_arrays(
         left_child=_take(arrays, f"{key}.left_child"),
         right_child=_take(arrays, f"{key}.right_child"),
@@ -285,6 +297,7 @@ def take_tree(arrays: dict[str, np.ndarray], key: str, n_features: int) -> Decis
         threshold=_take(arrays, f"{key}.threshold"),
         missing_go_to_left=_take(arrays, f"{key}.missing_go_to_left"),
         n_features=n_features,
+        max_depth=max_depth,
     )
 
 

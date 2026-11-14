@@ -131,6 +131,53 @@ def test_sample_reports_the_rate_against_a_real_source(tmp_path: Path) -> None:
     assert "exact_rows=" in result.output
 
 
+def _fit_small(tmp_path: Path) -> Path:
+    source = tmp_path / "small.csv"
+    _small_table().write_csv(source)
+    artifact = tmp_path / "m.doppel"
+    fitted = runner.invoke(app, ["fit", str(source), "-o", str(artifact), "--seed", "1"])
+    assert fitted.exit_code == 0, fitted.output
+    return artifact
+
+
+def test_sample_refuses_a_real_source_with_no_shared_columns(tmp_path: Path) -> None:
+    artifact = _fit_small(tmp_path)
+    unrelated = tmp_path / "unrelated.csv"
+    pl.DataFrame({"x": [1, 2, 3], "y": ["a", "b", "c"]}).write_csv(unrelated)
+    out = tmp_path / "out.csv"
+
+    result = runner.invoke(
+        app, ["sample", str(artifact), "-o", str(out), "-n", "20", "--real", str(unrelated)]
+    )
+
+    assert result.exit_code == 2, result.output
+    assert "shares no columns" in " ".join(result.output.replace("│", "").split())
+    assert not out.exists()
+
+
+def test_sample_warns_about_artifact_columns_missing_from_real(tmp_path: Path) -> None:
+    artifact = _fit_small(tmp_path)
+    partial = tmp_path / "partial.csv"
+    _small_table().drop("seats", "active").write_csv(partial)
+
+    result = runner.invoke(
+        app,
+        [
+            "sample",
+            str(artifact),
+            "-o",
+            str(tmp_path / "o.csv"),
+            "-n",
+            "20",
+            "--real",
+            str(partial),
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "lacks artifact columns ['seats', 'active']" in result.stderr
+
+
 def test_multi_table_gen_reports_the_rate_per_table(tmp_path: Path) -> None:
     users = pl.DataFrame({"user_id": list(range(1, 31)), "tier": ["free", "gold", "free"] * 10})
     orders = pl.DataFrame(

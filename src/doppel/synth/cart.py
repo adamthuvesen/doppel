@@ -77,6 +77,8 @@ from doppel.synth.seed import Rng
 from doppel.synth.tree import DecisionTree
 
 _MIN_SAMPLES_LEAF = 5
+# Sampling does arithmetic on the values of a NUMERIC or DATETIME column.
+_NUMERIC_VALUE_KINDS = ("int", "uint", "float")
 # Reserved prefix for calendar features inside the CART feature matrix. Double-underscore
 # mirrors `__doppel_null__` and is collision-proof against user column names — the fit-time
 # guard raises ValueError if any source column starts with this prefix.
@@ -617,12 +619,21 @@ class CartSynthesizer:
         return state, arrays
 
     @classmethod
-    def from_state(cls, state: StoredCart, arrays: dict[str, np.ndarray]) -> CartSynthesizer:
+    def from_state(
+        cls, state: StoredCart, arrays: dict[str, np.ndarray], *, training_row_count: int
+    ) -> CartSynthesizer:
         """Rebuild a fitted synthesizer from `to_state` output. Consumes `arrays`.
 
         Raises ValueError when the state is inconsistent, so a tampered artifact fails at
         load and not halfway through sampling.
+
+        Each split leaves at least `_MIN_SAMPLES_LEAF` training rows on each side, so a tree
+        fit on `training_row_count` rows is at most `training_row_count // _MIN_SAMPLES_LEAF`
+        levels deep. A deeper stored tree did not come from `fit`. The count comes from the
+        same artifact, so the bound stops a tree deeper than its stated training data, not a
+        forged count.
         """
+        max_depth = training_row_count // _MIN_SAMPLES_LEAF
         synth = cls()
         columns = [decode_column(c) for c in state.columns]
         if len({c.name for c in columns}) != len(columns):
@@ -646,10 +657,18 @@ class CartSynthesizer:
         datetime_names = {c.name for c in modeled if c.type is ColumnType.DATETIME}
         if set(synth._datetime_dtypes) != datetime_names:
             raise ValueError("stored datetime dtypes do not match the datetime columns")
+        for name, dtype in synth._datetime_dtypes.items():
+            if not (dtype == pl.Date or isinstance(dtype, pl.Datetime)):
+                raise ValueError(f"datetime column {name!r} is stored with dtype {dtype}")
+            features = set(synth._calendar_features.get(name, ()))
+            if dtype == pl.Date and features & {CalendarFeature.HOUR, CalendarFeature.MINUTE}:
+                raise ValueError(f"Date column {name!r} is stored with a time-of-day feature")
 
         n_features = 0
         for i, (col, stored) in enumerate(zip(modeled, state.column_synths, strict=True)):
-            synth._column_synths.append(_restore_column(f"c{i}", col, stored, arrays, n_features))
+            synth._column_synths.append(
+                _restore_column(f"c{i}", col, stored, arrays, n_features, max_depth)
+            )
             n_features += 1
             resolved = synth._calendar_features.get(col.name, ())
             if col.type is ColumnType.DATETIME and resolved:
@@ -713,6 +732,7 @@ def _restore_column(
     stored: StoredColumnSynth,
     arrays: dict[str, np.ndarray],
     n_features: int,
+    max_depth: int,
 ) -> _ColumnSynth:
     if (n_features == 0 or stored.unconditional_resample) and (
         stored.has_null_model or stored.has_value_model
@@ -720,6 +740,15 @@ def _restore_column(
         raise ValueError(f"column {col.name!r} is stored with a tree it cannot use")
     if n_features == 0 and not stored.unconditional_resample:
         raise ValueError(f"column {col.name!r} has no predictors but is stored as conditional")
+    if col.type in (ColumnType.NUMERIC, ColumnType.DATETIME):
+        stored_kinds = {
+            "encoder": stored.encoder_categories,
+            "pool": stored.pool,
+            "constant": stored.constant,
+        }
+        for part, kind in stored_kinds.items():
+            if kind not in (None, *_NUMERIC_VALUE_KINDS):
+                raise ValueError(f"{col.type.value} column {col.name!r} stores {kind} {part}")
     categories = take_values(arrays, f"{key}.encoder", stored.encoder_categories)
     pool = take_values(arrays, f"{key}.pool", stored.pool)
     constant = take_values(arrays, f"{key}.constant", stored.constant)
@@ -734,7 +763,7 @@ def _restore_column(
 
     null_model: _NullModel | None = None
     if stored.has_null_model:
-        tree = take_tree(arrays, f"{key}.null_tree", n_features)
+        tree = take_tree(arrays, f"{key}.null_tree", n_features, max_depth)
         rates = take_array(arrays, f"{key}.null_rate_by_node", np.float64)
         if rates.shape != tree.left_child.shape:
             raise ValueError(f"column {col.name!r} null rates do not match its tree")
@@ -743,7 +772,7 @@ def _restore_column(
     value_model: DecisionTree | None = None
     leaf_values: dict[int, list[object]] = {}
     if stored.has_value_model:
-        value_model = take_tree(arrays, f"{key}.value_tree", n_features)
+        value_model = take_tree(arrays, f"{key}.value_tree", n_features, max_depth)
         leaf_ids = take_array(arrays, f"{key}.leaf_ids", np.int64)
         offsets = take_array(arrays, f"{key}.leaf_offsets", np.int64)
         leaves = np.flatnonzero(value_model.left_child == -1)

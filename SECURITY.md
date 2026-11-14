@@ -36,9 +36,17 @@ sklearn object.
   before any member is parsed. `doppel sample` exits 2 with a message that says to refit.
 - `allow_pickle=False` makes numpy refuse an object array, so an `.npz` cannot carry
   a pickle either.
-- Every array is checked for dtype and shape, and every tree is checked to be a
-  finite binary tree whose feature indexes fit the model. A tampered artifact fails
-  at load, not halfway through sampling.
+- Each array header is read before the array, and an array whose declared shape
+  needs more bytes than its member holds is refused, so a small `.npz` cannot ask
+  numpy for any amount of memory.
+- Every array is checked for dtype and shape. Every tree is checked to be a finite
+  binary tree whose feature indexes fit the model, where each node but the root has
+  exactly one parent, and no deeper than its stated training rows allow (training
+  rows divided by the minimum leaf size). The values sampling does arithmetic on are
+  checked too: NUMERIC and DATETIME columns hold only numbers, a DATETIME column is a
+  Date or a Datetime, a time zone is one `zoneinfo` knows, and a Date column has no
+  time-of-day feature. A tampered artifact fails at load, not halfway through
+  sampling. The depth bound trusts the artifact's own training row count.
 - `pickle`, `marshal`, and `joblib` are banned in `src/` by ruff (`TID251`), and
   `tests/test_artifact.py` checks that no source module imports them. Only
   `artifact/load.py` may call `numpy.load`.
@@ -113,8 +121,10 @@ doppel's privacy posture is **heuristic**, not formal:
 - When the `[pii]` extra is installed and Presidio detects PII in a `gen` source
   (single-table or multi-table), those columns are stripped before fit and
   regenerated via Faker at sample time. Presidio scans free-text columns and
-  string categorical columns. A categorical tagged only as a location (a country
-  or city column) is kept, because it is an analysis dimension. Primary-key and
+  categorical columns of strings (polars String, Categorical, or Enum). A
+  categorical tagged only as a location (a country or city column) is kept,
+  because it is an analysis dimension, unless a value looks like a street address
+  (a digit and a street word). Primary-key and
   foreign-key columns are never stripped. The spaCy model `en_core_web_lg` is
   locked in `uv.lock` and never downloaded at run time. If it is missing, doppel
   stops with the install command, and `doppel doctor` reports it.

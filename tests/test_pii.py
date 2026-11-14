@@ -228,3 +228,37 @@ def test_detect_keeps_location_categoricals() -> None:
     )
     detections = detect(df, infer_table("t", df).columns)
     assert [(d.name, d.entity_type) for d in detections] == [("account_manager", "PERSON")]
+
+
+@pytest.mark.parametrize("dtype", [pl.Categorical(), pl.Enum(_MANAGERS)])
+def test_gen_regenerates_pii_in_categorical_and_enum_columns(
+    tmp_path: Path, dtype: pl.DataType
+) -> None:
+    source = tmp_path / "users.parquet"
+    pl.DataFrame(
+        {
+            "id": list(range(100)),
+            "account_manager": pl.Series(_MANAGERS * 25).cast(dtype),
+            "age": [20 + (i % 40) for i in range(100)],
+        }
+    ).write_parquet(source)
+    schema = tmp_path / "schema.toml"
+    schema.write_text(
+        '[table]\nname = "users"\n\n[columns.account_manager]\ntype = "categorical"\n'
+    )
+    out = tmp_path / "out.parquet"
+
+    result = runner.invoke(
+        app,
+        ["gen", str(source), "-n", "40", "-o", str(out), "--seed", "1", "--schema", str(schema)],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert set(_MANAGERS).isdisjoint(pl.read_parquet(out)["account_manager"].cast(pl.String))
+
+
+def test_detect_flags_street_address_categoricals() -> None:
+    addresses = ["12 Baker Street, London", "221 Elm Road, Springfield", "77 Kungsgatan, Stockholm"]
+    df = pl.DataFrame({"home": addresses * 30, "city": ["London", "Paris", "Berlin"] * 30})
+    detections = detect(df, infer_table("t", df).columns)
+    assert [(d.name, d.entity_type) for d in detections] == [("home", "LOCATION")]

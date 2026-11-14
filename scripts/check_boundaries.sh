@@ -94,6 +94,9 @@ import importlib
 
 importlib.import_module("connectorx")
 PY
+# Owner files lift every ruff ban at once, so plant process and network uses in two of them.
+printf '\nimport subprocess  # noqa: E402, F401\n' >>"$pkg/pii/fake.py"
+printf '\nimport socket  # noqa: E402, F401\n' >>"$pkg/pii/detect.py"
 
 fail() {
   echo "FAIL  $1" >&2
@@ -132,8 +135,15 @@ for name in pickle numpy.load; do
   fi
 done
 
-if (cd "$scratch" && PYTHONPATH="$scratch/src" "$bin/pytest" -q -p no:cacheprovider tests/test_boundaries.py >/dev/null 2>&1); then
-  fail "the connectorx check did not catch a planted importlib.import_module"
-fi
+ast_checks=(
+  "test_connectorx_is_named_only_in_its_owner_files:a planted importlib.import_module(\"connectorx\")"
+  "test_only_the_password_command_owner_starts_a_process:a planted import subprocess in pii/fake.py"
+  "test_no_module_opens_a_network_client:a planted import socket in pii/detect.py"
+)
+for check in "${ast_checks[@]}"; do
+  if (cd "$scratch" && PYTHONPATH="$scratch/src" "$bin/pytest" -q -p no:cacheprovider "tests/test_boundaries.py::${check%%:*}" >/dev/null 2>&1); then
+    fail "${check%%:*} did not catch ${check#*:}"
+  fi
+done
 
 echo "ok    ${contracts} contracts and ${#banned[@]} bans fire on planted violations"

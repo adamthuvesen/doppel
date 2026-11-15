@@ -350,3 +350,46 @@ parent_column = "user_id"
     )
     assert result.exit_code != 0
     assert "ghosts" in result.stdout or "ghosts" in (result.stderr or "")
+
+
+def test_file_child_fit_rows_keeps_children_per_parent(tmp_path: Path) -> None:
+    pl.DataFrame({"user_id": list(range(1, 31)), "age": [20 + i for i in range(30)]}).write_csv(
+        tmp_path / "users.csv"
+    )
+    pl.DataFrame(
+        {
+            "order_id": list(range(1, 181)),
+            "user_id": [1 + (i % 30) for i in range(180)],
+            "amount": [float(i % 13) for i in range(180)],
+        }
+    ).write_csv(tmp_path / "orders.csv")
+    schema = tmp_path / "schema.toml"
+    schema.write_text(
+        """
+[tables.users]
+file = "users.csv"
+primary_key = "user_id"
+
+[tables.orders]
+file = "orders.csv"
+primary_key = "order_id"
+fit_rows = 18
+
+[[foreign_keys]]
+child_table = "orders"
+child_column = "user_id"
+parent_table = "users"
+parent_column = "user_id"
+"""
+    )
+    out_dir = tmp_path / "out"
+
+    result = runner.invoke(
+        app, ["gen", "--schema", str(schema), "--rows", "10", "-o", str(out_dir), "--seed", "2"]
+    )
+
+    assert result.exit_code == 0, result.output
+    # Every source user has 6 orders; the 18-row sample alone would learn 0.6.
+    orders = pl.read_csv(out_dir / "orders.csv")
+    assert orders.height == 60
+    assert orders.group_by("user_id").len()["len"].to_list() == [6] * 10

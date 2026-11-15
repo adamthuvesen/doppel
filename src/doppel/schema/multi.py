@@ -175,8 +175,12 @@ def to_dataset(
     tables: dict[str, Table] = {}
     # Count reads per redacted URI for tests that assert each declared table is read once.
     sql_read_count: dict[str, int] = {}
+    fk_value_counts: dict[tuple[str, str], pl.DataFrame] = {}
     for name, spec in schema.tables.items():
-        df = _read_table_data(
+        fk_columns = tuple(
+            dict.fromkeys(fk.child_column for fk in schema.foreign_keys if fk.child_table == name)
+        )
+        df, counts = _read_table_data(
             name=name,
             spec=spec,
             base_dir=base_dir,
@@ -185,7 +189,9 @@ def to_dataset(
             sql_read_count=sql_read_count,
             null_values=null_values,
             seed=seed,
+            fk_columns=fk_columns,
         )
+        fk_value_counts.update({(name, column): frame for column, frame in counts.items()})
         inferred = infer_table(name, df)
         inferred_names = {c.name for c in inferred.columns}
         unknown = sorted(set(spec.columns) - inferred_names)
@@ -214,7 +220,7 @@ def to_dataset(
         for fk in schema.foreign_keys
     ]
     _validate_fks(tables, edges)
-    return Dataset(tables=tables, edges=edges)
+    return Dataset(tables=tables, edges=edges, fk_value_counts=fk_value_counts)
 
 
 def _read_table_data(
@@ -227,17 +233,26 @@ def _read_table_data(
     sql_read_count: dict[str, int],
     null_values: tuple[str, ...],
     seed: int | None,
-) -> pl.DataFrame:
+    fk_columns: tuple[str, ...],
+) -> tuple[pl.DataFrame, dict[str, pl.DataFrame]]:
     """Read one table's data — file path or SQL URI. Errors are scoped to the
-    table name so multi-table schemas report which entry failed."""
+    table name so multi-table schemas report which entry failed.
+
+    When `fit_rows` samples the rows, each FK column's value counts are also read from
+    the whole source, so the learned children per parent keep the real density."""
     if spec.file is not None:
         path = (base_dir / spec.file).resolve()
         if not path.is_file():
             raise ValueError(f"table {name!r}: file does not exist: {path}")
         df = source_file.read(path, null_values=null_values)
         if spec.fit_rows and spec.fit_rows < df.height:
-            return df.sample(n=spec.fit_rows, seed=sample_seed(seed), shuffle=True)
-        return df
+            counts = {
+                column: df.filter(pl.col(column).is_not_null()).group_by(column).len()
+                for column in fk_columns
+                if column in df.columns
+            }
+            return df.sample(n=spec.fit_rows, seed=sample_seed(seed), shuffle=True), counts
+        return df, {}
     if spec.uri is None:  # pragma: no cover — model_validator forbids this
         raise ValueError(f"table {name!r}: neither `file` nor `uri` is set")
     source_spec = parse_source_spec(
@@ -253,12 +268,20 @@ def _read_table_data(
             "Use `file = ...` for file-backed tables."
         )
     sql_read_count[source_spec.uri] = sql_read_count.get(source_spec.uri, 0) + 1
-    return source_sql.read(
+    df = source_sql.read(
         source_spec,
         fit_rows=spec.fit_rows,
         seed=seed,
         timeout=connection_timeout,
     )
+    if not spec.fit_rows:
+        return df, {}
+    counts = {
+        column: source_sql.read_value_counts(source_spec, column, timeout=connection_timeout)
+        for column in fk_columns
+        if column in df.columns
+    }
+    return df, counts
 
 
 def _validate_fks(tables: dict[str, Table], edges: list[ForeignKey]) -> None:

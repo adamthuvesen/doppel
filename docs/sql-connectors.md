@@ -64,8 +64,8 @@ There are three password mechanisms. doppel applies them in this order:
 
 doppel redacts secrets at the parser boundary. It replaces the URI password with
 `***` and masks the value of every query parameter whose key contains
-`password`, `pwd`, `token`, `secret`, `passcode`, or `key` (in any case) in the
-log-safe URI, and it scrubs the raw URI and each secret from driver errors. The raw
+`password`, `pwd`, `token`, `secret`, `passcode`, or `key` (in any case, and after
+percent-decoding the key) in the log-safe URI, and it scrubs the raw URI and each secret from driver errors. The raw
 URI is kept separately and passed straight to the driver. It does not appear in
 logs, error messages, or `--explain` output.
 
@@ -172,6 +172,11 @@ fit_rows = 50000          # fit on a seeded 50,000-row sample; 0 reads the whole
 A sample of a table that other tables reference would orphan their rows, so such
 a parent table takes only `fit_rows = 0`. doppel rejects a larger value when it
 loads the schema.
+
+A child table's sample still learns how many children each parent has from the
+whole table: doppel counts the rows per foreign-key value over the full source
+(one `GROUP BY` query for a warehouse table), so the sample sets the column values
+and the full table sets the relationship density.
 
 ## Sinks
 

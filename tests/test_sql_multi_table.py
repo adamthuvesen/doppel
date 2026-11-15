@@ -7,6 +7,7 @@ validator rejects malformed blocks at load time.
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 import duckdb
 import polars as pl
@@ -251,6 +252,27 @@ def test_child_fit_rows_keeps_children_per_parent(two_table_duckdb: Path, tmp_pa
     orders = pl.read_csv(out_dir / "orders.csv")
     assert orders.height == 120
     assert orders.group_by("user_id").len()["len"].to_list() == [4] * 30
+
+
+def test_child_fit_rows_refuses_an_empty_sample_of_a_nonempty_table(
+    two_table_duckdb: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from doppel.sources import sql as source_sql
+
+    real_read = source_sql.read
+
+    def empty_orders(spec: Any, **kwargs: Any) -> pl.DataFrame:
+        df = real_read(spec, **kwargs)
+        return df.head(0) if spec.table == "orders" else df
+
+    monkeypatch.setattr(source_sql, "read", empty_orders)
+    schema_path = tmp_path / "schema.toml"
+    schema_path.write_text(
+        _orders_users_schema(two_table_duckdb, orders_extra="fit_rows = 20"), encoding="utf-8"
+    )
+
+    with pytest.raises(ValueError, match="sample returned no rows"):
+        multi_schema.to_dataset(multi_schema.load(schema_path), tmp_path, seed=1)
 
 
 def test_parent_table_rejects_a_fit_rows_sample(two_table_duckdb: Path, tmp_path: Path) -> None:

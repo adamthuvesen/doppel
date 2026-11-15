@@ -281,6 +281,11 @@ def _read_table_data(
         for column in fk_columns
         if column in df.columns
     }
+    if df.height == 0 and any(frame.height for frame in counts.values()):
+        raise ValueError(
+            f"table {name!r}: the fit_rows = {spec.fit_rows} sample returned no rows from a "
+            "nonempty table. Raise fit_rows, or set it to 0 to read the whole table."
+        )
     return df, counts
 
 

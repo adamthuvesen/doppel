@@ -227,8 +227,8 @@ def test_gen_where_zero_match_fails_hard(plan_csv: Path, tmp_path: Path) -> None
     combined = (result.stdout + (result.stderr or "")).lower()
     assert "no rows" in combined
     assert "plan == 'nonexistent'" in combined
-    # The path can be wrapped across lines in rich output, so just check for the filename.
-    assert plan_csv.name in combined
+    # Rich wraps the path at any character, even inside the filename, so join the lines first.
+    assert plan_csv.name in combined.replace("\n", "")
     assert not out.exists()
 
 

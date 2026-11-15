@@ -262,3 +262,20 @@ def test_detect_flags_street_address_categoricals() -> None:
     df = pl.DataFrame({"home": addresses * 30, "city": ["London", "Paris", "Berlin"] * 30})
     detections = detect(df, infer_table("t", df).columns)
     assert [(d.name, d.entity_type) for d in detections] == [("home", "LOCATION")]
+
+
+def test_doppel_gen_multi_table_all_pii_root_keeps_requested_rows(tmp_path: Path) -> None:
+    _emails_df(50).select("email").write_csv(tmp_path / "contacts.csv")
+    schema = tmp_path / "schema.toml"
+    schema.write_text('[tables.contacts]\nfile = "contacts.csv"\n')
+    out_dir = tmp_path / "out"
+
+    result = runner.invoke(
+        app,
+        ["gen", "--schema", str(schema), "--rows", "12", "--output", str(out_dir), "--seed", "3"],
+    )
+
+    assert result.exit_code == 0, result.output
+    contacts = pl.read_csv(out_dir / "contacts.csv")
+    assert contacts.height == 12
+    assert all("@" in e for e in contacts["email"].to_list())

@@ -135,7 +135,9 @@ def generate_multi_table(
             from doppel.pii.text import restore as restore_pii
 
             detections, order = pii_by_table[name]
-            out_df = restore_pii(out_df, detections, order, pii_rng.spawn())
+            # An all-PII root keeps no columns, so its sampled frame cannot carry the row count.
+            row_count = None if out_df.width else rows_per_root.get(name)
+            out_df = restore_pii(out_df, detections, order, pii_rng.spawn(), row_count=row_count)
         out_df = apply_text_policy(
             out_df,
             original_columns[name],

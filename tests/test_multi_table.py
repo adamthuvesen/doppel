@@ -96,6 +96,25 @@ def test_hierarchical_synth_preserves_fk_integrity() -> None:
     assert set(out_orders["user_id"].to_list()).issubset(parent_pks)
 
 
+def test_hierarchical_synth_generates_an_empty_child_table() -> None:
+    users, orders = _make_relational_fixture()
+    ds = Dataset(
+        tables={
+            "users": infer_table("users", users),
+            "orders": infer_table("orders", orders.head(0)),
+        },
+        edges=[ForeignKey("orders", "user_id", "users", "user_id")],
+    )
+    synth = HierarchicalSynthesizer()
+    synth.fit(ds, Rng.from_seed(42))
+    out = synth.sample({"users": 10}, Rng.from_seed(7))
+    out_users = out.tables["users"].data
+    out_orders = out.tables["orders"].data
+    assert out_users is not None and out_users.height == 10
+    assert out_orders is not None and out_orders.height == 0
+    assert out_orders.columns == orders.columns
+
+
 def test_hierarchical_synth_child_count_distribution_resembles_real() -> None:
     users, orders = _make_relational_fixture(seed=1)
     users_table = infer_table("users", users)

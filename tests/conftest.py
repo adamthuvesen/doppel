@@ -122,7 +122,10 @@ class FakeSnowflake:
 @pytest.fixture(scope="session", autouse=True)
 def _no_real_snowflake() -> Iterator[None]:
     """No test may open a Snowflake connection. A test that needs one installs a fake."""
-    if importlib.util.find_spec("snowflake.connector") is None:
+    # find_spec on a submodule raises when the parent package is missing (base install).
+    if importlib.util.find_spec("snowflake") is None or (
+        importlib.util.find_spec("snowflake.connector") is None
+    ):
         yield
         return
     import snowflake.connector

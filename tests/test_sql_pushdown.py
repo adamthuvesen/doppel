@@ -45,6 +45,13 @@ def test_pushdown_none_returns_quoted_base() -> None:
     assert unseeded is False
 
 
+@pytest.mark.parametrize("scheme", ["snowflake", "duckdb", "postgresql"])
+def test_pushdown_zero_fit_rows_reads_the_full_table(scheme: str) -> None:
+    sql, unseeded = _pushdown(scheme, table="USERS", fit_rows=0)
+    assert "SAMPLE" not in sql.upper() and "LIMIT" not in sql.upper()
+    assert unseeded is False
+
+
 @pytest.fixture
 def duckdb_users(tmp_path: Path) -> Path:
     db = tmp_path / "src.db"

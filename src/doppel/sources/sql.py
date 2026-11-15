@@ -51,7 +51,8 @@ def build_pushdown_sql(
     Postgres `TABLESAMPLE` and Snowflake `SEED` apply only to a base table, so
     a `--query` read on those vendors uses an unseeded form."""
     base_query = _base_query(scheme, table=table, query=query)
-    if fit_rows is None:
+    # fit_rows = 0 is the documented full-fit opt-in: read the whole table, unsampled.
+    if not fit_rows:
         return base_query, False
     inner = base_query.strip().rstrip(";")
     if scheme == "duckdb":

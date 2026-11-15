@@ -18,6 +18,7 @@ from doppel.pipeline.fit_rows import AUTO_FIT_CAP
 from doppel.pipeline.pii import detect_pii_if_available
 from doppel.pipeline.prepare import build_training_table, read_source_dataframe
 from doppel.pipeline.quality_summary import QualitySummary, compute_quality_summary
+from doppel.pipeline.sink_guard import reject_sink_matching_source
 from doppel.schema.toml import SchemaToml
 from doppel.sinks import write as sink_write
 from doppel.sinks.spec import SinkSpec
@@ -121,6 +122,8 @@ def sample_fitted(
     real_df: pl.DataFrame | None = None
     quality_columns = synth.original_columns
     if config.real_spec is not None:
+        # The comparison must not overwrite the table it compares against.
+        reject_sink_matching_source(config.real_spec, config.sink_spec)
         real_df = source_read(config.real_spec, timeout=config.connection_timeout)
         quality_columns = [c for c in synth.original_columns if c.name in real_df.columns]
         missing = [c.name for c in synth.original_columns if c.name not in real_df.columns]

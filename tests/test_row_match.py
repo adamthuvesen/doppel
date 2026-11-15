@@ -155,6 +155,20 @@ def test_sample_refuses_a_real_source_with_no_shared_columns(tmp_path: Path) -> 
     assert not out.exists()
 
 
+def test_sample_refuses_to_overwrite_the_real_source(tmp_path: Path) -> None:
+    artifact = _fit_small(tmp_path)
+    real = tmp_path / "small.csv"
+    before = real.read_bytes()
+
+    result = runner.invoke(
+        app, ["sample", str(artifact), "-o", str(real), "-n", "20", "--real", str(real)]
+    )
+
+    assert result.exit_code == 2, result.output
+    assert "is the source file" in " ".join(result.output.replace("│", "").split())
+    assert real.read_bytes() == before
+
+
 def test_sample_warns_about_artifact_columns_missing_from_real(tmp_path: Path) -> None:
     artifact = _fit_small(tmp_path)
     partial = tmp_path / "partial.csv"

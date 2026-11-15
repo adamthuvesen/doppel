@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import stat
 from collections.abc import Iterator
 from datetime import time, timedelta
@@ -16,8 +17,13 @@ from doppel.cli import app
 runner = CliRunner()
 
 
+_ANSI = re.compile(r"\x1b\[[0-9;]*m")
+
+
 def _flat(text: str) -> str:
-    return " ".join(text.replace("│", "").split())
+    """Join rich's wrapped panel text, without borders or the colour CI turns on."""
+    plain = _ANSI.sub("", text)
+    return " ".join(plain.translate(str.maketrans("", "", "│╭╮╰╯─")).split())
 
 
 def _ok_csv(tmp_path: Path) -> Path:
@@ -67,7 +73,9 @@ def test_unwritable_output_directory_is_one_error_line(
         args = ["fit", str(source), "-o", str(read_only_dir / "m.doppel")]
     result = runner.invoke(app, args)
     assert result.exit_code == 1, result.output
-    assert result.stderr.startswith("error: ")
+    # A base install also warns that PII was not checked. The error is still one line.
+    errors = [line for line in result.stderr.splitlines() if line.startswith("error: ")]
+    assert len(errors) == 1, result.stderr
     assert "Permission denied" in result.stderr
     assert ".tmp" not in result.stderr
     assert result.exception is None or isinstance(result.exception, SystemExit)

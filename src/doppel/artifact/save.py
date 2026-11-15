@@ -23,6 +23,7 @@ import numpy as np
 import tomli_w
 
 from doppel import __version__
+from doppel.artifact.load import check_loadable
 from doppel.artifact.manifest import (
     ARRAYS_MEMBER,
     MANIFEST_MEMBER,
@@ -66,6 +67,22 @@ def save(
         "columns": [asdict(c) for c in synth.original_columns],
     }
 
+    members = {
+        MANIFEST_MEMBER: manifest.model_dump_json(indent=2).encode("utf-8"),
+        MODEL_MEMBER: state.model_dump_json().encode("utf-8"),
+        ARRAYS_MEMBER: arrays_buffer.getvalue(),
+        SCHEMA_JSON_MEMBER: json.dumps(schema_payload, indent=2, default=str).encode("utf-8"),
+    }
+    if schema_toml is not None:
+        members[SCHEMA_TOML_MEMBER] = tomli_w.dumps(to_payload(schema_toml)).encode("utf-8")
+    try:
+        check_loadable(members, len(arrays))
+    except ArtifactError as exc:
+        raise ArtifactError(
+            f"cannot save this synthesizer: doppel could not load it back ({exc}). "
+            "Fit on fewer rows with --fit-rows, or drop long text columns."
+        ) from None
+
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         tmp_fd, tmp_name = tempfile.mkstemp(prefix=".doppel-", suffix=".tmp", dir=path.parent)
@@ -76,20 +93,12 @@ def save(
     tmp_path = Path(tmp_name)
     try:
         with tarfile.open(tmp_path, "w:gz") as tar:
-            _add_text(tar, MANIFEST_MEMBER, manifest.model_dump_json(indent=2))
-            _add_text(tar, MODEL_MEMBER, state.model_dump_json())
-            _add_bytes(tar, ARRAYS_MEMBER, arrays_buffer.getvalue())
-            _add_text(tar, SCHEMA_JSON_MEMBER, json.dumps(schema_payload, indent=2, default=str))
-            if schema_toml is not None:
-                _add_text(tar, SCHEMA_TOML_MEMBER, tomli_w.dumps(to_payload(schema_toml)))
+            for name, payload in members.items():
+                _add_bytes(tar, name, payload)
         tmp_path.replace(path)
     except BaseException:
         tmp_path.unlink(missing_ok=True)
         raise
-
-
-def _add_text(tar: tarfile.TarFile, name: str, text: str) -> None:
-    _add_bytes(tar, name, text.encode("utf-8"))
 
 
 def _add_bytes(tar: tarfile.TarFile, name: str, payload: bytes) -> None:

@@ -14,7 +14,7 @@ import pytest
 from doppel.errors import InvalidInputError
 from doppel.locations import FilePath, expand_env_vars
 from doppel.sinks.spec import DuckDbSink, parse_sink_spec
-from doppel.sources.spec import DatabaseUri, parse_source_spec, redact_uri
+from doppel.sources.spec import DatabaseUri, parse_source_spec, redact_text, redact_uri
 
 
 def test_parse_file_path(tmp_path: Path) -> None:
@@ -164,6 +164,16 @@ def test_redact_uri_query_secrets(param: str) -> None:
     assert "s3cret" not in redacted
     assert f"{param}=***" in redacted
     assert "sslmode=require" in redacted
+
+
+def test_redaction_decodes_query_key_names() -> None:
+    raw = "snowflake://user@acct/db?warehouse=WH&pass%77ord=s3cret&Private%5FKey=k3y"
+    redacted = redact_uri(raw)
+    assert "s3cret" not in redacted
+    assert "k3y" not in redacted
+    assert "pass%77ord=***" in redacted
+    assert "warehouse=WH" in redacted
+    assert redact_text("auth failed for s3cret and k3y", raw) == "auth failed for *** and ***"
 
 
 def test_redact_uri_keeps_ipv6_brackets() -> None:

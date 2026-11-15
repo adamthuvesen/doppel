@@ -65,3 +65,39 @@ def test_json_variants_all_warn(tmp_path: Path, suffix: str) -> None:
         warnings.simplefilter("always")
         sink_file.write(df, out)
     assert any(issubclass(w.category, UserWarning) for w in caught)
+
+
+@pytest.mark.parametrize("name", ["self.csv", "self.parquet"])
+def test_file_sink_equal_to_the_file_source_is_refused(tmp_path: Path, name: str) -> None:
+    from typer.testing import CliRunner
+
+    from doppel.cli import app
+
+    source = tmp_path / name
+    df = pl.DataFrame({"x": list(range(40)), "y": [i % 3 for i in range(40)]})
+    df.write_csv(source) if name.endswith(".csv") else df.write_parquet(source)
+    before = source.read_bytes()
+    result = CliRunner().invoke(
+        app, ["gen", str(source), "-n", "5", "-o", str(tmp_path / ".." / tmp_path.name / name)]
+    )
+    assert result.exit_code == 2, result.output
+    assert "is the source file" in " ".join(result.output.replace("│", "").split())
+    assert source.read_bytes() == before
+
+
+def test_multi_table_output_equal_to_a_source_file_is_refused(tmp_path: Path) -> None:
+    from typer.testing import CliRunner
+
+    from doppel.cli import app
+
+    pl.DataFrame({"user_id": list(range(30)), "tier": ["a", "b", "c"] * 10}).write_csv(
+        tmp_path / "users.csv"
+    )
+    (tmp_path / "schema.toml").write_text('[tables.users]\nfile = "users.csv"\n')
+    before = (tmp_path / "users.csv").read_bytes()
+    result = CliRunner().invoke(
+        app, ["gen", "--schema", str(tmp_path / "schema.toml"), "-n", "5", "-o", str(tmp_path)]
+    )
+    assert result.exit_code == 2, result.output
+    assert "is the source file" in " ".join(result.output.replace("│", "").split())
+    assert (tmp_path / "users.csv").read_bytes() == before

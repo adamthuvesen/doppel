@@ -7,8 +7,10 @@ extra work.
 DuckDB works with the base install. Snowflake and Postgres need the SQL extra:
 
 ```bash
-pip install "doppeldata[sql]"
+uv tool install "doppeldata[sql] @ git+https://github.com/adamthuvesen/doppel"
 ```
+
+In a checkout, run `uv sync --extra sql` instead.
 
 DuckDB writes are also supported. Snowflake and Postgres are read-only from
 doppel's point of view; write a file or a DuckDB table, then load it with your
@@ -24,11 +26,17 @@ normal warehouse tooling.
 
 For every URI source, pass exactly one selector:
 
-- `--table NAME` — reads the whole table
+- `--table NAME` — reads the whole table. Doppel quotes every part of a dotted
+  name (`schema.table`). A bare part folds as the vendor folds an unquoted name:
+  upper case on Snowflake, lower case on Postgres. Wrap a part in double quotes
+  (`'"MixedCase"'`) to keep its exact case. DuckDB sources open read-only.
 - `--query "SELECT ..."` — reads the result of a custom query (developer-trust input)
 
 For DuckDB, the path goes in the URI path component. For Snowflake and Postgres,
 the database, schema, and warehouse routing live in the path and query string.
+A Snowflake URI is `snowflake://user@account/database[/schema]`. Each query
+parameter (`warehouse`, `role`, `authenticator`, `private_key_file`, and so on)
+passes through to `snowflake.connector.connect` as a connection parameter.
 
 ## Auth
 
@@ -39,7 +47,7 @@ There are three password mechanisms. doppel applies them in this order:
    ```
    --password-cmd "op read op://vault/snowflake/password"
    ```
-   If the command exits non-zero, doppel exits with `BadParameter` quoting
+   If the command exits non-zero, doppel exits with code 2 and quotes
    the subprocess stderr.
 
 2. **`${ENV_VAR}` interpolation** anywhere in the URI:
@@ -54,43 +62,69 @@ There are three password mechanisms. doppel applies them in this order:
    one-line stderr warning because the password can appear in shell history.
    Use this only for throwaway local runs.
 
-doppel redacts passwords at the parser boundary by substituting `:***@` into
-the log-safe URI. The raw URI is kept separately and passed straight to the
-driver. It should not appear in logs, error messages, or `--explain` output.
+doppel redacts secrets at the parser boundary. It replaces the URI password with
+`***` and masks the value of every query parameter whose key contains
+`password`, `pwd`, `token`, `secret`, `passcode`, or `key` (in any case) in the
+log-safe URI, and it scrubs the raw URI and each secret from driver errors. The raw
+URI is kept separately and passed straight to the driver. It does not appear in
+logs, error messages, or `--explain` output.
 
 ## Sample pushdown
 
 When you set `--fit-rows N` on a SQL source, doppel asks the database for the
 sample instead of reading the full table first:
 
-| Vendor    | Generated SQL                                                              |
-| --------- | -------------------------------------------------------------------------- |
-| Snowflake | `SELECT * FROM (<base>) SAMPLE (N ROWS) SEED (S)`                          |
-| Postgres  | `SELECT * FROM (<base>) AS t TABLESAMPLE BERNOULLI(p) REPEATABLE(S) LIMIT N` |
-| DuckDB    | `SELECT * FROM (<base>) AS t USING SAMPLE N ROWS (REPEATABLE S)`           |
-| Other     | `SELECT * FROM (<base>) AS t ORDER BY RANDOM() LIMIT N` (with warning)     |
+| Vendor    | Source             | Generated SQL                                                       |
+| --------- | ------------------ | ------------------------------------------------------------------- |
+| Snowflake | `--table`, seed    | `SELECT * FROM <table> SAMPLE SYSTEM (p) SEED (S) LIMIT N`          |
+| Snowflake | no seed, or query  | `SELECT * FROM (<base>) SAMPLE (N ROWS)`                            |
+| Postgres  | `--table`          | `SELECT * FROM <table> TABLESAMPLE BERNOULLI (p) REPEATABLE (S) LIMIT N` |
+| Postgres  | `--query`          | `SELECT * FROM (<query>) AS t ORDER BY RANDOM() LIMIT N`            |
+| DuckDB    | any, seed          | `SELECT * FROM (<base>) AS t USING SAMPLE reservoir(N ROWS) REPEATABLE (S)` |
+| DuckDB    | any, no seed       | `SELECT * FROM (<base>) AS t USING SAMPLE N ROWS`                   |
+| Other     | any                | `SELECT * FROM (<base>) AS t ORDER BY RANDOM() LIMIT N`             |
 
-For Postgres, `p` is computed from the row-count estimate with a 5% oversample
-because `TABLESAMPLE BERNOULLI` returns approximate row counts. The client-side
-`LIMIT N` keeps the final fit set at the requested size. Determinism for the
-ANSI fallback depends on the vendor's `RANDOM()` seedability; doppel warns when
-that fallback is used.
+`p` is a percentage computed from the row-count estimate with a 5% oversample,
+because fraction samples return approximate row counts. `LIMIT N` keeps the fit
+set at the requested size. When the row count is unknown, `p` is 100, so the
+read takes the first N rows of the table and is not a random sample.
 
-Setting `--seed` propagates through every supported vendor's seed clause.
+The vendors restrict where a seed can go:
+
+- Postgres applies `TABLESAMPLE` only to a table, not to a subquery.
+- Snowflake accepts `SEED` only with `SYSTEM` or `BLOCK` fraction sampling, not
+  with a fixed-size `N ROWS` sample, and not on a view or subquery. A seeded
+  `--table` read of a Snowflake view therefore fails at the warehouse. Read a
+  view with `--query "SELECT * FROM my_view"` instead, which gives an unseeded
+  sample. Snowflake takes a seed from 0 to 2147483647, so doppel passes
+  `S mod 2^31`. `SYSTEM` samples blocks of rows, not single rows.
+- The Snowflake forms follow the Snowflake `SAMPLE` documentation and have not
+  been run against a warehouse. The Postgres forms are checked with the real
+  Postgres parser (pglast). The DuckDB forms run in the test suite.
+
+When a seed is set but the chosen form cannot take one (a `--query` read on
+Snowflake or Postgres, or another vendor), doppel warns that the output may not
+be byte-identical across runs.
 
 ## Row-count probe
 
 Before reading from Snowflake or Postgres, doppel runs a cheap row-count
 query against the catalog:
 
-- Snowflake: `SELECT ROW_COUNT FROM INFORMATION_SCHEMA.TABLES`
+- Snowflake: `SELECT MAX(ROW_COUNT) FROM INFORMATION_SCHEMA.TABLES`, filtered on
+  `TABLE_SCHEMA` and `TABLE_NAME`. A `db.schema.table` name reads
+  `"DB".INFORMATION_SCHEMA.TABLES`; a bare name filters on `CURRENT_SCHEMA()`.
 - Postgres: `SELECT reltuples::BIGINT FROM pg_class`
 - For `--query`: `SELECT COUNT(*) FROM (<query>) AS _doppel_probe`
 
-If the estimate exceeds **1,000,000 rows** and `--fit-rows` is not set, doppel
-fails before reading the data. The error names the row count and suggests
+If the estimate exceeds **1,000,000 rows**, or the count is unknown, and
+`--fit-rows` is not set, doppel fails before reading the data. The count is
+unknown when the probe returns no value, when Postgres `reltuples` is negative
+(the table was never analysed), or when Snowflake returns 0 or NULL (a view
+has no `ROW_COUNT`). The error names the row count and suggests
 `--fit-rows N` to sample or `--fit-rows 0` to fit on the whole table. The latter
-can move a lot of data over the network.
+can move a lot of data over the network. A multi-table schema sets the same
+choice per table with `fit_rows` (see below).
 
 The probe is skipped for DuckDB and file sources (the auto-cap behavior
 applies for files, and DuckDB is local).
@@ -124,6 +158,21 @@ URI-backed tables must also declare exactly one of `table` or `query`. The
 CLI's `--password-cmd` and `--connection-timeout` apply to every SQL table in
 the run.
 
+`fit_rows` on a table does what `--fit-rows` does for single-table `gen`, which
+multi-table `gen` does not accept:
+
+```toml
+[tables.orders]
+uri = "snowflake://${SF_USER}@account/db/schema?warehouse=WH"
+table = "ORDERS_VIEW"     # a view: Snowflake reports no row count
+primary_key = "order_id"
+fit_rows = 50000          # fit on a seeded 50,000-row sample; 0 reads the whole table
+```
+
+A sample of a table that other tables reference would orphan their rows, so such
+a parent table takes only `fit_rows = 0`. doppel rejects a larger value when it
+loads the schema.
+
 ## Sinks
 
 The `-o`/`--output` flag accepts:
@@ -131,21 +180,30 @@ The `-o`/`--output` flag accepts:
 - a file path (any extension supported by `sinks.file`); or
 - a DuckDB URI of the form `duckdb:///path.db?table=NAME`.
 
-Snowflake and Postgres sink URIs raise `BadParameter` at parse time. Warehouse
+A sink that writes to a file the run reads is refused with exit code 2, before
+any read or fit. This covers a file sink at the path of the file source, and a
+DuckDB sink into the source's DuckDB file, whatever table either side names: a
+`--query` or a view can read any table in that file, so no table there is
+provably safe. A multi-table `gen` refuses an output file that is one of the
+schema's `file` sources or DuckDB files. DuckDB sources open read-only.
+
+Snowflake and Postgres sink URIs are rejected at parse time (exit code 2). Warehouse
 writes need decisions about transactions, idempotency, table creation, schema
 permissions, and recovery. doppel leaves that to your normal ELT tooling.
 
 ## Connection lifecycle
 
-Each source URI opens one connection per CLI invocation. `--connection-timeout
-SECONDS` (default 300) is passed to the driver where supported, with a
-Python-side watchdog for the rest. Before opening the connection, doppel logs
+Each read opens its own connection, so the row-count probe and the data read are
+two connections. `--connection-timeout SECONDS` (default 300) is passed to the
+driver where supported (Snowflake: `login_timeout` and the session's
+`STATEMENT_TIMEOUT_IN_SECONDS`), with a Python-side watchdog for the rest. Before opening the connection, doppel logs
 the redacted URI to stderr at info level so failures still point at the right
 target.
 
 ## Per-vendor caveats
 
-- **Snowflake**: only password authentication is supported. The
+- **Snowflake**: password authentication is the tested path. Other
+  authenticators reach the driver through URI query parameters, untested. The
   `INFORMATION_SCHEMA.TABLES.ROW_COUNT` probe returns the value as of the
   last `ANALYZE`/`COMPACT`; it is accurate enough for the 1M threshold guard.
 - **Postgres**: `TABLESAMPLE BERNOULLI(p)` returns approximately `p%` of
@@ -157,6 +215,14 @@ target.
 
 ## Driver
 
-ConnectorX is the SQL read driver for Snowflake and Postgres. DuckDB reads
-use DuckDB directly. See [SECURITY.md](../SECURITY.md) for the threat-model
+Snowflake reads use the official `snowflake-connector-python` and fetch the
+result as one Arrow table (`fetch_arrow_all`) into polars. ConnectorX has no
+Snowflake source (connectorx 0.4.6 fails with "Source Unknown not supported"),
+so Snowflake reads never worked before this driver. Postgres reads use ConnectorX
+through `pl.read_database_uri`. DuckDB reads use DuckDB directly. Both warehouse
+drivers come with the `[sql]` extra.
+
+The Snowflake read is tested only against a fake connector at the
+`snowflake.connector.connect` boundary. Nothing has been run against a live
+Snowflake warehouse. See [SECURITY.md](../SECURITY.md) for the threat-model
 implications of native database drivers.

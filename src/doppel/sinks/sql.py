@@ -9,7 +9,8 @@ from __future__ import annotations
 
 import polars as pl
 
-from doppel.sources.spec import DuckDbSink
+from doppel.locations import quote_table_name
+from doppel.sinks.spec import DuckDbSink
 
 
 def write_duckdb(df: pl.DataFrame, spec: DuckDbSink) -> None:
@@ -26,7 +27,8 @@ def write_duckdb(df: pl.DataFrame, spec: DuckDbSink) -> None:
         # `con.register` exposes the polars frame as a virtual table; the
         # CREATE OR REPLACE materialises it persistently.
         con.register("_doppel_synth_df", df)
-        con.execute(f"CREATE OR REPLACE TABLE {spec.table} AS SELECT * FROM _doppel_synth_df")
+        table = quote_table_name("duckdb", spec.table)
+        con.execute(f"CREATE OR REPLACE TABLE {table} AS SELECT * FROM _doppel_synth_df")
         con.unregister("_doppel_synth_df")
     finally:
         con.close()

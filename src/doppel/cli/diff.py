@@ -2,100 +2,30 @@
 
 from __future__ import annotations
 
-import math
-from collections.abc import Callable, Generator
-from contextlib import contextmanager
-from dataclasses import dataclass
 from pathlib import Path
 
 import typer
 from rich.console import Console
-from rich.progress import TaskID, TextColumn
 
 from doppel.cli import labels as cli_labels
-from doppel.cli._common import ConnectionTimeoutOpt, progress_bar, resolve_source, sample_frame
-from doppel.quality.aggregate import QualityReport
-from doppel.quality.aggregate import compute as compute_quality
+from doppel.cli.display import dcr_progress
+from doppel.cli.options import ConnectionTimeoutOpt, NullValuesOpt, resolve_source
+from doppel.pipeline.compare import (
+    DEFAULT_MAX_DCR_ROWS,
+    CompareConfig,
+    ThresholdSpec,
+    check_thresholds,
+    compare_datasets,
+    threshold_payload,
+)
 from doppel.report.html import to_html
 from doppel.report.json import to_json
 from doppel.report.terminal import render as render_terminal
-from doppel.schema.infer import infer_table
-from doppel.sources import read as source_read
-from doppel.sources.spec import DatabaseUri, FilePath
+from doppel.sources.spec import DEFAULT_CONNECTION_TIMEOUT, SourceSpec
 
 console = Console()
 
 THRESHOLD_BREACH_EXIT_CODE = 2
-
-
-@dataclass(frozen=True)
-class ThresholdSpec:
-    max_marginal: float | None
-    max_correlation_distance: float | None
-    min_dcr_p5: float | None
-    fail_on_verbatim_text: bool
-
-    @property
-    def any_set(self) -> bool:
-        return (
-            self.max_marginal is not None
-            or self.max_correlation_distance is not None
-            or self.min_dcr_p5 is not None
-            or self.fail_on_verbatim_text
-        )
-
-
-@dataclass(frozen=True)
-class ThresholdBreach:
-    name: str
-    actual: float
-    allowed: float | str
-
-    def format(self) -> str:
-        actual_str = f"{self.actual:.4f}" if math.isfinite(self.actual) else "n/a"
-        return f"{self.name}: {actual_str} (allowed: {self.allowed})"
-
-
-def check_thresholds(report: QualityReport, spec: ThresholdSpec) -> list[ThresholdBreach]:
-    breaches: list[ThresholdBreach] = []
-    if report.dtype_mismatches:
-        breaches.append(
-            ThresholdBreach("dtype_mismatches", float(len(report.dtype_mismatches)), "0")
-        )
-    if report.invariant_issues:
-        breaches.append(
-            ThresholdBreach("invariant_issues", float(len(report.invariant_issues)), "0")
-        )
-    if spec.max_marginal is not None and (
-        not math.isfinite(report.avg_marginal) or report.avg_marginal > spec.max_marginal
-    ):
-        breaches.append(
-            ThresholdBreach("avg_marginal", report.avg_marginal, f"<= {spec.max_marginal}")
-        )
-    if spec.max_correlation_distance is not None and (
-        not math.isfinite(report.correlations.frobenius_distance)
-        or report.correlations.frobenius_distance > spec.max_correlation_distance
-    ):
-        breaches.append(
-            ThresholdBreach(
-                "corr_frobenius",
-                report.correlations.frobenius_distance,
-                f"<= {spec.max_correlation_distance}",
-            )
-        )
-    if spec.min_dcr_p5 is not None and (
-        not math.isfinite(report.privacy.percentile_5)
-        or report.privacy.percentile_5 < spec.min_dcr_p5
-    ):
-        breaches.append(
-            ThresholdBreach("dcr_p5", report.privacy.percentile_5, f">= {spec.min_dcr_p5}")
-        )
-    if spec.fail_on_verbatim_text:
-        for column, rate in report.text_leaks():
-            breaches.append(
-                ThresholdBreach(f"verbatim_text[{column}]", rate, "0.0 (--fail-on-verbatim-text)")
-            )
-    return breaches
 
 
 def run(
@@ -157,13 +87,13 @@ def run(
         help="Fail (exit 2) if any TEXT column has any verbatim source values in the output.",
     ),
     max_dcr_rows: int = typer.Option(
-        50_000,
+        DEFAULT_MAX_DCR_ROWS,
         "--max-dcr-rows",
         min=1,
         help=(
             "Cap rows fed into the DCR nearest-neighbour search (per side). "
-            "Larger values are more accurate but slower; default 50,000 keeps a 100k+ frame "
-            "responsive."
+            f"Larger values are more accurate but slower; the default {DEFAULT_MAX_DCR_ROWS:,} "
+            "keeps a large frame responsive."
         ),
     ),
     sql_table: str | None = typer.Option(
@@ -184,7 +114,8 @@ def run(
         "--password-cmd",
         help='Shell command whose stdout is the SQL password (e.g. "op read op://vault/db/pw").',
     ),
-    connection_timeout: ConnectionTimeoutOpt = 300,
+    connection_timeout: ConnectionTimeoutOpt = DEFAULT_CONNECTION_TIMEOUT,
+    null_values: NullValuesOpt = None,
 ) -> None:
     real_spec = _resolve_diff_arg(
         real,
@@ -192,6 +123,7 @@ def run(
         sql_query=sql_query,
         password_cmd=password_cmd,
         connection_timeout=connection_timeout,
+        null_values=null_values,
     )
     synth_spec = _resolve_diff_arg(
         synth,
@@ -199,33 +131,22 @@ def run(
         sql_query=sql_query,
         password_cmd=password_cmd,
         connection_timeout=connection_timeout,
+        null_values=null_values,
     )
-    real_label = cli_labels.source_label(real_spec)
-    synth_label = cli_labels.source_label(synth_spec)
-    console.print(f"[dim]reading[/] {real_label}")
-    real_df = source_read(real_spec, timeout=connection_timeout)
-    console.print(f"[dim]reading[/] {synth_label}")
-    synth_df = source_read(synth_spec, timeout=connection_timeout)
-    real_df = sample_frame(real_df, sample_rows, seed=sample_seed, console=console, label="real")
-    synth_df = sample_frame(
-        synth_df, sample_rows, seed=sample_seed + 1, console=console, label="synth"
-    )
-
-    columns = infer_table(cli_labels.table_name_for_source(real_spec), real_df).columns
-    console.print(
-        f"[dim]computing report for[/] {len(columns)} columns "
-        f"({real_df.height} real vs {synth_df.height} synth rows)"
-    )
-    with _dcr_progress(console, min(synth_df.height, max_dcr_rows)) as progress_cb:
-        report = compute_quality(
-            real_df,
-            synth_df,
-            columns,
-            real_label=real_label,
-            synth_label=synth_label,
-            max_dcr_rows=max_dcr_rows,
+    with dcr_progress(console) as progress_cb:
+        report = compare_datasets(
+            CompareConfig(
+                real_spec=real_spec,
+                synth_spec=synth_spec,
+                real_label=cli_labels.source_label(real_spec),
+                synth_label=cli_labels.source_label(synth_spec),
+                sample_rows=sample_rows,
+                sample_seed=sample_seed,
+                max_dcr_rows=max_dcr_rows,
+                connection_timeout=connection_timeout,
+            ),
+            notify=lambda msg: console.print(f"[dim]{msg}[/]"),
             privacy_progress=progress_cb,
-            privacy_sample_seed=sample_seed,
         )
 
     render_terminal(report, console, top_n=top_n)
@@ -245,7 +166,7 @@ def run(
     if json_out is not None:
         json_out.parent.mkdir(parents=True, exist_ok=True)
         json_out.write_text(
-            to_json(report, thresholds=_threshold_payload(spec, breaches)),
+            to_json(report, thresholds=threshold_payload(spec, breaches)),
             encoding="utf-8",
         )
         console.print(f"[green]ok[/] wrote JSON report -> {json_out}")
@@ -259,29 +180,6 @@ def run(
         console.print("[green]thresholds: all passed[/]")
 
 
-@contextmanager
-def _dcr_progress(
-    console: Console, total_rows: int
-) -> Generator[Callable[[int, int], None] | None, None, None]:
-    """Live Rich progress bar for DCR computation when the workload is large enough."""
-    if total_rows < 5_000:
-        yield None
-        return
-    progress = progress_bar(
-        console, "dcr", TextColumn("{task.completed}/{task.total} rows", style="dim")
-    )
-    task_id: TaskID | None = None
-
-    def _cb(done: int, total: int) -> None:
-        nonlocal task_id
-        if task_id is None:
-            task_id = progress.add_task("dcr", total=total)
-        progress.update(task_id, completed=done)
-
-    with progress:
-        yield _cb
-
-
 def _resolve_diff_arg(
     value: str,
     *,
@@ -289,7 +187,8 @@ def _resolve_diff_arg(
     sql_query: str | None,
     password_cmd: str | None,
     connection_timeout: int,
-) -> FilePath | DatabaseUri:
+    null_values: str | None,
+) -> SourceSpec:
     """Resolve a diff positional argument.
 
     The `--table` / `--query` flags only apply to URI arguments. A file path
@@ -307,26 +206,5 @@ def _resolve_diff_arg(
         query=query_for_parse,
         password_cmd=password_cmd,
         connection_timeout=connection_timeout,
+        null_values=null_values,
     )
-
-
-def _threshold_payload(
-    spec: ThresholdSpec, breaches: list[ThresholdBreach]
-) -> dict[str, object] | None:
-    if not spec.any_set:
-        return None
-    return {
-        "max_marginal": spec.max_marginal,
-        "max_correlation_distance": spec.max_correlation_distance,
-        "min_dcr_p5": spec.min_dcr_p5,
-        "fail_on_verbatim_text": spec.fail_on_verbatim_text,
-        "passed": not breaches,
-        "breaches": [
-            {
-                "name": b.name,
-                "actual": b.actual if math.isfinite(b.actual) else None,
-                "allowed": b.allowed,
-            }
-            for b in breaches
-        ],
-    }

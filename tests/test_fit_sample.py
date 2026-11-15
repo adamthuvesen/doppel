@@ -7,6 +7,7 @@ from pathlib import Path
 import polars as pl
 from typer.testing import CliRunner
 
+from doppel.artifact import load as artifact_load
 from doppel.cli import app
 
 runner = CliRunner()
@@ -19,8 +20,8 @@ def test_fit_creates_artifact(mixed_csv: Path, tmp_path: Path) -> None:
         ["fit", str(mixed_csv), "--output", str(artifact), "--seed", "42"],
     )
     assert result.exit_code == 0, result.stdout
-    assert artifact.exists()
-    assert artifact.stat().st_size > 0
+    _, manifest, _ = artifact_load(artifact)
+    assert manifest.training_row_count == 200
 
 
 def test_sample_round_trips_via_artifact(mixed_csv: Path, tmp_path: Path) -> None:
@@ -74,7 +75,8 @@ def test_fit_supports_fit_rows(mixed_csv: Path, tmp_path: Path) -> None:
     )
     assert result.exit_code == 0, result.stdout
     assert "sampling fit rows" in result.stdout
-    assert artifact.exists()
+    _, manifest, _ = artifact_load(artifact)
+    assert manifest.training_row_count == 50
 
 
 def test_sample_text_policy_fake_for_artifact(tmp_path: Path) -> None:

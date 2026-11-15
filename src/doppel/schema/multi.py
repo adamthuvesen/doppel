@@ -25,11 +25,17 @@ URI-backed table:
 `file` is resolved relative to the schema.toml's directory. URI-backed tables require
 exactly one of `table` or `query`. Column overrides are optional; omitted columns fall
 back to inferred types.
+
+`fit_rows` on a table works as `--fit-rows` does for single-table `gen`: `N` fits on
+a seeded sample of N rows (pushed into the warehouse for a URI table), and `0` fits on
+the whole table. A warehouse table whose row count is unknown, such as a Snowflake view
+or a Postgres table that was never analysed, needs one of them. A sample of a parent
+table would orphan its child rows, so a table that other tables reference takes only
+`fit_rows = 0`.
 """
 
 from __future__ import annotations
 
-import tomllib
 from pathlib import Path
 from typing import Any
 
@@ -39,10 +45,16 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from doppel.dataset import Dataset, ForeignKey, Table
 from doppel.schema.infer import infer_table
-from doppel.schema.toml import ColumnSpec, merge_columns
+from doppel.schema.toml import ColumnSpec, merge_columns, parse_toml, validate_primary_key
 from doppel.sources import file as source_file
 from doppel.sources import sql as source_sql
-from doppel.sources.spec import DatabaseUri, parse_source_spec
+from doppel.sources.spec import (
+    DEFAULT_CONNECTION_TIMEOUT,
+    DatabaseUri,
+    parse_source_spec,
+    password_cmd_timeout,
+)
+from doppel.synth.seed import sample_seed
 
 
 class TableSpec(BaseModel):
@@ -53,6 +65,7 @@ class TableSpec(BaseModel):
     table: str | None = None
     query: str | None = None
     primary_key: str | None = None
+    fit_rows: int | None = Field(default=None, ge=0)
     columns: dict[str, ColumnSpec] = Field(default_factory=dict)
 
     @model_validator(mode="after")
@@ -96,6 +109,18 @@ class MultiSchemaToml(BaseModel):
     tables: dict[str, TableSpec]
     foreign_keys: list[ForeignKeySpec] = Field(default_factory=list)
 
+    @model_validator(mode="after")
+    def _validate_parent_fit_rows(self) -> MultiSchemaToml:
+        for parent in sorted({fk.parent_table for fk in self.foreign_keys}):
+            spec = self.tables.get(parent)
+            if spec is not None and spec.fit_rows:
+                raise ValueError(
+                    f"table {parent!r} sets fit_rows = {spec.fit_rows}, but other tables "
+                    "reference it: a sample would orphan their rows. Use fit_rows = 0 to "
+                    "fit on the whole table."
+                )
+        return self
+
 
 def is_multi_table(raw: dict[str, Any]) -> bool:
     """Detect whether a parsed TOML dict describes a multi-table schema."""
@@ -103,8 +128,7 @@ def is_multi_table(raw: dict[str, Any]) -> bool:
 
 
 def load(path: Path) -> MultiSchemaToml:
-    raw = tomllib.loads(path.read_text(encoding="utf-8"))
-    return MultiSchemaToml.model_validate(raw)
+    return MultiSchemaToml.model_validate(parse_toml(path.read_text(encoding="utf-8")))
 
 
 def save(schema: MultiSchemaToml, path: Path) -> None:
@@ -122,6 +146,8 @@ def save(schema: MultiSchemaToml, path: Path) -> None:
             entry["query"] = spec.query
         if spec.primary_key is not None:
             entry["primary_key"] = spec.primary_key
+        if spec.fit_rows is not None:
+            entry["fit_rows"] = spec.fit_rows
         if spec.columns:
             entry["columns"] = {
                 cname: _drop_none(cspec.model_dump()) for cname, cspec in spec.columns.items()
@@ -137,7 +163,9 @@ def to_dataset(
     base_dir: Path,
     *,
     password_cmd: str | None = None,
-    connection_timeout: int = 300,
+    connection_timeout: int = DEFAULT_CONNECTION_TIMEOUT,
+    null_values: tuple[str, ...] = ("",),
+    seed: int | None = None,
 ) -> Dataset:
     """Materialise a Dataset: read each table's file or URI, infer schema, apply
     overrides, wire FKs.
@@ -155,6 +183,8 @@ def to_dataset(
             password_cmd=password_cmd,
             connection_timeout=connection_timeout,
             sql_read_count=sql_read_count,
+            null_values=null_values,
+            seed=seed,
         )
         inferred = infer_table(name, df)
         inferred_names = {c.name for c in inferred.columns}
@@ -165,17 +195,7 @@ def to_dataset(
                 f"Available: {sorted(inferred_names)}"
             )
         if spec.primary_key is not None:
-            if spec.primary_key not in inferred_names:
-                raise ValueError(
-                    f"primary_key {spec.primary_key!r} for table {name!r} is not present "
-                    f"in the data. Available: {sorted(inferred_names)}"
-                )
-            pk_series = df[spec.primary_key]
-            if pk_series.null_count() > 0 or pk_series.n_unique() != df.height:
-                raise ValueError(
-                    f"primary_key {spec.primary_key!r} for table {name!r} must be unique "
-                    "and non-null"
-                )
+            validate_primary_key(inferred, spec.primary_key, table_label=name)
         declared_pk = spec.primary_key or inferred.primary_key
         tables[name] = Table(
             name=name,
@@ -197,38 +217,6 @@ def to_dataset(
     return Dataset(tables=tables, edges=edges)
 
 
-def from_dataset(dataset: Dataset, *, files: dict[str, str] | None = None) -> MultiSchemaToml:
-    """Produce a Pydantic schema from a Dataset — useful for `doppel schema infer` on a directory."""
-    files = files or {}
-    return MultiSchemaToml(
-        tables={
-            name: TableSpec(
-                file=files.get(name),
-                primary_key=t.primary_key,
-                columns={
-                    col.name: ColumnSpec(
-                        type=col.type,
-                        nullable=col.nullable,
-                        ordered=col.ordered,
-                        categories=list(col.categories) if col.categories is not None else None,
-                    )
-                    for col in t.columns
-                },
-            )
-            for name, t in dataset.tables.items()
-        },
-        foreign_keys=[
-            ForeignKeySpec(
-                child_table=e.child_table,
-                child_column=e.child_column,
-                parent_table=e.parent_table,
-                parent_column=e.parent_column,
-            )
-            for e in dataset.edges
-        ],
-    )
-
-
 def _read_table_data(
     *,
     name: str,
@@ -237,12 +225,19 @@ def _read_table_data(
     password_cmd: str | None,
     connection_timeout: int,
     sql_read_count: dict[str, int],
+    null_values: tuple[str, ...],
+    seed: int | None,
 ) -> pl.DataFrame:
     """Read one table's data — file path or SQL URI. Errors are scoped to the
     table name so multi-table schemas report which entry failed."""
     if spec.file is not None:
         path = (base_dir / spec.file).resolve()
-        return source_file.read(path)
+        if not path.is_file():
+            raise ValueError(f"table {name!r}: file does not exist: {path}")
+        df = source_file.read(path, null_values=null_values)
+        if spec.fit_rows and spec.fit_rows < df.height:
+            return df.sample(n=spec.fit_rows, seed=sample_seed(seed), shuffle=True)
+        return df
     if spec.uri is None:  # pragma: no cover — model_validator forbids this
         raise ValueError(f"table {name!r}: neither `file` nor `uri` is set")
     source_spec = parse_source_spec(
@@ -250,7 +245,7 @@ def _read_table_data(
         table=spec.table,
         query=spec.query,
         password_cmd=password_cmd,
-        password_cmd_timeout=min(connection_timeout, 60),
+        password_cmd_timeout=password_cmd_timeout(connection_timeout),
     )
     if not isinstance(source_spec, DatabaseUri):
         raise ValueError(
@@ -260,8 +255,8 @@ def _read_table_data(
     sql_read_count[source_spec.uri] = sql_read_count.get(source_spec.uri, 0) + 1
     return source_sql.read(
         source_spec,
-        fit_rows=None,
-        seed=None,
+        fit_rows=spec.fit_rows,
+        seed=seed,
         timeout=connection_timeout,
     )
 
@@ -307,7 +302,6 @@ __all__ = [
     "ForeignKeySpec",
     "MultiSchemaToml",
     "TableSpec",
-    "from_dataset",
     "is_multi_table",
     "load",
     "save",

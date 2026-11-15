@@ -42,10 +42,15 @@ class HierarchicalSynthesizer:
         self._edges = list(dataset.edges)
         self._table_metadata = dict(dataset.tables)
 
+        children = {edge.child_table for edge in self._edges}
         for name in self._order:
             table = dataset.tables[name]
             if table.data is None:
                 raise ValueError(f"table {name!r} has no data attached")
+            if name in children and table.data.height == 0:
+                # An empty child is a valid relation: every parent learns zero
+                # children, and `_sample_child` builds the empty table without a model.
+                continue
             synth = CartSynthesizer()
             synth.fit(Dataset.single(table), rng.spawn())
             self._per_table[name] = synth

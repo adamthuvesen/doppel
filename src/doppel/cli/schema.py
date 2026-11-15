@@ -7,12 +7,16 @@ from pathlib import Path
 import typer
 from pydantic import ValidationError
 from rich.console import Console
+from rich.markup import escape
 
 from doppel.cli import labels as cli_labels
-from doppel.cli._common import ConnectionTimeoutOpt, resolve_source
+from doppel.cli.error_exits import map_errors
+from doppel.cli.options import ConnectionTimeoutOpt, NullValuesOpt, resolve_source
+from doppel.pipeline.prepare import table_name_for_source
 from doppel.schema import toml as schema_toml
 from doppel.schema.infer import infer_table
 from doppel.sources import read as source_read
+from doppel.sources.spec import DEFAULT_CONNECTION_TIMEOUT
 
 app = typer.Typer(
     name="schema",
@@ -21,9 +25,11 @@ app = typer.Typer(
 )
 
 console = Console()
+err_console = Console(stderr=True)
 
 
 @app.command("infer")
+@map_errors
 def infer(
     input_path: str = typer.Argument(
         ...,
@@ -50,7 +56,8 @@ def infer(
         "--password-cmd",
         help='Shell command whose stdout is the SQL password (e.g. "op read op://vault/db/pw").',
     ),
-    connection_timeout: ConnectionTimeoutOpt = 300,
+    connection_timeout: ConnectionTimeoutOpt = DEFAULT_CONNECTION_TIMEOUT,
+    null_values: NullValuesOpt = None,
 ) -> None:
     source_spec = resolve_source(
         input_path,
@@ -58,11 +65,12 @@ def infer(
         query=sql_query,
         password_cmd=password_cmd,
         connection_timeout=connection_timeout,
+        null_values=null_values,
     )
     source_label = cli_labels.source_label(source_spec)
     console.print(f"[dim]reading[/] {source_label}")
     df = source_read(source_spec, timeout=connection_timeout)
-    table = infer_table(cli_labels.table_name_for_source(source_spec), df)
+    table = infer_table(table_name_for_source(source_spec), df)
     schema = schema_toml.from_table(table)
 
     if output is None:
@@ -76,6 +84,7 @@ def infer(
 
 
 @app.command("check")
+@map_errors
 def check(
     input_path: str = typer.Argument(
         ...,
@@ -103,7 +112,8 @@ def check(
         "--password-cmd",
         help="Shell command whose stdout is the SQL password.",
     ),
-    connection_timeout: ConnectionTimeoutOpt = 300,
+    connection_timeout: ConnectionTimeoutOpt = DEFAULT_CONNECTION_TIMEOUT,
+    null_values: NullValuesOpt = None,
 ) -> None:
     source_spec = resolve_source(
         input_path,
@@ -111,17 +121,18 @@ def check(
         query=sql_query,
         password_cmd=password_cmd,
         connection_timeout=connection_timeout,
+        null_values=null_values,
     )
     source_label = cli_labels.source_label(source_spec)
     console.print(f"[dim]reading[/] {source_label}")
     df = source_read(source_spec, timeout=connection_timeout)
-    inferred = infer_table(cli_labels.table_name_for_source(source_spec), df)
+    inferred = infer_table(table_name_for_source(source_spec), df)
 
     try:
         schema = schema_toml.load(schema_file)
         schema_toml.validate_against_table(inferred, schema)
     except (ValidationError, ValueError) as exc:
-        console.print(f"[red]err[/] {exc}")
+        err_console.print(f"[red]err[/] {escape(str(exc))}")
         raise typer.Exit(code=1) from None
 
     console.print(

@@ -1,4 +1,4 @@
-"""`doppel artifact info` — manifest introspection without unpickling."""
+"""`doppel artifact info` — manifest introspection without rebuilding the model."""
 
 from __future__ import annotations
 
@@ -38,7 +38,8 @@ def test_artifact_info_shows_manifest(tmp_path: Path) -> None:
     assert "60" in out  # row count
     assert "training-cols:" in out
     assert "file-size:" in out
-    assert "pickle-size:" in out
+    assert "model-size:" in out
+    assert "arrays-size:" in out
 
 
 def test_artifact_info_missing_file_errors(tmp_path: Path) -> None:

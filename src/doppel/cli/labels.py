@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from doppel.sources.spec import DuckDbSink, FilePath, SinkSpec, SourceSpec
+from doppel.locations import FilePath
+from doppel.sinks.spec import DuckDbSink, SinkSpec
+from doppel.sources.spec import SourceSpec
 
 
 def source_label(spec: SourceSpec) -> str:
@@ -17,9 +19,3 @@ def sink_label(spec: SinkSpec) -> str:
     if type(spec) is DuckDbSink:
         return f"duckdb:///{spec.path}?table={spec.table}"
     return str(spec)
-
-
-def table_name_for_source(spec: SourceSpec) -> str:
-    if isinstance(spec, FilePath):
-        return spec.path.stem
-    return spec.table or "query"

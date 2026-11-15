@@ -14,19 +14,36 @@ from doppel.schema.infer import infer_table
 from doppel.schema.toml import SchemaToml
 from doppel.sources import read as source_read
 from doppel.sources.spec import DatabaseUri, FilePath, SourceSpec
+from doppel.synth.seed import sample_seed
 
 
-def _table_name_for_source(spec: SourceSpec) -> str:
+def table_name_for_source(spec: SourceSpec) -> str:
     if isinstance(spec, FilePath):
         return spec.path.stem
     return spec.table or "query"
+
+
+def sample_frame(
+    df: pl.DataFrame,
+    rows: int | None,
+    *,
+    seed: int | None,
+    label: str,
+    notify: Callable[[str], None] | None = None,
+) -> pl.DataFrame:
+    """Return `rows` rows of `df`, drawn with `seed`, or `df` when it is not larger."""
+    if rows is None or rows >= df.height:
+        return df
+    if notify is not None:
+        notify(f"sampling {label} rows {rows} of {df.height}")
+    return df.sample(n=rows, seed=sample_seed(seed), shuffle=True)
 
 
 def read_source_dataframe(
     source_spec: SourceSpec,
     *,
     fit_rows: int | None,
-    requested_rows: int,
+    fit_cap: int,
     seed: int | None,
     connection_timeout: int,
     sample_fit: Callable[[pl.DataFrame, int | None], pl.DataFrame],
@@ -45,7 +62,7 @@ def read_source_dataframe(
     effective = auto_fit_rows(
         fit_rows,
         full_df.height,
-        requested_rows,
+        fit_cap,
         notify=notify_fit_cap,
     )
     fit_df = sample_fit(full_df, effective)
@@ -57,7 +74,7 @@ def build_training_table(
     source_spec: SourceSpec,
     schema_path: Path | None,
 ) -> PreparedTrainingTable:
-    table_name = _table_name_for_source(source_spec)
+    table_name = table_name_for_source(source_spec)
     table = infer_table(table_name, fit_df)
     schema_toml: SchemaToml | None = None
     if schema_path is not None:

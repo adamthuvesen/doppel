@@ -48,8 +48,7 @@ def resolve_where_table(where: str, dataset: Dataset) -> str:
 
 
 def apply_predicate_mask(df: pl.DataFrame, predicate: pl.Expr) -> pl.DataFrame:
-    holds = df.select(predicate.alias("__doppel_where__"))["__doppel_where__"].fill_null(False)
-    return df.filter(holds)
+    return df.filter(expr_mod.predicate_holds(df, predicate))
 
 
 def prune_fk_descendants(dataset: Dataset) -> Dataset:
@@ -110,10 +109,7 @@ def apply_where_to_sampled_dataset(
     table = out_dataset.tables[where_table]
     assert table.data is not None
     column_set = {c.name for c in table.columns}
-    try:
-        predicate = expr_mod.compile_expression(where, column_set, mode="boolean")
-    except ValueError as exc:
-        raise ValueError(f"--where invalid: {exc}") from exc
+    predicate = expr_mod.compile_where(where, column_set)
 
     root_target = rows_per_root.get(where_table)
     kept_df = apply_predicate_mask(table.data, predicate)

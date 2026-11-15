@@ -30,10 +30,11 @@ def test_my_pipeline(synthetic_users: pl.DataFrame) -> None:
 
 ## Notes
 
-- The artifact stores a pickled fitted synthesizer, not raw rows. `doppel fit`
-  refuses any source where Presidio detects PII, so detected PII never lands in
-  an artifact. **Undetected free-text may still echo source values** — run
-  `doppel diff` on output before publishing.
+- The artifact holds JSON and plain numpy arrays, not a pickle, so loading it cannot
+  run code. It does hold the real values of every modelled column, so **treat the
+  `.doppel` file as private as the source** and do not commit it. `doppel fit`
+  refuses any source where Presidio detects PII. **Undetected free-text may still
+  echo source values** — run `doppel diff` on output before publishing.
 - Sample size is a runtime decision; change `.sample(N, …)` in `conftest.py`
   without re-fitting.
 - `Rng.from_seed(seed)` is byte-deterministic across machines.

@@ -10,17 +10,20 @@ import polars as pl
 from doppel.constraints.engine import ConstraintReport, synthesize_with_constraints
 from doppel.dataset import Dataset
 from doppel.pii.detect import PIIDetection
+from doppel.pipeline.fit_rows import gen_fit_cap
 from doppel.pipeline.pii import strip_pii_if_available
 from doppel.pipeline.prepare import build_training_table, read_source_dataframe
+from doppel.pipeline.quality_summary import compute_quality_summary
+from doppel.pipeline.sink_guard import reject_sink_matching_source
 from doppel.pipeline.types import SingleTableGenerateConfig, SingleTableGenerateResult
 from doppel.pipeline.where import (
     merge_where_into_constraints,
     precheck_where,
     thin_support_warning,
 )
-from doppel.schema.toml import SchemaToml
+from doppel.sinks import write as sink_write
 from doppel.synth.cart import CartSynthesizer, FitProgress
-from doppel.synth.seed import Rng
+from doppel.synth.seed import Rng, sample_seed
 from doppel.text_policy import apply as apply_text_policy
 
 
@@ -34,11 +37,16 @@ def generate_single_table(
     notify_where_support: Callable[[str], None] | None = None,
     on_pii_detected: Callable[[list[PIIDetection]], None] | None = None,
 ) -> SingleTableGenerateResult:
-    """Read, fit, sample, and post-process one synthetic table."""
+    """Read, fit, sample, and post-process one synthetic table.
+
+    With `config.sink_spec` set the table is also written; with `config.quality`
+    the result carries a real-vs-synthetic quality summary."""
+    if config.sink_spec is not None:
+        reject_sink_matching_source(config.source_spec, config.sink_spec)
     real_df, fit_df = read_source_dataframe(
         config.source_spec,
         fit_rows=config.fit_rows,
-        requested_rows=config.rows,
+        fit_cap=gen_fit_cap(config.rows),
         seed=config.seed,
         connection_timeout=config.connection_timeout,
         sample_fit=sample_fit,
@@ -58,7 +66,6 @@ def generate_single_table(
     )
     table = prepared.table
     schema_toml = prepared.schema_toml
-    assert isinstance(schema_toml, SchemaToml | None)
 
     pii_detected, table_for_fit, original_columns = strip_pii_if_available(
         table, on_detected=on_pii_detected
@@ -106,7 +113,26 @@ def generate_single_table(
         )
 
     out_df = apply_text_policy(
-        out_df, table.columns, config.text_policy, Rng.from_seed(config.seed).spawn()
+        out_df,
+        table.columns,
+        config.text_policy,
+        Rng.from_seed(config.seed).spawn(),
+        salt=config.hash_salt,
+    )
+
+    if config.sink_spec is not None:
+        sink_write(out_df, config.sink_spec)
+
+    quality = (
+        compute_quality_summary(
+            real_df,
+            out_df,
+            table.columns,
+            sample_seed=sample_seed(config.seed),
+            exclude_from_row_match={d.name for d in pii_detected},
+        )
+        if config.quality
+        else None
     )
 
     return SingleTableGenerateResult(
@@ -118,4 +144,28 @@ def generate_single_table(
         constraint_report=constraint_report,
         fit_seconds=fit_seconds,
         sample_seconds=sample_seconds,
+        quality=quality,
     )
+
+
+def run_summary_payload(
+    config: SingleTableGenerateConfig,
+    result: SingleTableGenerateResult,
+    *,
+    input_label: str,
+    output_label: str,
+) -> dict[str, object]:
+    """The machine-readable `gen --json-summary` payload."""
+    return {
+        "input_path": input_label,
+        "output_path": output_label,
+        "rows_requested": config.rows,
+        "rows_written": result.out_df.height,
+        "cols_written": result.out_df.width,
+        "fit_seconds": round(result.fit_seconds, 3),
+        "sample_seconds": round(result.sample_seconds, 3),
+        "seed": config.seed,
+        "text_policy": config.text_policy.value,
+        "pii_columns_regenerated": [d.name for d in result.pii_detected],
+        "quality": result.quality.to_payload() if result.quality is not None else None,
+    }

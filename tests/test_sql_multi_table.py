@@ -14,8 +14,9 @@ import pytest
 from pydantic import ValidationError
 from typer.testing import CliRunner
 
-from doppel.cli import app  # type: ignore[attr-defined]
+from doppel.cli import app
 from doppel.schema import multi as multi_schema
+from tests.conftest import InstallFakeSnowflake
 
 
 @pytest.fixture
@@ -92,8 +93,12 @@ parent_column = "user_id"
     )
     schema = multi_schema.load(schema_path)
     dataset = multi_schema.to_dataset(schema, schema_path.parent)
-    assert dataset.tables["users"].data is not None
-    assert dataset.tables["orders"].data is not None
+    users = dataset.tables["users"].data
+    orders = dataset.tables["orders"].data
+    assert users is not None and orders is not None
+    assert (users.height, orders.height) == (50, 200)
+    assert len(dataset.edges) == 1
+    assert set(orders["user_id"]) <= set(users["user_id"])
 
 
 def test_multi_table_file_and_uri_in_same_block_rejected() -> None:
@@ -102,7 +107,7 @@ def test_multi_table_file_and_uri_in_same_block_rejected() -> None:
 
 
 def test_multi_table_uri_without_table_or_query_rejected() -> None:
-    with pytest.raises(ValidationError, match="exactly one of `table` or `query`"):
+    with pytest.raises(ValidationError, match="exactly one of"):
         multi_schema.TableSpec(uri="duckdb:///x.db")
 
 
@@ -157,8 +162,12 @@ parent_column = "user_id"
     )
     assert result.exit_code == 0, result.stdout
     # Default suffix for URI-backed tables is .csv.
-    assert (out_dir / "users.csv").exists()
-    assert (out_dir / "orders.csv").exists()
+    users = pl.read_csv(out_dir / "users.csv")
+    orders = pl.read_csv(out_dir / "orders.csv")
+    assert users.columns == ["user_id", "name", "plan"]
+    assert orders.columns == ["order_id", "user_id", "amount"]
+    assert users.height == 20
+    assert set(orders["user_id"]) <= set(users["user_id"])
 
 
 def test_multi_table_single_uri_dedup(two_table_duckdb: Path, tmp_path: Path) -> None:
@@ -181,9 +190,103 @@ primary_key = "order_id"
     )
     schema = multi_schema.load(schema_path)
     dataset = multi_schema.to_dataset(schema, schema_path.parent)
-    assert dataset.tables["users"].data is not None
     users_df = dataset.tables["users"].data
-    assert users_df.height == 50
     orders_df = dataset.tables["orders"].data
-    assert orders_df is not None
+    assert users_df is not None and orders_df is not None
+    assert users_df.height == 50
     assert orders_df.height == 200
+
+
+def _orders_users_schema(db: Path, *, users_extra: str = "", orders_extra: str = "") -> str:
+    return f"""
+[tables.users]
+uri = "duckdb:///{db}"
+table = "users"
+primary_key = "user_id"
+{users_extra}
+
+[tables.orders]
+uri = "duckdb:///{db}"
+table = "orders"
+primary_key = "order_id"
+{orders_extra}
+
+[[foreign_keys]]
+child_table = "orders"
+child_column = "user_id"
+parent_table = "users"
+parent_column = "user_id"
+"""
+
+
+def test_child_table_fit_rows_samples_that_table(two_table_duckdb: Path, tmp_path: Path) -> None:
+    schema_path = tmp_path / "schema.toml"
+    schema_path.write_text(
+        _orders_users_schema(two_table_duckdb, orders_extra="fit_rows = 20"), encoding="utf-8"
+    )
+
+    dataset = multi_schema.to_dataset(multi_schema.load(schema_path), tmp_path, seed=1)
+
+    orders = dataset.tables["orders"].data
+    users = dataset.tables["users"].data
+    assert orders is not None and users is not None
+    assert orders.height == 20
+    assert users.height == 50
+
+
+def test_parent_table_rejects_a_fit_rows_sample(two_table_duckdb: Path, tmp_path: Path) -> None:
+    schema_path = tmp_path / "schema.toml"
+    schema_path.write_text(
+        _orders_users_schema(two_table_duckdb, users_extra="fit_rows = 10"), encoding="utf-8"
+    )
+
+    with pytest.raises(ValidationError, match="orphan"):
+        multi_schema.load(schema_path)
+
+
+@pytest.mark.extras
+@pytest.mark.parametrize(("fit_rows", "exit_code"), [(None, 2), (0, 0)])
+def test_unknown_row_count_table_needs_schema_fit_rows(
+    tmp_path: Path, fit_rows: int | None, exit_code: int, fake_snowflake: InstallFakeSnowflake
+) -> None:
+    from unittest.mock import patch
+
+    pl.DataFrame({"user_id": list(range(1, 21)), "plan": ["free", "gold"] * 10}).write_csv(
+        tmp_path / "users.csv"
+    )
+    orders = pl.DataFrame(
+        {"order_id": list(range(1, 41)), "user_id": [1 + i % 20 for i in range(40)]}
+    )
+    fit_line = "" if fit_rows is None else f"fit_rows = {fit_rows}"
+    schema_path = tmp_path / "schema.toml"
+    schema_path.write_text(
+        f"""
+[tables.users]
+file = "users.csv"
+primary_key = "user_id"
+
+[tables.orders]
+uri = "snowflake://user@account/db/schema?warehouse=WH"
+table = "ORDERS_VIEW"
+primary_key = "order_id"
+{fit_line}
+
+[[foreign_keys]]
+child_table = "orders"
+child_column = "user_id"
+parent_table = "users"
+parent_column = "user_id"
+""",
+        encoding="utf-8",
+    )
+
+    fake_snowflake(orders)
+    with patch("doppel.sources.sql._probe_row_count", return_value=None):
+        result = CliRunner().invoke(
+            app,
+            ["gen", "--schema", str(schema_path), "-o", str(tmp_path / "out"), "-n", "10"],
+        )
+
+    assert result.exit_code == exit_code, result.output
+    if exit_code:
+        assert "unknown number of rows" in result.output

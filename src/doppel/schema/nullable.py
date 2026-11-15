@@ -16,15 +16,10 @@ import logging
 
 import polars as pl
 
+from doppel.schema.reserved import NULL_SENTINEL, reject_reserved_value
 from doppel.schema.types import ColumnType
 
 _log = logging.getLogger(__name__)
-
-NULL_SENTINEL = "__doppel_null__"
-
-
-class SentinelCollisionError(ValueError):
-    """Raised when a real categorical/text value collides with the NULL_SENTINEL."""
 
 
 def encode_feature(series: pl.Series, ctype: ColumnType) -> pl.Series:
@@ -51,12 +46,7 @@ def encode_feature(series: pl.Series, ctype: ColumnType) -> pl.Series:
         if series.null_count() == 0 and series.dtype != pl.String:
             return series
         as_str = series.cast(pl.String)
-        if NULL_SENTINEL in as_str.drop_nulls().to_list():
-            raise SentinelCollisionError(
-                f"column {series.name!r} contains the literal value {NULL_SENTINEL!r}, "
-                "which doppel reserves to encode NULL in its feature matrix. "
-                "Rename or rewrite the offending value upstream."
-            )
+        reject_reserved_value(as_str)
         return as_str.fill_null(NULL_SENTINEL)
     return series
 

@@ -1,4 +1,4 @@
-"""`doppel artifact` — introspect `.doppel` files without loading the pickle."""
+"""`doppel artifact` — introspect `.doppel` files without rebuilding the model."""
 
 from __future__ import annotations
 
@@ -9,6 +9,7 @@ from rich.console import Console
 from rich.table import Table
 
 from doppel.artifact import inspect_artifact
+from doppel.cli.error_exits import map_errors
 
 app = typer.Typer(
     name="artifact",
@@ -21,6 +22,7 @@ console = Console()
 
 
 @app.command("info")
+@map_errors
 def info(
     path: Path = typer.Argument(
         ...,
@@ -29,7 +31,7 @@ def info(
         help="Path to a fitted `.doppel` artifact.",
     ),
 ) -> None:
-    """Show artifact metadata (manifest, schema, sizes) — does not unpickle the synthesizer."""
+    """Show artifact metadata (manifest, schema, sizes) — does not rebuild the synthesizer."""
     info_obj = inspect_artifact(path)
     m = info_obj.manifest
     console.print(f"[bold]{path}[/]")
@@ -41,7 +43,8 @@ def info(
     console.print(f"  training-cols:    {m.training_column_count}")
     console.print(f"  created:          {m.created_at}")
     console.print(f"  file-size:        {_humanize(info_obj.file_size)}")
-    console.print(f"  pickle-size:      {_humanize(info_obj.pickle_size)}")
+    console.print(f"  model-size:       {_humanize(info_obj.model_size)}")
+    console.print(f"  arrays-size:      {_humanize(info_obj.arrays_size)}")
 
     if info_obj.schema_toml is not None:
         cols = info_obj.schema_toml.columns

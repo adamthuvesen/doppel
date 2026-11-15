@@ -1,6 +1,8 @@
 # Determinism contract
 
 doppel guarantees byte-identical output when given the same `--seed`.
+One exception: `--text-policy hash` draws a random salt for each run, so its
+output is byte-identical only when you also pass the same `--hash-salt`.
 
 ## What `--seed` controls
 
@@ -32,6 +34,15 @@ diverge.
 
 Regression test: `tests/test_seed.py`.
 
+## The hash salt
+
+`--text-policy hash` is pseudonymisation, not anonymisation. A fixed public salt
+lets anyone who can guess candidate values rebuild the mapping with a dictionary.
+So the salt is not drawn from `--seed`: without `--hash-salt`, doppel draws it with
+`secrets.token_hex` in [src/doppel/text_policy.py](../src/doppel/text_policy.py),
+the one place outside the RNG contract. Pass `--hash-salt VALUE` on `gen` or
+`sample` when two runs must produce the same hashes, and keep that value secret.
+
 ## Pure functions don't need an RNG
 
 Calendar-feature extraction
@@ -56,7 +67,7 @@ out_df = restore_pii(..., Rng.from_seed(config.seed), ...)
 
 Each call roots an independent seed-tree at the same seed:
 
-1. **fit** RNG drives sklearn estimators and null-mask resampling.
+1. **fit** RNG drives sklearn estimators and the shuffle of every value pool.
 2. **sample** RNG drives leaf-sampling and is unaffected by anything fit did.
 3. **PII restore** RNG drives Faker.
 
@@ -78,14 +89,17 @@ byte-identical output. Tested in `tests/test_where_cli.py::test_gen_where_is_det
 When the input is a database URI, `--seed` propagates into the warehouse's
 sample clause:
 
-- Snowflake: `SAMPLE (N ROWS) SEED (S)` — fully seedable; same seed and
-  same source row order yields the same sample.
-- Postgres: `TABLESAMPLE BERNOULLI(p) REPEATABLE(S)` — seedable; the
-  client-side `LIMIT N` keeps the exact-row-count contract.
-- DuckDB: `USING SAMPLE N ROWS (REPEATABLE S)` — seedable.
-- ANSI fallback (`ORDER BY RANDOM() LIMIT N`) for any other vendor:
-  determinism is vendor-dependent. Doppel emits a one-line stderr
-  warning when this branch fires.
+- Snowflake: a `--table` read uses `SAMPLE SYSTEM (p) SEED (S)` on the
+  base table plus `LIMIT N`. A `--query` read cannot take a seed.
+- Postgres: a `--table` read uses `TABLESAMPLE BERNOULLI (p) REPEATABLE (S)`
+  plus `LIMIT N`. A `--query` read uses `ORDER BY RANDOM()` and cannot take
+  a seed.
+- DuckDB: `USING SAMPLE reservoir(N ROWS) REPEATABLE (S)` — seedable.
+- Any other vendor: `ORDER BY RANDOM() LIMIT N`; determinism is
+  vendor-dependent.
+
+Doppel warns when a seed is set but the chosen form cannot take one.
+[docs/sql-connectors.md](sql-connectors.md) lists every form.
 
 The pushdown SQL builders in `src/doppel/sources/sql.py::build_pushdown_sql`
 are pure functions; the unit tests in `tests/test_sql_pushdown.py` cover

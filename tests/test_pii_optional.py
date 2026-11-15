@@ -9,10 +9,13 @@ from __future__ import annotations
 
 import importlib
 import importlib.util
+from pathlib import Path
 
 import polars as pl
 import pytest
+from typer.testing import CliRunner
 
+from doppel.cli import app
 from doppel.dataset import Table
 from doppel.pii.detect import PIIDetection
 from doppel.pipeline import pii
@@ -70,6 +73,20 @@ def test_fit_detects_pii_when_presidio_is_installed_without_faker(
     monkeypatch.setattr(pii.importlib.util, "find_spec", find_spec)
     monkeypatch.setattr("doppel.pii.detect.detect", detect_pii)
 
-    fit_module = importlib.import_module("doppel.cli.fit")
+    assert pii.detect_pii_if_available(_text_table()) == [detection]
 
-    assert fit_module._detect_pii_if_available(_text_table()) == [detection]
+
+def test_fit_warns_that_pii_was_not_checked_without_extra(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(pii, "pii_detection_available", lambda: False)
+    csv = tmp_path / "src.csv"
+    pl.DataFrame({"id": list(range(30)), "v": [i % 5 for i in range(30)]}).write_csv(csv)
+
+    result = CliRunner().invoke(
+        app, ["fit", str(csv), "--output", str(tmp_path / "m.doppel"), "--seed", "1"]
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "PII not checked: the optional [pii] extra is not installed" in result.stderr
+    assert 'uv tool install "doppeldata[pii]' in result.stderr

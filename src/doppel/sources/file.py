@@ -2,44 +2,53 @@
 
 from __future__ import annotations
 
+from collections.abc import Collection
 from pathlib import Path
 
 import polars as pl
 
-# Common null sentinels found in real-world datasets (UCI, Kaggle, Excel exports, etc.).
-# Applied after whitespace stripping so " ?" and "?" are both caught.
-_NULL_SENTINELS: frozenset[str] = frozenset(
-    ["?", "NA", "N/A", "na", "n/a", "none", "None", "NULL", "null", ""]
-)
+from doppel.errors import InvalidInputError
+from doppel.locations import FileFormat, file_format
+
+# Only the empty string is NULL by default: "NA" is also North America and "None" a
+# valid label. Callers pass more tokens with `--null-values`. Tokens are compared
+# after whitespace stripping, so " " is NULL too.
+DEFAULT_NULL_VALUES: tuple[str, ...] = ("",)
 _DATE_PREFIX_RE = r"^\d{4}-\d{2}-\d{2}([T ][0-9]{2}:[0-9]{2}:[0-9]{2})?"
 
 
-def read(path: Path) -> pl.DataFrame:
-    suffix = path.suffix.lower()
-    if suffix == ".csv":
-        return _normalise_strings(pl.read_csv(path, try_parse_dates=True))
-    if suffix == ".tsv":
-        return _normalise_strings(pl.read_csv(path, separator="\t", try_parse_dates=True))
-    if suffix == ".parquet":
-        return pl.read_parquet(path)
-    if suffix == ".json":
-        return _normalise_strings(pl.read_json(path))
-    if suffix in {".ndjson", ".jsonl"}:
-        return _normalise_strings(pl.read_ndjson(path))
-    if suffix in {".arrow", ".feather", ".ipc"}:
-        return pl.read_ipc(path)
-    raise ValueError(
-        f"unsupported source extension: {suffix!r}. "
-        "Supported: .csv .tsv .parquet .json .ndjson .jsonl .arrow .feather .ipc"
-    )
+def read(path: Path, *, null_values: Collection[str] = DEFAULT_NULL_VALUES) -> pl.DataFrame:
+    try:
+        return _read(path, null_values)
+    except pl.exceptions.NoDataError:
+        raise InvalidInputError(f"source file is empty: {path}") from None
 
 
-def _normalise_strings(df: pl.DataFrame) -> pl.DataFrame:
+def _read(path: Path, null_values: Collection[str]) -> pl.DataFrame:
+    match file_format(path, role="source"):
+        case FileFormat.CSV:
+            return _normalise_strings(pl.read_csv(path, try_parse_dates=True), null_values)
+        case FileFormat.TSV:
+            df = pl.read_csv(path, separator="\t", try_parse_dates=True)
+            return _normalise_strings(df, null_values)
+        case FileFormat.PARQUET:
+            return pl.read_parquet(path)
+        case FileFormat.JSON:
+            return _normalise_strings(pl.read_json(path), null_values)
+        case FileFormat.NDJSON:
+            return _normalise_strings(pl.read_ndjson(path), null_values)
+        case FileFormat.ARROW:
+            return pl.read_ipc(path)
+
+
+def _normalise_strings(
+    df: pl.DataFrame, null_values: Collection[str] = DEFAULT_NULL_VALUES
+) -> pl.DataFrame:
     """Strip whitespace, coerce null sentinels, and promote numeric-looking string columns."""
     string_cols = [c for c in df.columns if df[c].dtype == pl.String]
     if not string_cols:
         return df
-    sentinels = list(_NULL_SENTINELS)
+    sentinels = sorted({*DEFAULT_NULL_VALUES, *null_values})
     exprs = []
     for c in string_cols:
         stripped = pl.col(c).str.strip_chars()

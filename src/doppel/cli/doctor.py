@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib
+import importlib.util
 import platform
 from dataclasses import dataclass
 
@@ -37,6 +38,7 @@ _EXTRAS = (
     _Probe("pii / presidio-analyzer", "presidio_analyzer", required=False),
     _Probe("pii / faker", "faker", required=False),
     _Probe("sql / connectorx", "connectorx", required=False),
+    _Probe("sql / snowflake-connector-python", "snowflake.connector", required=False),
     _Probe("sql / pyarrow", "pyarrow", required=False),
 )
 
@@ -67,14 +69,45 @@ def run() -> None:
             mark = "[yellow]not installed[/]"
         table.add_row(probe.label, mark, version_str, kind)
 
+    if _has_module("presidio_analyzer"):
+        from doppel.pii.detect import (
+            SPACY_MODEL,
+            SPACY_MODEL_INSTALL_COMMAND,
+            spacy_model_available,
+        )
+
+        if spacy_model_available():
+            table.add_row(f"pii / {SPACY_MODEL}", "[green]ok[/]", _model_version(), "extra")
+        else:
+            table.add_row(
+                f"pii / {SPACY_MODEL}",
+                f"[yellow]not installed[/] (run `{SPACY_MODEL_INSTALL_COMMAND}`)",
+                "-",
+                "extra",
+            )
+
     console.print(table)
 
     if any_required_missing:
         console.print(
             "[red]one or more required dependencies are missing. "
-            "reinstall with `uv tool install doppeldata` or `pip install doppeldata`.[/]"
+            "reinstall with `uv tool install --reinstall git+https://github.com/adamthuvesen/doppel` "
+            "or, in a checkout, `uv sync --all-extras`.[/]"
         )
         raise typer.Exit(code=1)
+
+
+def _has_module(module: str) -> bool:
+    return importlib.util.find_spec(module) is not None
+
+
+def _model_version() -> str:
+    from importlib.metadata import PackageNotFoundError, version
+
+    try:
+        return version("en-core-web-lg")
+    except PackageNotFoundError:
+        return "?"
 
 
 def _probe(module: str) -> tuple[bool, str]:

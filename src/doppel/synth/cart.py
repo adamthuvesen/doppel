@@ -20,25 +20,26 @@ from __future__ import annotations
 
 import uuid
 from collections import defaultdict
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
+from typing import cast
 
 import numpy as np
 import polars as pl
 from sklearn.tree import DecisionTreeClassifier, DecisionTreeRegressor
 
 from doppel.dataset import Dataset, Table
-from doppel.schema.datetime import (
-    CalendarFeature,
-    decompose,
-    recompose,
-)
+from doppel.schema.calendar_feature import CalendarFeature
 from doppel.schema.datetime import (
     calendar_features as extract_calendar_features,
 )
-from doppel.schema.heuristics import FLOAT_DTYPE_NAMES, INTEGER_DTYPE_NAMES
+from doppel.schema.datetime import (
+    decompose,
+    recompose,
+)
 from doppel.schema.nullable import encode_feature
 from doppel.schema.nullable import null_rate as _null_rate
+from doppel.schema.reserved import CALENDAR_FEATURE_PREFIX, reject_reserved_column_name
 from doppel.schema.types import Column, ColumnType
 from doppel.synth.cart_repair import (
     CountBound,
@@ -57,17 +58,30 @@ from doppel.synth.cart_repair import (
 from doppel.synth.cart_repair import (
     repair_output as _repair_output,
 )
+from doppel.synth.cart_state import (
+    StoredCart,
+    StoredColumnSynth,
+    StoredCountBound,
+    StoredMissingFlag,
+    decode_column,
+    decode_dtype,
+    encode_column,
+    encode_dtype,
+    put_tree,
+    put_values,
+    take_array,
+    take_tree,
+    take_values,
+)
 from doppel.synth.seed import Rng
-
-# Pickle allowlist entries reference these names on ``doppel.synth.cart``.
-_MissingFlag = MissingFlag
-_CountBound = CountBound
+from doppel.synth.tree import DecisionTree
 
 _MIN_SAMPLES_LEAF = 5
+# Sampling does arithmetic on the values of a NUMERIC or DATETIME column.
+_NUMERIC_VALUE_KINDS = ("int", "uint", "float")
 # Reserved prefix for calendar features inside the CART feature matrix. Double-underscore
 # mirrors `__doppel_null__` and is collision-proof against user column names — the fit-time
 # guard raises ValueError if any source column starts with this prefix.
-_CALENDAR_FEATURE_PREFIX = "__dt_"
 FitProgress = Callable[[int, int, str], None]
 
 
@@ -122,6 +136,32 @@ class _Encoder:
         return filled.cast(pl.Float64).to_numpy().astype(np.float64)
 
 
+@dataclass(frozen=True)
+class _NullModel:
+    """Predicts the chance that a value is null from the leaf it lands in."""
+
+    tree: DecisionTree
+    null_rate_by_node: np.ndarray
+
+    @classmethod
+    def fit(cls, x: np.ndarray, is_null: np.ndarray, rng: Rng) -> _NullModel:
+        model = DecisionTreeClassifier(
+            random_state=rng.sklearn_seed(),
+            min_samples_leaf=_MIN_SAMPLES_LEAF,
+        )
+        model.fit(x, is_null)
+        classes = np.asarray(model.classes_)
+        if 1 in classes:
+            idx = int(np.where(classes == 1)[0][0])
+            rates = np.asarray(model.tree_.value, dtype=np.float64)[:, 0, idx].copy()
+        else:
+            rates = np.zeros(model.tree_.node_count, dtype=np.float64)
+        return cls(tree=DecisionTree.from_sklearn(model), null_rate_by_node=rates)
+
+    def null_rate(self, x: np.ndarray) -> np.ndarray:
+        return self.null_rate_by_node[self.tree.apply(x)]
+
+
 @dataclass
 class _ColumnSynth:
     column: Column
@@ -129,11 +169,11 @@ class _ColumnSynth:
     source_dtype: pl.DataType
     unconditional_resample: bool
     empirical_null_rate: float
-    # First-column path: pool of observed non-null values to resample.
+    # Every observed non-null value. On the conditional path, `leaf_values` splits it by leaf.
     nonnull_pool: list[object] = field(default_factory=list)
     # Conditional path:
-    null_model: DecisionTreeClassifier | None = None
-    value_model: DecisionTreeRegressor | DecisionTreeClassifier | None = None
+    null_model: _NullModel | None = None
+    value_model: DecisionTree | None = None
     leaf_values: dict[int, list[object]] = field(default_factory=dict)
     # Constant-target short circuit.
     constant_value: object | None = None
@@ -169,20 +209,16 @@ def _fit_column(
             source_dtype=source_dtype,
             unconditional_resample=True,
             empirical_null_rate=null_rate,
-            nonnull_pool=nonnull_list,
+            nonnull_pool=_shuffled(nonnull_list, rng),
             constant_value=const_value,
             has_constant=has_const,
         )
 
     x_all = features.to_numpy()
-    null_model: DecisionTreeClassifier | None = None
+    null_model: _NullModel | None = None
     if null_count > 0 and null_count < n:
         is_null_y = target.is_null().cast(pl.Int8).to_numpy()
-        null_model = DecisionTreeClassifier(
-            random_state=rng.sklearn_seed(),
-            min_samples_leaf=_MIN_SAMPLES_LEAF,
-        )
-        null_model.fit(x_all, is_null_y)
+        null_model = _NullModel.fit(x_all, is_null_y, rng)
 
     nonnull_mask_pl = target.is_not_null()
     x_nn = features.filter(nonnull_mask_pl).to_numpy()
@@ -200,15 +236,13 @@ def _fit_column(
                 constant_value=float(y_arr[0]) if y_arr.size else None,
                 has_constant=y_arr.size > 0,
             )
-        value_model = DecisionTreeRegressor(
+        regressor = DecisionTreeRegressor(
             random_state=rng.sklearn_seed(),
             min_samples_leaf=_MIN_SAMPLES_LEAF,
         )
-        value_model.fit(x_nn, y_arr)
-        leaves = value_model.apply(x_nn)
-        leaf_values: dict[int, list[object]] = defaultdict(list)
-        for leaf, val in zip(leaves, y_arr.tolist(), strict=True):
-            leaf_values[int(leaf)].append(val)
+        regressor.fit(x_nn, y_arr)
+        value_model = DecisionTree.from_sklearn(regressor)
+        leaf_values = _group_by_leaf(value_model.apply(x_nn), y_arr.tolist(), rng)
         return _ColumnSynth(
             column=col,
             encoder=encoder,
@@ -217,8 +251,8 @@ def _fit_column(
             empirical_null_rate=null_rate,
             null_model=null_model,
             value_model=value_model,
-            leaf_values=dict(leaf_values),
-            nonnull_pool=nonnull_list,
+            leaf_values=leaf_values,
+            nonnull_pool=[v for pool in leaf_values.values() for v in pool],
         )
 
     # Categorical / Text classification path.
@@ -235,15 +269,13 @@ def _fit_column(
             constant_value=nonnull_list[0] if nonnull_list else None,
             has_constant=bool(nonnull_list),
         )
-    value_model = DecisionTreeClassifier(
+    classifier = DecisionTreeClassifier(
         random_state=rng.sklearn_seed(),
         min_samples_leaf=_MIN_SAMPLES_LEAF,
     )
-    value_model.fit(x_nn, y_codes)
-    leaves = value_model.apply(x_nn)
-    leaf_values = defaultdict(list)
-    for leaf, val in zip(leaves, nonnull_list, strict=True):
-        leaf_values[int(leaf)].append(val)
+    classifier.fit(x_nn, y_codes)
+    value_model = DecisionTree.from_sklearn(classifier)
+    leaf_values = _group_by_leaf(value_model.apply(x_nn), nonnull_list, rng)
     return _ColumnSynth(
         column=col,
         encoder=encoder,
@@ -252,9 +284,23 @@ def _fit_column(
         empirical_null_rate=null_rate,
         null_model=null_model,
         value_model=value_model,
-        leaf_values=dict(leaf_values),
-        nonnull_pool=nonnull_list,
+        leaf_values=leaf_values,
+        nonnull_pool=[v for pool in leaf_values.values() for v in pool],
     )
+
+
+def _group_by_leaf(
+    leaves: np.ndarray, values: Sequence[object], rng: Rng
+) -> dict[int, list[object]]:
+    grouped: dict[int, list[object]] = defaultdict(list)
+    for leaf, value in zip(leaves.tolist(), values, strict=True):
+        grouped[int(leaf)].append(value)
+    return {leaf: _shuffled(grouped[leaf], rng) for leaf in sorted(grouped)}
+
+
+def _shuffled(values: Sequence[object], rng: Rng) -> list[object]:
+    """Drop source row order. Sampling draws a uniform index, so the order does not matter."""
+    return [values[i] for i in rng.numpy.permutation(len(values)).tolist()]
 
 
 def _sample_null_mask(cs: _ColumnSynth, x: np.ndarray | None, n: int, rng: Rng) -> np.ndarray:
@@ -262,15 +308,7 @@ def _sample_null_mask(cs: _ColumnSynth, x: np.ndarray | None, n: int, rng: Rng) 
         return np.zeros(n, dtype=bool)
     if cs.unconditional_resample or cs.null_model is None or x is None:
         return rng.numpy.random(size=n) < cs.empirical_null_rate
-    proba = np.asarray(cs.null_model.predict_proba(x))
-    classes = np.asarray(cs.null_model.classes_)
-    # Probability assigned to the "is-null" class (label 1).
-    if 1 in classes:
-        idx = int(np.where(classes == 1)[0][0])
-        p_null = proba[:, idx]
-    else:
-        p_null = np.zeros(n, dtype=np.float64)
-    return rng.numpy.random(size=n) < p_null
+    return rng.numpy.random(size=n) < cs.null_model.null_rate(x)
 
 
 def _sample_values(
@@ -289,7 +327,7 @@ def _sample_values(
     leaves = cs.value_model.apply(x)
     out: list[object] = []
     for leaf in leaves.tolist():
-        pool = cs.leaf_values.get(int(leaf), cs.nonnull_pool)
+        pool = cs.leaf_values[int(leaf)]
         out.append(pool[int(rng.numpy.integers(0, len(pool)))])
     return out
 
@@ -326,7 +364,7 @@ def _generate_key(
     if source_dtype == pl.String:
         return pl.Series(name, [f"{name}_{i}" for i in range(1, n + 1)], dtype=pl.String)
     out = pl.Series(name, list(range(1, n + 1)), dtype=pl.Int64)
-    if source_dtype is not None and str(source_dtype) in (INTEGER_DTYPE_NAMES | FLOAT_DTYPE_NAMES):
+    if source_dtype is not None and (source_dtype.is_integer() or source_dtype.is_float()):
         return out.cast(source_dtype)
     return out
 
@@ -356,7 +394,7 @@ class CartSynthesizer:
         self._datetime_dtypes: dict[str, pl.DataType] = {}
         # Resolved calendar features per datetime column name. Set at fit time, replayed
         # at sample time so source and synth feature matrices have the same shape.
-        self._calendar_features: dict[str, tuple[CalendarFeature, ...]] = {}  # pickle compat
+        self._calendar_features: dict[str, tuple[CalendarFeature, ...]] = {}
         self._column_synths: list[_ColumnSynth] = []
         self._missing_flags: list[MissingFlag] = []
         self._count_bounds: list[CountBound] = []
@@ -393,11 +431,10 @@ class CartSynthesizer:
         without exposing internal synth state.
         """
         out: list[ColumnFitInfo] = []
-        calendar_map = getattr(self, "_calendar_features", {})
         for cs in self._column_synths:
             cal: tuple[str, ...] | None = None
             if cs.column.type is ColumnType.DATETIME:
-                resolved = calendar_map.get(cs.column.name, ())
+                resolved = self._calendar_features.get(cs.column.name, ())
                 cal = tuple(f.value for f in resolved)
             out.append(
                 ColumnFitInfo(
@@ -418,14 +455,17 @@ class CartSynthesizer:
         table = dataset.only()
         if table.data is None:
             raise ValueError(f"table {table.name!r} has no data attached")
-        # Guard against user column names that would collide with the calendar-feature
-        # prefix and silently corrupt the running feature matrix.
+        if table.data.height == 0:
+            raise ValueError(f"table {table.name!r} has no rows; doppel needs at least one")
         for col in table.columns:
-            if col.name.startswith(_CALENDAR_FEATURE_PREFIX):
+            reject_reserved_column_name(col.name)
+            dtype = table.data[col.name].dtype if col.name in table.data.columns else None
+            if col.type is ColumnType.DATETIME and not (
+                dtype == pl.Date or isinstance(dtype, pl.Datetime)
+            ):
                 raise ValueError(
-                    f"source column {col.name!r} starts with the reserved prefix "
-                    f"{_CALENDAR_FEATURE_PREFIX!r}, which doppel uses internally for "
-                    "calendar-feature columns. Rename the column upstream."
+                    f"column {col.name!r} has dtype {dtype}; doppel models Date and Datetime "
+                    "columns only. Drop the column, or cast it to a number before the run."
                 )
         self._table_name = table.name
         self._original_columns = list(table.columns)
@@ -469,7 +509,7 @@ class CartSynthesizer:
             cs = _fit_column(col, source_dtype, features, target, rng)
             synths.append(cs)
             feat_values = cs.encoder.transform(target)
-            features = features.with_columns(pl.Series(col.name, feat_values, dtype=pl.Float64))
+            features = _add_feature(features, pl.Series(col.name, feat_values, dtype=pl.Float64))
             cal = source_calendar_series.get(col.name)
             if cal:
                 features = _append_calendar_features(features, col.name, cal)
@@ -494,16 +534,13 @@ class CartSynthesizer:
             series = _build_series(col, full, cs.source_dtype)
             modeled_series[col.name] = series
             feat_values = cs.encoder.transform(series)
-            features = features.with_columns(pl.Series(col.name, feat_values, dtype=pl.Float64))
+            features = _add_feature(features, pl.Series(col.name, feat_values, dtype=pl.Float64))
             # Extract calendar features from the synth datetime so downstream columns
             # see the same kind of predictors they saw at fit time. The synth epoch is
             # leaf-sampled from a real source epoch, so the calendar values match a
             # real source row by construction (see design D5).
-            # `getattr` keeps pre-change pickled artifacts working: they have no
-            # `_calendar_features` attribute, which is equivalent to "disabled".
             if col.type is ColumnType.DATETIME:
-                calendar_map = getattr(self, "_calendar_features", {})
-                resolved = calendar_map.get(col.name, ())
+                resolved = self._calendar_features.get(col.name, ())
                 if resolved:
                     target_dtype = self._datetime_dtypes.get(col.name)
                     if target_dtype is not None:
@@ -560,6 +597,111 @@ class CartSynthesizer:
         )
         return Dataset.single(table)
 
+    def to_state(self) -> tuple[StoredCart, dict[str, np.ndarray]]:
+        """Return the fitted model as typed JSON-ready structure plus plain arrays."""
+        if not self._fitted:
+            raise ValueError("synthesizer must be fitted before saving")
+        arrays: dict[str, np.ndarray] = {}
+        state = StoredCart(
+            table_name=self._table_name,
+            primary_key=self._primary_key,
+            columns=[encode_column(c) for c in self._original_columns],
+            key_dtypes={name: encode_dtype(d) for name, d in self._key_dtypes.items()},
+            datetime_dtypes={name: encode_dtype(d) for name, d in self._datetime_dtypes.items()},
+            calendar_features={name: list(f) for name, f in self._calendar_features.items()},
+            column_synths=[
+                _store_column(f"c{i}", cs, arrays) for i, cs in enumerate(self._column_synths)
+            ],
+            missing_flags=[
+                StoredMissingFlag(
+                    flag_column=f.flag_column,
+                    source_column=f.source_column,
+                    flag_dtype=encode_dtype(f.flag_dtype),
+                )
+                for f in self._missing_flags
+            ],
+            count_bounds=[
+                StoredCountBound(low_column=b.low_column, high_column=b.high_column)
+                for b in self._count_bounds
+            ],
+            ordered_pairs=list(self._ordered_pairs),
+        )
+        return state, arrays
+
+    @classmethod
+    def from_state(
+        cls, state: StoredCart, arrays: dict[str, np.ndarray], *, training_row_count: int
+    ) -> CartSynthesizer:
+        """Rebuild a fitted synthesizer from `to_state` output. Consumes `arrays`.
+
+        Raises ValueError when the state is inconsistent, so a tampered artifact fails at
+        load and not halfway through sampling.
+
+        Each split leaves at least `_MIN_SAMPLES_LEAF` training rows on each side, so a tree
+        fit on `training_row_count` rows is at most `training_row_count // _MIN_SAMPLES_LEAF`
+        levels deep. A deeper stored tree did not come from `fit`. The count comes from the
+        same artifact, so the bound stops a tree deeper than its stated training data, not a
+        forged count.
+        """
+        max_depth = training_row_count // _MIN_SAMPLES_LEAF
+        synth = cls()
+        columns = [decode_column(c) for c in state.columns]
+        if len({c.name for c in columns}) != len(columns):
+            raise ValueError("stored synthesizer has duplicate column names")
+        modeled = [c for c in columns if c.is_model_input()]
+        synth._table_name = state.table_name
+        synth._original_columns = columns
+        synth._primary_key = state.primary_key
+        synth._modeled_columns = modeled
+        synth._key_columns = [c for c in columns if c.type is ColumnType.KEY]
+        synth._key_dtypes = {name: decode_dtype(d) for name, d in state.key_dtypes.items()}
+        synth._datetime_dtypes = {
+            name: decode_dtype(d) for name, d in state.datetime_dtypes.items()
+        }
+        synth._calendar_features = {name: tuple(f) for name, f in state.calendar_features.items()}
+        if len(state.column_synths) != len(modeled):
+            raise ValueError(
+                f"stored synthesizer has {len(state.column_synths)} column models "
+                f"for {len(modeled)} modelled columns"
+            )
+        datetime_names = {c.name for c in modeled if c.type is ColumnType.DATETIME}
+        if set(synth._datetime_dtypes) != datetime_names:
+            raise ValueError("stored datetime dtypes do not match the datetime columns")
+        for name, dtype in synth._datetime_dtypes.items():
+            if not (dtype == pl.Date or isinstance(dtype, pl.Datetime)):
+                raise ValueError(f"datetime column {name!r} is stored with dtype {dtype}")
+            features = set(synth._calendar_features.get(name, ()))
+            if dtype == pl.Date and features & {CalendarFeature.HOUR, CalendarFeature.MINUTE}:
+                raise ValueError(f"Date column {name!r} is stored with a time-of-day feature")
+
+        n_features = 0
+        for i, (col, stored) in enumerate(zip(modeled, state.column_synths, strict=True)):
+            synth._column_synths.append(
+                _restore_column(f"c{i}", col, stored, arrays, n_features, max_depth)
+            )
+            n_features += 1
+            resolved = synth._calendar_features.get(col.name, ())
+            if col.type is ColumnType.DATETIME and resolved:
+                n_features += len({f.value for f in resolved})
+        if arrays:
+            raise ValueError(f"stored synthesizer has unexpected arrays: {sorted(arrays)[:5]}")
+
+        synth._missing_flags = [
+            MissingFlag(
+                flag_column=f.flag_column,
+                source_column=f.source_column,
+                flag_dtype=decode_dtype(f.flag_dtype),
+            )
+            for f in state.missing_flags
+        ]
+        synth._count_bounds = [
+            CountBound(low_column=b.low_column, high_column=b.high_column)
+            for b in state.count_bounds
+        ]
+        synth._ordered_pairs = list(state.ordered_pairs)
+        synth._fitted = True
+        return synth
+
     def _prepare_input(self, df: pl.DataFrame) -> pl.DataFrame:
         out = df
         self._datetime_dtypes = {}
@@ -569,6 +711,113 @@ class CartSynthesizer:
                 self._datetime_dtypes[col.name] = series.dtype
                 out = out.with_columns(decompose(series).alias(col.name))
         return out
+
+
+def _store_column(key: str, cs: _ColumnSynth, arrays: dict[str, np.ndarray]) -> StoredColumnSynth:
+    if cs.null_model is not None:
+        put_tree(arrays, f"{key}.null_tree", cs.null_model.tree)
+        arrays[f"{key}.null_rate_by_node"] = cs.null_model.null_rate_by_node
+    if cs.value_model is not None:
+        put_tree(arrays, f"{key}.value_tree", cs.value_model)
+        sizes = [len(pool) for pool in cs.leaf_values.values()]
+        arrays[f"{key}.leaf_ids"] = np.array(list(cs.leaf_values), dtype=np.int64)
+        arrays[f"{key}.leaf_offsets"] = np.concatenate(([0], np.cumsum(sizes))).astype(np.int64)
+    return StoredColumnSynth(
+        source_dtype=encode_dtype(cs.source_dtype),
+        unconditional_resample=cs.unconditional_resample,
+        empirical_null_rate=cs.empirical_null_rate,
+        encoder_categories=put_values(arrays, f"{key}.encoder", list(cs.encoder.code)),
+        pool=put_values(arrays, f"{key}.pool", cs.nonnull_pool),
+        constant=put_values(arrays, f"{key}.constant", [cs.constant_value])
+        if cs.has_constant
+        else None,
+        has_null_model=cs.null_model is not None,
+        has_value_model=cs.value_model is not None,
+    )
+
+
+def _restore_column(
+    key: str,
+    col: Column,
+    stored: StoredColumnSynth,
+    arrays: dict[str, np.ndarray],
+    n_features: int,
+    max_depth: int,
+) -> _ColumnSynth:
+    if (n_features == 0 or stored.unconditional_resample) and (
+        stored.has_null_model or stored.has_value_model
+    ):
+        raise ValueError(f"column {col.name!r} is stored with a tree it cannot use")
+    if n_features == 0 and not stored.unconditional_resample:
+        raise ValueError(f"column {col.name!r} has no predictors but is stored as conditional")
+    if col.type in (ColumnType.NUMERIC, ColumnType.DATETIME):
+        stored_kinds = {
+            "encoder": stored.encoder_categories,
+            "pool": stored.pool,
+            "constant": stored.constant,
+        }
+        for part, kind in stored_kinds.items():
+            if kind not in (None, *_NUMERIC_VALUE_KINDS):
+                raise ValueError(f"{col.type.value} column {col.name!r} stores {kind} {part}")
+    categories = take_values(arrays, f"{key}.encoder", stored.encoder_categories)
+    pool = take_values(arrays, f"{key}.pool", stored.pool)
+    constant = take_values(arrays, f"{key}.constant", stored.constant)
+    if stored.constant is not None and len(constant) != 1:
+        raise ValueError(f"column {col.name!r} stores {len(constant)} constant values")
+    if (
+        not constant
+        and not pool
+        and not (stored.unconditional_resample and stored.empirical_null_rate == 1.0)
+    ):
+        raise ValueError(f"column {col.name!r} has no values to sample")
+
+    null_model: _NullModel | None = None
+    if stored.has_null_model:
+        tree = take_tree(arrays, f"{key}.null_tree", n_features, max_depth)
+        rates = take_array(arrays, f"{key}.null_rate_by_node", np.float64)
+        if rates.shape != tree.left_child.shape:
+            raise ValueError(f"column {col.name!r} null rates do not match its tree")
+        null_model = _NullModel(tree=tree, null_rate_by_node=rates)
+
+    value_model: DecisionTree | None = None
+    leaf_values: dict[int, list[object]] = {}
+    if stored.has_value_model:
+        value_model = take_tree(arrays, f"{key}.value_tree", n_features, max_depth)
+        leaf_ids = take_array(arrays, f"{key}.leaf_ids", np.int64)
+        offsets = take_array(arrays, f"{key}.leaf_offsets", np.int64)
+        leaves = np.flatnonzero(value_model.left_child == -1)
+        if (
+            not np.array_equal(leaf_ids, leaves)
+            or offsets.shape != (leaves.size + 1,)
+            or offsets[0] != 0
+            or offsets[-1] != len(pool)
+            or np.any(np.diff(offsets) <= 0)
+        ):
+            raise ValueError(f"column {col.name!r} leaf pools do not match its tree")
+        bounds = offsets.tolist()
+        leaf_values = {
+            leaf: pool[start:stop]
+            for leaf, start, stop in zip(leaf_ids.tolist(), bounds[:-1], bounds[1:], strict=True)
+        }
+
+    return _ColumnSynth(
+        column=col,
+        encoder=_Encoder(ctype=col.type, code={c: i for i, c in enumerate(categories)}),
+        source_dtype=decode_dtype(stored.source_dtype),
+        unconditional_resample=stored.unconditional_resample,
+        empirical_null_rate=stored.empirical_null_rate,
+        nonnull_pool=pool,
+        null_model=null_model,
+        value_model=value_model,
+        leaf_values=leaf_values,
+        constant_value=constant[0] if constant else None,
+        has_constant=bool(constant),
+    )
+
+
+def _add_feature(features: pl.DataFrame, series: pl.Series) -> pl.DataFrame:
+    """Append a column. A zero-column frame has height 0 in polars 2, so it cannot take a Series."""
+    return features.with_columns(series) if features.width else series.to_frame()
 
 
 def _append_calendar_features(
@@ -585,7 +834,7 @@ def _append_calendar_features(
     """
     new_cols: list[pl.Series] = []
     for feature_name, series in cal.items():
-        col_name = f"{_CALENDAR_FEATURE_PREFIX}{source_col}_{feature_name}"
+        col_name = f"{CALENDAR_FEATURE_PREFIX}{source_col}_{feature_name}"
         filled = series.fill_null(0).cast(pl.Float64).rename(col_name)
         new_cols.append(filled)
     if not new_cols:
@@ -611,13 +860,13 @@ def _build_series(
 ) -> pl.Series:
     if col.type is ColumnType.DATETIME:
         # CART regressor leaf-samples produce floats; coerce to Int64 epoch before recomposition.
-        coerced: list[int | None] = [None if v is None else int(v) for v in values]  # type: ignore[arg-type]
+        coerced: list[int | None] = [None if v is None else int(cast("float", v)) for v in values]
         return pl.Series(col.name, coerced, dtype=pl.Int64)
     if col.type is ColumnType.NUMERIC:
         series = pl.Series(col.name, values, dtype=pl.Float64)
-        if source_dtype is not None and str(source_dtype) in INTEGER_DTYPE_NAMES:
+        if source_dtype is not None and source_dtype.is_integer():
             return series.round(0).cast(source_dtype)
-        if source_dtype is not None and str(source_dtype) in FLOAT_DTYPE_NAMES:
+        if source_dtype is not None and source_dtype.is_float():
             return series.cast(source_dtype)
         return series
     series = pl.Series(col.name, values)

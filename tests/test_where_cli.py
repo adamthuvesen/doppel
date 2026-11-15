@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 from pathlib import Path
+from typing import Any
 
 import polars as pl
 import pytest
@@ -226,8 +227,8 @@ def test_gen_where_zero_match_fails_hard(plan_csv: Path, tmp_path: Path) -> None
     combined = (result.stdout + (result.stderr or "")).lower()
     assert "no rows" in combined
     assert "plan == 'nonexistent'" in combined
-    # The path can be wrapped across lines in rich output, so just check for the filename.
-    assert plan_csv.name in combined
+    # Rich wraps the path at any character, even inside the filename, so join the lines first.
+    assert plan_csv.name in combined.replace("\n", "")
     assert not out.exists()
 
 
@@ -243,10 +244,10 @@ def test_gen_where_zero_match_skips_fit(
     original_fit = CartSynthesizer.fit
     fit_called = False
 
-    def spy_fit(self: CartSynthesizer, *args: object, **kwargs: object) -> None:
+    def spy_fit(self: CartSynthesizer, *args: Any, **kwargs: Any) -> None:
         nonlocal fit_called
         fit_called = True
-        original_fit(self, *args, **kwargs)  # type: ignore[arg-type]
+        original_fit(self, *args, **kwargs)
 
     monkeypatch.setattr(CartSynthesizer, "fit", spy_fit)
 
@@ -280,10 +281,10 @@ def test_gen_where_reads_source_once(
     original_read = prepare.source_read
     read_count = 0
 
-    def spy_read(*args: object, **kwargs: object) -> pl.DataFrame:
+    def spy_read(*args: Any, **kwargs: Any) -> pl.DataFrame:
         nonlocal read_count
         read_count += 1
-        return original_read(*args, **kwargs)  # type: ignore[arg-type]
+        return original_read(*args, **kwargs)
 
     monkeypatch.setattr(prepare, "source_read", spy_read)
     # Before the precheck moved into the pipeline, gen held its own imported alias.

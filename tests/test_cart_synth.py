@@ -1,7 +1,5 @@
 """CART synthesizer end-to-end: fit → sample preserves types, schema, and rough fidelity."""
 
-# pyright: reportPrivateUsage=false
-
 from __future__ import annotations
 
 import polars as pl
@@ -9,13 +7,12 @@ import polars as pl
 from doppel.dataset import Dataset
 from doppel.schema.infer import infer_table
 from doppel.schema.types import ColumnType
-from doppel.synth.cart import (  # type: ignore[reportPrivateUsage]
+from doppel.synth.cart import (
     CartSynthesizer,
-    _CountBound,
     _detect_missing_flags,
-    _MissingFlag,
     _repair_output,
 )
+from doppel.synth.cart_repair import CountBound, MissingFlag
 from doppel.synth.seed import Rng
 
 
@@ -153,7 +150,7 @@ def test_soft_repair_derives_missingness_flag_from_nullable_source() -> None:
     out, summary = _repair_output(
         df,
         [
-            _MissingFlag(
+            MissingFlag(
                 "days_since_last_login_missing_l180d",
                 "days_since_last_login_l180d",
                 df["days_since_last_login_missing_l180d"].dtype,
@@ -177,7 +174,7 @@ def test_missing_flag_detection_handles_window_suffix() -> None:
     table = infer_table("activity", df)
     flags = _detect_missing_flags(table.columns, df)
     assert flags == [
-        _MissingFlag(
+        MissingFlag(
             "days_since_last_login_missing_l180d",
             "days_since_last_login_l180d",
             df["days_since_last_login_missing_l180d"].dtype,
@@ -192,7 +189,7 @@ def test_soft_repair_clips_detected_count_bounds_without_erroring() -> None:
             "num_seats": pl.Series("num_seats", [3, 2, 8], dtype=pl.Int64),
         }
     )
-    out, summary = _repair_output(df, [], [_CountBound("num_viewer_seats", "num_seats")])
+    out, summary = _repair_output(df, [], [CountBound("num_viewer_seats", "num_seats")])
     assert out["num_viewer_seats"].to_list() == [3, 2, 8]
     assert out["num_viewer_seats"].dtype == pl.Int64
     assert summary.count_bounds == {"num_viewer_seats <= num_seats": 2}

@@ -6,10 +6,10 @@ import json
 from datetime import UTC, date, datetime, time, timedelta
 from io import StringIO
 from pathlib import Path
+from typing import cast
 
 import polars as pl
 import pytest
-import typer
 from rich.console import Console
 
 from doppel.dataset import Dataset
@@ -19,11 +19,8 @@ from doppel.report.html import to_html
 from doppel.report.json import to_json
 from doppel.report.terminal import render as render_terminal
 from doppel.schema import toml as schema_toml
-from doppel.schema.datetime import (
-    CalendarFeature,
-    calendar_features,
-    default_features_for,
-)
+from doppel.schema.calendar_feature import CalendarFeature, default_features_for
+from doppel.schema.datetime import calendar_features
 from doppel.schema.infer import infer_table
 from doppel.schema.types import Column, ColumnType
 from doppel.synth.cart import CartSynthesizer
@@ -238,7 +235,7 @@ type = "datetime"
 calendar_features = ["is_weekend"]
 """
     )
-    with pytest.raises(typer.BadParameter, match="is_weekend"):
+    with pytest.raises(ValueError, match="is_weekend"):
         schema_toml.load(p)
 
 
@@ -369,8 +366,8 @@ def test_dow_pattern_preserved_with_calendar_features_on() -> None:
     raw_friday = out_df.filter(pl.col("event_time").dt.weekday() == 5)["amount"].mean()
     raw_other = out_df.filter(pl.col("event_time").dt.weekday() != 5)["amount"].mean()
     assert raw_friday is not None and raw_other is not None
-    synth_friday = float(raw_friday)  # type: ignore[arg-type]
-    synth_other = float(raw_other)  # type: ignore[arg-type]
+    synth_friday = float(cast("float", raw_friday))
+    synth_other = float(cast("float", raw_other))
     # Friday mean is well above the other-day mean — with features on the gap survives.
     assert synth_friday > synth_other * 1.5
 
@@ -407,7 +404,7 @@ def test_disabled_calendar_features_yields_no_dt_columns_in_matrix() -> None:
     synth = CartSynthesizer()
     synth.fit(Dataset.single(table), Rng.from_seed(0))
     # `_calendar_features` for this column should be empty tuple.
-    assert synth._calendar_features["event_time"] == ()  # type: ignore[reportPrivateUsage]
+    assert synth._calendar_features["event_time"] == ()
 
 
 def test_custom_calendar_feature_subset_is_respected() -> None:
@@ -427,7 +424,7 @@ def test_custom_calendar_feature_subset_is_respected() -> None:
     table = type(table)(name=table.name, columns=new_columns, primary_key=None, data=df)
     synth = CartSynthesizer()
     synth.fit(Dataset.single(table), Rng.from_seed(0))
-    assert synth._calendar_features["event_time"] == (CalendarFeature.HOUR,)  # type: ignore[reportPrivateUsage]
+    assert synth._calendar_features["event_time"] == (CalendarFeature.HOUR,)
 
 
 def test_multi_datetime_dataset_each_gets_own_prefix() -> None:
@@ -443,11 +440,13 @@ def test_multi_datetime_dataset_each_gets_own_prefix() -> None:
     table = infer_table("orders", df)
     synth = CartSynthesizer()
     synth.fit(Dataset.single(table), Rng.from_seed(0))
-    out = synth.sample(50, Rng.from_seed(0))
-    assert out.only().data is not None
+    data = synth.sample(50, Rng.from_seed(0)).only().data
+    assert data is not None
+    assert data.height == 50
+    assert data.select("signup_at", "purchase_at").null_count().row(0) == (0, 0)
     # Both datetimes resolved their own feature set.
-    assert "signup_at" in synth._calendar_features  # type: ignore[reportPrivateUsage]
-    assert "purchase_at" in synth._calendar_features  # type: ignore[reportPrivateUsage]
+    assert "signup_at" in synth._calendar_features
+    assert "purchase_at" in synth._calendar_features
 
 
 def test_date_column_in_same_dataset_as_datetime() -> None:
@@ -464,12 +463,12 @@ def test_date_column_in_same_dataset_as_datetime() -> None:
     synth = CartSynthesizer()
     synth.fit(Dataset.single(table), Rng.from_seed(0))
     # Datetime column gets 3 features; Date column gets 2 (no hour).
-    assert synth._calendar_features["event_time"] == (  # type: ignore[reportPrivateUsage]
+    assert synth._calendar_features["event_time"] == (
         CalendarFeature.HOUR,
         CalendarFeature.DOW,
         CalendarFeature.MONTH,
     )
-    assert synth._calendar_features["billing_date"] == (  # type: ignore[reportPrivateUsage]
+    assert synth._calendar_features["billing_date"] == (
         CalendarFeature.DOW,
         CalendarFeature.MONTH,
     )
@@ -686,8 +685,16 @@ def test_null_in_source_datetime_handled_during_fit_and_sample() -> None:
     table = infer_table("events", df)
     synth = CartSynthesizer()
     synth.fit(Dataset.single(table), Rng.from_seed(3))
-    out = synth.sample(80, Rng.from_seed(3))
-    assert out.only().data is not None
+    data = synth.sample(80, Rng.from_seed(3)).only().data
+    assert data is not None
+    assert data.height == 80
+    assert data.columns == df.columns
+    event_time = data["event_time"]
+    assert event_time.dtype == pl.Datetime
+    # The source is 20% null; the sample keeps nulls and keeps real values inside the source range.
+    assert 0.05 <= event_time.null_count() / data.height <= 0.4
+    observed = event_time.drop_nulls()
+    assert observed.is_between(df["event_time"].min(), df["event_time"].max()).all()
 
 
 # ---------------------------------------------------------------------------

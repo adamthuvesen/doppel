@@ -17,14 +17,11 @@ import numpy as np
 import polars as pl
 from scipy.stats import ks_2samp
 
-from doppel.schema.datetime import (
-    CalendarFeature,
-    default_features_for,
-    to_float_array,
-)
+from doppel.schema.calendar_feature import CalendarFeature, default_features_for
 from doppel.schema.datetime import (
     calendar_features as extract_calendar_features,
 )
+from doppel.schema.datetime import to_float_array
 from doppel.schema.nullable import null_rate
 from doppel.schema.types import Column, ColumnType
 
@@ -131,8 +128,7 @@ def _ks_int_series(real: pl.Series, synth: pl.Series) -> float:
         return float("nan")
     real_arr = real.cast(pl.Float64).to_numpy()
     synth_arr = synth.cast(pl.Float64).to_numpy()
-    statistic: float = ks_2samp(real_arr, synth_arr, method="asymp")[0]  # type: ignore[assignment]
-    return float(statistic)
+    return float(ks_2samp(real_arr, synth_arr, method="asymp")[0])
 
 
 def _score_column(col: Column, real: pl.Series, synth: pl.Series) -> MarginalScore:
@@ -166,15 +162,14 @@ def _ks(col: Column, real: pl.Series, synth: pl.Series) -> float:
     try:
         real_arr = _finite(to_float_array(col, real.drop_nulls()))
         synth_arr = _finite(to_float_array(col, synth.drop_nulls()))
-    except (TypeError, ValueError, pl.exceptions.PolarsError):
+    except TypeError, ValueError, pl.exceptions.PolarsError:
         return float("nan")
     if real_arr.size == 0 or synth_arr.size == 0:
         return float("nan")
     # Use asymptotic method — exact is prohibitively slow for large samples and
     # emits a RuntimeWarning when it falls back anyway. Asymp is fine for quality
     # metrics (we want the statistic, not rigorous p-values).
-    statistic: float = ks_2samp(real_arr, synth_arr, method="asymp")[0]  # type: ignore[assignment]
-    return float(statistic)
+    return float(ks_2samp(real_arr, synth_arr, method="asymp")[0])
 
 
 def _finite(arr: np.ndarray) -> np.ndarray:

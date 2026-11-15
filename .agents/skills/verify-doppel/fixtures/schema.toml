@@ -1,0 +1,13 @@
+[tables.customers]
+file = "customers.csv"
+primary_key = "customer_id"
+
+[tables.orders]
+file = "orders.csv"
+primary_key = "order_id"
+
+[[foreign_keys]]
+child_table = "orders"
+child_column = "customer_id"
+parent_table = "customers"
+parent_column = "customer_id"

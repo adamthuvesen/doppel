@@ -1,18 +1,10 @@
-"""Behavior tests for artifact safety, key generation, and PII confidence."""
+"""Behavior tests for key generation, primary-key promotion, and PII confidence."""
 
 from __future__ import annotations
-
-import gzip
-import io
-import pickle
-import tarfile
-from pathlib import Path
 
 import polars as pl
 import pytest
 
-from doppel.artifact import ARTIFACT_VERSION, ArtifactError, load, save
-from doppel.artifact.safe_pickle import UnsafeArtifactError, safe_loads
 from doppel.dataset import Dataset
 from doppel.schema import toml as schema_toml_mod
 from doppel.schema.infer import infer_table
@@ -20,113 +12,6 @@ from doppel.schema.toml import ColumnSpec, SchemaToml, TableMeta
 from doppel.schema.types import ColumnType
 from doppel.synth.cart import CartSynthesizer
 from doppel.synth.seed import Rng
-
-# ---------------------------------------------------------------------------
-# Restricted unpickler refuses dangerous classes
-# ---------------------------------------------------------------------------
-
-
-class _Exploit:
-    """A would-be pickle-RCE payload. `__reduce__` would normally be called on load."""
-
-    def __reduce__(self) -> tuple[object, tuple[object, ...]]:
-        # os.system('echo PWNED') — without `os` in the allowlist this must NOT execute.
-        import os
-
-        return os.system, ("exit 0",)
-
-
-def test_safe_pickle_refuses_os_system() -> None:
-    payload = pickle.dumps(_Exploit())
-    with pytest.raises(UnsafeArtifactError, match="not in doppel artifact allowlist"):
-        safe_loads(payload)
-
-
-def test_safe_pickle_refuses_builtins_eval() -> None:
-    # Hand-craft a pickle that calls builtins.eval — pickle.dumps(eval) directly.
-    payload = pickle.dumps(eval)
-    with pytest.raises(UnsafeArtifactError, match="not in doppel artifact allowlist"):
-        safe_loads(payload)
-
-
-# Allowlist is the security boundary: any regression that whitelists a stdlib module
-# under which a pickle gadget exists would bypass it. Parametrize across representative
-# modules so a wider whitelist trips the suite immediately.
-@pytest.mark.parametrize(
-    "obj",
-    [
-        pytest.param(pickle.dumps(__import__("subprocess").Popen), id="subprocess.Popen"),
-        pytest.param(pickle.dumps(__import__("shutil").rmtree), id="shutil.rmtree"),
-        pytest.param(
-            pickle.dumps(__import__("importlib").import_module), id="importlib.import_module"
-        ),
-        pytest.param(pickle.dumps(__import__("builtins").exec), id="builtins.exec"),
-        pytest.param(pickle.dumps(__import__("builtins").open), id="builtins.open"),
-    ],
-)
-def test_safe_pickle_refuses_disallowed_stdlib_classes(obj: bytes) -> None:
-    with pytest.raises(UnsafeArtifactError, match="not in doppel artifact allowlist"):
-        safe_loads(obj)
-
-
-def test_safe_pickle_refuses_non_artifact_doppel_globals() -> None:
-    from doppel.sources.spec import _resolve_password_cmd  # type: ignore[reportPrivateUsage]
-
-    payload = pickle.dumps(_resolve_password_cmd)
-    with pytest.raises(UnsafeArtifactError, match="not in doppel artifact allowlist"):
-        safe_loads(payload)
-
-
-def test_artifact_load_rejects_malicious_pickle(tmp_path: Path) -> None:
-    """A tampered `.doppel` artifact carrying an exploit payload must fail before exec."""
-    # First produce a legitimate artifact so we have a valid manifest.
-    df = pl.DataFrame({"x": list(range(10)), "y": [float(i) for i in range(10)]})
-    synth = CartSynthesizer()
-    synth.fit(Dataset.single(infer_table("t", df)), Rng.from_seed(0))
-    artifact = tmp_path / "model.doppel"
-    save(synth, artifact, training_row_count=df.height)
-
-    # Now replace `synth.pickle` with an exploit blob while keeping the valid manifest.
-    members: dict[str, bytes] = {}
-    with tarfile.open(artifact, "r:gz") as tar:
-        for m in tar.getmembers():
-            handle = tar.extractfile(m)
-            assert handle is not None
-            members[m.name] = handle.read()
-    members["synth.pickle"] = pickle.dumps(_Exploit())
-    with tarfile.open(artifact, "w:gz") as tar:
-        for name, blob in members.items():
-            info = tarfile.TarInfo(name=name)
-            info.size = len(blob)
-            tar.addfile(info, io.BytesIO(blob))
-    # Sanity: the file is still a valid gzip tar.
-    with gzip.open(artifact, "rb") as gz:
-        gz.read(1)
-
-    with pytest.raises(ArtifactError, match="disallowed class"):
-        load(artifact)
-
-
-def test_safe_pickle_round_trips_legitimate_artifact(tmp_path: Path) -> None:
-    """The restricted unpickler must NOT break loading of legitimate doppel artifacts."""
-    df = pl.DataFrame(
-        {
-            "id": list(range(20)),
-            "amount": [float(i) * 1.5 for i in range(20)],
-            "tag": ["a", "b", "c", "d"] * 5,
-        }
-    )
-    synth = CartSynthesizer()
-    synth.fit(Dataset.single(infer_table("t", df)), Rng.from_seed(0))
-    p = tmp_path / "m.doppel"
-    save(synth, p, training_row_count=df.height)
-    loaded, manifest, _ = load(p)
-    assert manifest.version == ARTIFACT_VERSION
-    out_a = synth.sample(10, Rng.from_seed(1)).only().data
-    out_b = loaded.sample(10, Rng.from_seed(1)).only().data
-    assert out_a is not None and out_b is not None
-    assert out_a.equals(out_b)
-
 
 # ---------------------------------------------------------------------------
 # UUID-typed KEY columns respect --seed
@@ -184,6 +69,7 @@ def test_uuid_key_column_values_look_like_hex_uuids() -> None:
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.extras
 def test_faker_generate_same_seed_produces_same_output_in_same_process() -> None:
     from doppel.pii.fake import generate
 
@@ -192,6 +78,7 @@ def test_faker_generate_same_seed_produces_same_output_in_same_process() -> None
     assert a == b
 
 
+@pytest.mark.extras
 def test_faker_generate_different_seeds_differ() -> None:
     from doppel.pii.fake import generate
 
@@ -293,9 +180,8 @@ def test_promoted_string_pk_yields_string_synth_values() -> None:
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.extras
 def test_pii_confidence_never_exceeds_one() -> None:
-    pytest.importorskip("presidio_analyzer", reason="pii extra not installed")
-
     from doppel.pii.detect import detect
 
     # Cells that contain MULTIPLE emails would naively over-count.

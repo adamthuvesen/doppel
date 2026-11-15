@@ -8,7 +8,7 @@ from typing import TypeVar
 T = TypeVar("T")
 
 
-def geometric_oversample(
+def geometric_oversample[T](
     target: int,
     *,
     synthesize: Callable[[int], T],

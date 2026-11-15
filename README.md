@@ -1,6 +1,6 @@
 # doppel
 
-![License](https://img.shields.io/github/license/adamthuvesen/doppel) ![Python](https://img.shields.io/badge/python-3.11%2B-blue)
+![License](https://img.shields.io/github/license/adamthuvesen/doppel) ![Python](https://img.shields.io/badge/python-3.14%2B-blue)
 
 doppel makes synthetic tabular data from real datasets.
 
@@ -16,22 +16,23 @@ privacy guarantee; text-heavy datasets and rare rows still need care.
 
 ## Quick Start
 
-Install the repo dependencies and check the CLI:
+doppel is not on PyPI. Install the CLI from git, with every extra:
 
 ```bash
-uv sync
+uv tool install "doppeldata[all] @ git+https://github.com/adamthuvesen/doppel"
+doppel doctor
+```
+
+Use `doppeldata[sql]` for warehouse reads or `doppeldata[pii]` for PII regeneration, or
+leave the extras off for the base install. In a checkout, install the dependencies and
+check the CLI:
+
+```bash
+uv sync --all-extras
 uv run doppel --help
 ```
 
-Add extras when you need warehouse reads or PII regeneration:
-
-```bash
-uv sync --extra sql
-uv sync --extra pii
-uv sync --all-extras
-```
-
-CLI and import name: `doppel`.
+CLI and import name: `doppel`. Python 3.14 or newer.
 
 Run the bundled SaaS fixture, then compare the synthetic output with the source:
 
@@ -52,7 +53,7 @@ Expected shape from the demo fixture:
 
 ```text
 ok wrote 1000 rows x 15 cols -> synth.csv
-quality | marginal=0.1005 | corr=0.1062 | dcr_p5=0.0507 | text_leaks=0
+quality | marginal=0.0951 | corr=0.0929 | dcr_p5=0.0515 | exact_rows=0.0% | text_leaks=0
 thresholds: all passed
 ```
 
@@ -123,6 +124,10 @@ Common flags:
 | `--where EXPR` | Keep generated rows matching a boolean expression. Supports `== != < <= > >=` plus `and` / `or`. |
 | `--max-oversample N` | Raise this when `--where` or constraints are rare. Default: `4`. |
 | `--text-policy sample|hash|fake|drop` | Handle free-text columns. `fake` requires `[pii]`. |
+| `--hash-salt VALUE` | Salt for `--text-policy hash`. Without it each run uses a random salt, so hashes differ between runs. |
+| `--null-values NA,?` | File sources: extra string values to read as NULL. Only the empty string is NULL by default. |
+| `--no-quality` | Skip the quality summary after generation. |
+| `--json-summary PATH` | Write a machine-readable summary (row count, timing, quality) to `PATH`. |
 | `--schema PATH` | Override types, declare keys, and add constraints. |
 | `--explain` | Print per-column modeling choices after fit. |
 
@@ -164,9 +169,13 @@ doppel sample sales.doppel -n 1000000 -o synth.parquet --seed 1
 doppel artifact info sales.doppel
 ```
 
-`doppel fit` refuses sources with detected PII. Use `doppel gen` for one-shot PII
-regeneration. `.doppel` artifacts contain pickled models; only load artifacts from
-sources you trust.
+`doppel sample --real <file>` prints the quality summary against the source, because
+an artifact does not keep its source. It reads `--real` before it writes any output,
+refuses a file that shares no column with the artifact, and warns with the names of
+artifact columns that `--real` lacks. `doppel fit` refuses sources with detected PII. Use `doppel gen` for one-shot PII
+regeneration. A `.doppel` file holds JSON and plain numpy arrays, not a pickle, so
+loading it cannot run code. It does hold real values from every modelled column, so
+keep it as private as the source data.
 
 ## SQL Sources
 
@@ -194,6 +203,9 @@ doppel gen "postgres://adam@host/dbname" \
 
 Password lookup order: `--password-cmd`, then `${ENV_VAR}` interpolation in the URI,
 then a URI-embedded password. URI passwords warn because they can appear in shell history.
+
+Snowflake reads use `snowflake-connector-python`, and Postgres reads use ConnectorX.
+The Snowflake path is tested against a fake connector only, never a live warehouse.
 
 Snowflake and Postgres tables above 1,000,000 rows require `--fit-rows N` or
 `--fit-rows 0`. SQL sinks are DuckDB only; write files for other warehouses and load
@@ -230,7 +242,9 @@ doppel gen --schema schema.toml -n 1000 \
   --seed 1
 ```
 
-`-n` is rows per root table. Child rows are attached to generated parent keys. doppel
+`-n` is rows per root table. Child rows are attached to generated parent keys. To fit
+a large or uncounted warehouse table on a sample, set `fit_rows` on that table; see
+[docs/sql-connectors.md](docs/sql-connectors.md#multi-table-sql). doppel
 preserves foreign-key integrity, but it does not preserve cross-table correlations
 such as "larger customers place larger orders."
 
@@ -268,27 +282,38 @@ Metrics:
 | `corr_frobenius` | Correlation-matrix distance. Lower is closer. |
 | `dcr_p5` | 5th-percentile distance to closest real record. Higher means less near-copying. |
 | `verbatim_rate` | Fraction of text values copied from the source. |
+| `exact_row_match_rate` | Share of synthetic rows equal to a real row over the modelled columns (key columns and regenerated PII are left out). Small tables with few distinct values give high rates. doppel sets no threshold for it. |
 
-Use `--sample-rows N` and `--max-dcr-rows N` for large comparisons.
+`gen` prints the same summary for each table of a multi-table run, and `sample --real`
+prints it too. `gen --no-quality` turns it off.
+
+Use `--sample-rows N` and `--max-dcr-rows N` for large comparisons. `--sample-seed N`
+(default `0`) fixes which rows `--sample-rows` selects.
 
 ## Privacy and Security
 
 doppel has no differential privacy guarantee.
 
-With the `[pii]` extra installed, detected PII can be regenerated. Free-text columns
+With the `[pii]` extra installed, detected PII in text columns and categorical
+columns of strings (polars String, Categorical, or Enum) is regenerated. A location-only
+categorical, such as a country or city column, is kept unless a value looks like a street
+address. This holds in single-table and multi-table `gen`.
+The spaCy model `en_core_web_lg` is locked in `uv.lock`; doppel never downloads it. Free-text columns
 that are not detected as PII may copy real strings into the output. For text-heavy
 datasets, choose an explicit text policy and check the result with `doppel diff`:
-`--text-policy hash|fake|drop`.
+`--text-policy hash|fake|drop`. `hash` pseudonymises: it is not anonymisation.
 
-`.doppel` files use a restricted unpickler with an allowlist, but they are still model
-artifacts from code. Only load files you trust. See [SECURITY.md](SECURITY.md).
+`.doppel` files hold JSON and plain numpy arrays, so loading one cannot run code. A
+`.doppel` file holds real values from every modelled column and is as sensitive as
+its source. See [SECURITY.md](SECURITY.md).
 
 ## Limitations
 
 - Multi-table correlations are not preserved.
 - `--where` is scoped to one table.
 - Datetime values are modeled as epoch seconds plus calendar features; sub-second
-  precision is dropped.
+  precision is dropped. Only Date and Datetime columns are modeled: a Duration or Time
+  column is refused at fit, so drop it or cast it to a number first.
 - Warehouse writes are DuckDB only.
 - `fit` refuses detected PII; use `gen` for one-shot PII handling.
 - `KEY` columns generate fresh IDs. Integer-like keys become `1..n`; string keys named
@@ -306,12 +331,13 @@ artifacts from code. Only load files you trust. See [SECURITY.md](SECURITY.md).
 ## Development
 
 ```bash
-uv sync --all-extras
-uv run ruff check src tests
-uv run ruff format --check src tests
-uv run pyright
-uv run pytest
+just setup   # install every extra and the locked spaCy model
+just check   # ruff, format check, basedpyright, import contracts, fast tests
+just verify all   # drive the real CLI on seeded fixtures
 ```
+
+Agents and contributors: read [AGENTS.md](AGENTS.md) and [GLOSSARY.md](GLOSSARY.md). Design
+decisions are in [docs/adr/](docs/adr/).
 
 ## License
 

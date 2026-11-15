@@ -15,7 +15,7 @@ from pglast import ast
 
 from doppel.errors import InvalidInputError
 from doppel.locations import quote_table_name
-from doppel.sources.sql import build_count_sql, build_pushdown_sql
+from doppel.sources.sql import build_count_sql, build_pushdown_sql, build_value_counts_sql
 
 # ---------- build_pushdown_sql ----------
 
@@ -226,3 +226,26 @@ def test_count_sql_with_query_wraps() -> None:
 def test_count_sql_requires_table_or_query() -> None:
     with pytest.raises(ValueError, match=r"table.*query"):
         build_count_sql("snowflake", table=None, query=None)
+
+
+# ---------- build_value_counts_sql ----------
+
+
+@pytest.mark.parametrize("query", [None, "SELECT * FROM orders WHERE amount > 0;"])
+def test_value_counts_sql_parses_and_quotes_the_column(query: str | None) -> None:
+    sql = build_value_counts_sql(
+        "postgres", table=None if query else "public.orders", query=query, column='user"id'
+    )
+    statement = pglast.parse_sql(sql)[0].stmt
+    assert isinstance(statement, ast.SelectStmt)
+    assert '"user""id"' in sql
+
+
+def test_value_counts_sql_counts_every_row_in_duckdb(tmp_path: Path) -> None:
+    con = duckdb.connect(str(tmp_path / "c.db"))
+    con.execute("CREATE TABLE orders AS SELECT i % 5 AS user_id FROM range(100) t(i)")
+    con.execute("INSERT INTO orders VALUES (NULL)")
+    sql = build_value_counts_sql("duckdb", table="orders", query=None, column="user_id")
+    rows = sorted(con.execute(sql).fetchall())
+    con.close()
+    assert rows == [(k, 20) for k in range(5)]

@@ -79,7 +79,7 @@ and Postgres via database URIs. The threat surface and mitigations:
 **Redaction.** `redact_uri` ([src/doppel/sources/spec.py](src/doppel/sources/spec.py))
 replaces the URI password with `***` and also masks the value of every query
 parameter whose key contains `password`, `pwd`, `token`, `secret`, `passcode`, or
-`key`, in any case. `redact_text` removes the raw URI and each secret
+`key`, in any case, after percent-decoding the key. `redact_text` removes the raw URI and each secret
 from driver errors. **Only** the redacted form appears in logs, error messages,
 or `--explain` output. The raw form is held in a separate field and passed
 straight to the driver. A regression test drives a connection failure and

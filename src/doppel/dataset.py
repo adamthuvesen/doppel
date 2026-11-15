@@ -40,6 +40,9 @@ class Table:
 class Dataset:
     tables: dict[str, Table] = field(default_factory=dict)
     edges: list[ForeignKey] = field(default_factory=list)
+    # Rows per FK value over the whole child source, keyed by (child_table, child_column),
+    # for a child whose `data` is a `fit_rows` sample. Columns: the FK column, then `len`.
+    fk_value_counts: dict[tuple[str, str], pl.DataFrame] = field(default_factory=dict)
 
     @classmethod
     def single(cls, table: Table) -> Dataset:

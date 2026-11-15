@@ -85,6 +85,17 @@ def build_pushdown_sql(
     return sql, True
 
 
+def build_value_counts_sql(
+    scheme: str, *, table: str | None, query: str | None, column: str
+) -> str:
+    """SQL that counts the rows behind each non-null value of `column` across the whole source."""
+    inner = _base_query(scheme, table=table, query=query).strip().rstrip(";")
+    col = quote_identifier(column)
+    return (
+        f"SELECT {col}, COUNT(*) FROM ({inner}) AS _doppel_t WHERE {col} IS NOT NULL GROUP BY {col}"
+    )
+
+
 def _sample_percent(fit_rows: int, row_count_estimate: int | None) -> float:
     """Sample percentage for a fraction sample, oversampled so `LIMIT` gets `fit_rows`."""
     if row_count_estimate is None or row_count_estimate <= 0:
@@ -171,6 +182,13 @@ def read(
         )
 
     return _run_sql(spec, sql, timeout=timeout)
+
+
+def read_value_counts(spec: DatabaseUri, column: str, *, timeout: int) -> pl.DataFrame:
+    """Each non-null value of `column` in the whole source, with its row count in `len`."""
+    sql = build_value_counts_sql(spec.scheme, table=spec.table, query=spec.query, column=column)
+    df = _run_sql(spec, sql, timeout=timeout)
+    return df.rename({df.columns[0]: column, df.columns[1]: "len"})
 
 
 def _run_sql(spec: DatabaseUri, sql: str, *, timeout: int) -> pl.DataFrame:

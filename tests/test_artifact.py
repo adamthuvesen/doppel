@@ -592,6 +592,34 @@ def test_save_refuses_a_dtype_it_cannot_store(tmp_path: Path) -> None:
     assert not target.exists()
 
 
+@pytest.mark.parametrize(
+    ("limit", "value", "match"),
+    [
+        ("_MEMBER_LIMITS", {"arrays.npz": 64}, "arrays.npz' is too large"),
+        ("_MAX_TOTAL_BYTES", 64, "more than 64 bytes"),
+        ("_MAX_ARRAYS", 1, "more than 1 arrays"),
+    ],
+)
+def test_save_refuses_an_artifact_load_would_refuse(
+    mixed_df: pl.DataFrame,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    limit: str,
+    value: Any,
+    match: str,
+) -> None:
+    load_module = importlib.import_module("doppel.artifact.load")
+    synth, n = _fit_synth(mixed_df)
+    current = getattr(load_module, limit)
+    patched = {**current, **value} if isinstance(current, dict) else value
+    monkeypatch.setattr(load_module, limit, patched)
+    target = tmp_path / "model.doppel"
+
+    with pytest.raises(ArtifactError, match=match):
+        save(synth, target, training_row_count=n)
+    assert not target.exists()
+
+
 def _members(path: Path) -> dict[str, bytes]:
     out: dict[str, bytes] = {}
     with tarfile.open(path, "r:gz") as tar:

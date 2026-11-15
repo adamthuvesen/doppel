@@ -156,13 +156,17 @@ def _empirical_child_counts(dataset: Dataset, edge: ForeignKey) -> list[int]:
         raise ValueError("FK edge requires both parent and child tables to have data")
     # Drop orphan-null FK rows before grouping so they don't accidentally collide with
     # parent rows whose PK is also null (rare but silent if it happens).
-    child_nn = child.data.filter(pl.col(edge.child_column).is_not_null())
-    grouped = child_nn.group_by(edge.child_column).len()
+    full_counts = dataset.fk_value_counts.get((edge.child_table, edge.child_column))
+    grouped = (
+        full_counts
+        if full_counts is not None
+        else child.data.filter(pl.col(edge.child_column).is_not_null())
+        .group_by(edge.child_column)
+        .len()
+    )
     by_pk = {row[0]: int(row[1]) for row in grouped.iter_rows()}
     parent_pk_set = set(parent.data[edge.parent_column].drop_nulls().unique().to_list())
-    orphan_fks = [
-        fk for fk in child_nn[edge.child_column].unique().to_list() if fk not in parent_pk_set
-    ]
+    orphan_fks = [fk for fk in grouped[edge.child_column].to_list() if fk not in parent_pk_set]
     if orphan_fks:
         _log.debug(
             "hierarchy: %d orphan FK values in %s.%s not present in %s.%s; "

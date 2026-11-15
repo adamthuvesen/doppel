@@ -112,6 +112,18 @@ def _read_members(path: Path, *, read: set[str]) -> tuple[dict[str, bytes], dict
     return payloads, sizes
 
 
+def check_loadable(members: dict[str, bytes], array_count: int) -> None:
+    """Raise ArtifactError when `load` would refuse an artifact with these members."""
+    if array_count > _MAX_ARRAYS:
+        raise ArtifactError(f"{ARRAYS_MEMBER} holds more than {_MAX_ARRAYS} arrays")
+    seen: dict[str, int] = {}
+    for name, payload in members.items():
+        info = tarfile.TarInfo(name=name)
+        info.size = len(payload)
+        _check_member(info, seen)
+        seen[name] = info.size
+
+
 def _check_member(member: tarfile.TarInfo, seen: dict[str, int]) -> None:
     name = member.name
     if name == _OLD_PICKLE_MEMBER:

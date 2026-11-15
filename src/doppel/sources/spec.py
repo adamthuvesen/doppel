@@ -36,9 +36,8 @@ DEFAULT_CONNECTION_TIMEOUT = 300
 _PASSWORD_CMD_TIMEOUT_CAP = 60
 
 # Any query key that names a secret, such as `private_key_file_pwd` or `authenticator_token`.
-_SECRET_QUERY_PARAM_RE = re.compile(
-    r"(^|&)([^&=]*(?:password|pwd|token|secret|passcode|key)[^&=]*)=([^&]*)", re.IGNORECASE
-)
+# Matched against the decoded key, because drivers decode `pass%77ord` to `password`.
+_SECRET_QUERY_KEY_RE = re.compile(r"password|pwd|token|secret|passcode|key", re.IGNORECASE)
 
 
 @dataclass(frozen=True)
@@ -66,10 +65,23 @@ def redact_uri(uri: str) -> str:
     if parsed.password is not None:
         user = parsed.username or ""
         netloc = f"{user}:***@{_host_port(parsed)}"
-    query = _SECRET_QUERY_PARAM_RE.sub(r"\1\2=***", parsed.query)
+    query = "&".join(
+        f"{key}=***" if secret is not None else part
+        for part, key, secret in _query_params(parsed.query)
+    )
     if netloc == parsed.netloc and query == parsed.query:
         return uri
     return urllib.parse.urlunsplit((parsed.scheme, netloc, parsed.path, query, parsed.fragment))
+
+
+def _query_params(query: str) -> list[tuple[str, str, str | None]]:
+    """Each `&`-separated part of `query` as (part, raw key, raw value if the key names a secret)."""
+    params: list[tuple[str, str, str | None]] = []
+    for part in query.split("&") if query else []:
+        key, sep, value = part.partition("=")
+        secret = sep and _SECRET_QUERY_KEY_RE.search(urllib.parse.unquote_plus(key))
+        params.append((part, key, value if secret else None))
+    return params
 
 
 def _host_port(parsed: urllib.parse.SplitResult) -> str:
@@ -82,7 +94,7 @@ def redact_text(text: str, raw_uri: str) -> str:
     redacted = text.replace(raw_uri, redact_uri(raw_uri))
     parsed = urllib.parse.urlsplit(raw_uri)
     secrets = [parsed.password] if parsed.password else []
-    secrets += [m.group(3) for m in _SECRET_QUERY_PARAM_RE.finditer(parsed.query) if m.group(3)]
+    secrets += [secret for _, _, secret in _query_params(parsed.query) if secret]
     for secret in secrets:
         for form in {secret, urllib.parse.unquote(secret), urllib.parse.unquote_plus(secret)}:
             redacted = redacted.replace(form, "***")

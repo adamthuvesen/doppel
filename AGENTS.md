@@ -1,6 +1,8 @@
 # AGENTS.md — doppel
 
-doppel is a Python CLI and library that writes synthetic tabular data with the statistical fingerprint of a source dataset. Package `doppeldata` (not on PyPI), CLI and import name `doppel`. Python 3.14 with **uv**. Human overview: [README.md](README.md). Terms: [GLOSSARY.md](GLOSSARY.md). Decisions: [docs/adr/](docs/adr/). User-level rules live in `~/.claude/CLAUDE.md` and are not repeated here.
+doppel is a Python CLI and library that writes synthetic tabular data with the statistical fingerprint of a source dataset. Package `doppeldata` (not on PyPI), CLI and import name `doppel`. Python 3.14 with **uv**. Human overview: [README.md](README.md). User-level rules live in `~/.claude/CLAUDE.md` and are not repeated here.
+
+Domain terms are in `GLOSSARY.md` and decisions in `docs/adr/`. A change that adds, renames, or redefines a term, or reverses a decision, updates them in the same commit.
 
 ## Commands
 
